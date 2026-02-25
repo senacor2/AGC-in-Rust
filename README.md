@@ -11,3 +11,5 @@ The goal is to transform the AGC code into readable and maintainable Rust code. 
 * W. David Woods: How Apollo Flew To The Moon
 * James E. Tomayko: Computers in Spaceflight. NASA Contractor Report 182505
 * [Programmer's Manual - Block 2 AGC Assembly Language](https://www.ibiblio.org/apollo/assembly_language_manual.html) from the VirtualAGC project
+* [Apollo Guidance Program Symbolic Listing Information for Block 2](https://www.ibiblio.org/apollo/Documents/SymbolicListingInformation.pdf)
+* [User's Guide to The General Assembler Program (GAP)](https://www.ibiblio.org/apollo/Documents/Users_Guide_GAP_text.pdf)
