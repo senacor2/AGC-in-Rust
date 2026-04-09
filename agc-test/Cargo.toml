@@ -1,0 +1,12 @@
+[package]
+name = "agc-test"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+agc-core = { path = "../agc-core" }
+agc-sim = { path = "../agc-sim" }
+
+[dev-dependencies]
+agc-core = { path = "../agc-core" }
+agc-sim = { path = "../agc-sim" }

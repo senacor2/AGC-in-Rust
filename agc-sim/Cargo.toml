@@ -1,0 +1,9 @@
+[package]
+name = "agc-sim"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+agc-core = { path = "../agc-core" }
+ratatui   = "0.29"
+crossterm = "0.28"
