@@ -1,0 +1,1062 @@
+# AGC-in-Rust: Software Architecture
+
+## 1. Design Philosophy
+
+This architecture is NOT a cycle-accurate emulator of the Block 2 AGC. It is an
+idiomatic Rust reimplementation of the Comanche055 (Command Module) guidance
+software that preserves the original's functional behavior, safety properties,
+and real-time characteristics while recovering the high-level abstractions that
+were lost when the program was written in AGC assembly language.
+
+The key tension in this port is between two goals:
+
+- **Fidelity**: The software must produce the same navigation, guidance, and
+  control outputs as the original AGC given the same inputs.
+- **Idiom**: The software must use Rust's type system, ownership model, and
+  module system to make the design legible, maintainable, and provably safe
+  where the original relied on programmer discipline.
+
+Where these conflict, fidelity wins. Navigation errors kill people.
+
+### Governing Constraints
+
+| Constraint | Original AGC | Rust Port |
+|---|---|---|
+| Memory | 2048 words erasable, 36864 words fixed | Target: `no_std`, static allocation only, no heap |
+| CPU | ~85000 additions/sec (11.7us MCT) | Bare-metal embedded target; must meet same deadlines |
+| OS | None; software owns the machine | `#![no_std]`, `#![no_main]`; we provide the scheduler |
+| Errors | Hardware restart restores safe state | Rust panics trigger restart handler; no unwinding |
+| Arithmetic | 15-bit ones-complement, fractional | `f64` for navigation/guidance math; `i16`/`u16` for I/O and hardware registers |
+| Real-time | Hard deadlines (T3RUPT every 10ms, T4RUPT every 7.5ms offset, T5RUPT/T6RUPT for DAP) | Interrupt-driven with priority; same timing contracts |
+
+
+## 2. Crate and Module Structure
+
+The project is organized as a Cargo workspace. The top-level workspace contains
+the core `no_std` crate and several supporting crates for testing and simulation.
+
+```
+agc-in-rust/                     (workspace root)
+  Cargo.toml                     (workspace definition)
+  agc-core/                      (the flight software -- #![no_std], #![no_main])
+    src/
+      lib.rs                     (crate root, feature gates, global panic handler)
+      main.rs                    (entry point: hardware init, FRESH START / RESTART)
+      
+      types/
+        mod.rs
+        angle.rs                 (CduAngle: u16 counts, scale B-1 revolutions)
+        vector.rs                (Vec3: [f64; 3] -- position, velocity, delta-V)
+        matrix.rs                (Mat3x3: [[f64; 3]; 3] -- coordinate transforms)
+      
+      hal/
+        mod.rs                   (AgcHardware trait -- bounds on the embedded-hal impl)
+        interrupts.rs            (Interrupt enum, INHINT/RELINT critical section)
+        timers.rs                (Scheduler timers: T3, T4, T5, T6 period management)
+        dsky.rs                  (DSKY relay/display peripheral interface)
+        imu.rs                   (IMU CDU angles, gyro torque commands, PIPA reads)
+        optics.rs                (CM optics shaft/trunnion drive and readback)
+        engine.rs                (SPS enable, gimbal commands)
+        rcs.rs                   (RCS jet on/off commands)
+        uplink.rs                (Uplink receiver interface)
+        telemetry.rs             (Downlink word output)
+      
+      executive/
+        mod.rs                   (Executive system -- job scheduling)
+        job.rs                   (Job: priority, state, register set, VAC area)
+        waitlist.rs              (Waitlist system -- task scheduling via TIME3)
+        scheduler.rs             (EXEC main loop: priority scan, NOVAC/FINDVAC)
+        restart.rs               (Restart protection: phase tables, group management)
+      
+      math/
+        mod.rs
+        trig.rs                  (sin, cos, asin, acos -- f64 wrappers with AGC domain conventions)
+        kepler.rs                (Kepler equation solvers, universal variable)
+        lambert.rs               (Lambert's problem -- transfer orbit targeting)
+        linalg.rs                (vector/matrix ops: dot, cross, norm, rotate)
+      
+      navigation/
+        mod.rs
+        state_vector.rs          (Position/velocity state vectors, coordinate frames)
+        integration.rs           (Cowell numerical integration, Encke method)
+        gravity.rs               (Earth/Moon gravity models, oblateness)
+        conics.rs                (Conic trajectory routines: Kepler, Lambert)
+        star_catalog.rs          (Fixed star table for IMU alignment)
+        planetary.rs             (Planetary/lunar ephemeris)
+        time.rs                  (Mission elapsed time, ground elapsed time)
+      
+      guidance/
+        mod.rs
+        targeting.rs             (Targeting parameters, TIG computation)
+        maneuver.rs              (Delta-V computation, burn attitude, cross-product steering)
+        midcourse.rs             (Midcourse correction guidance)
+        entry.rs                 (CM entry guidance -- skip/ballistic targeting)
+        lambert.rs               (Lambert aim point computation)
+      
+      control/
+        mod.rs
+        dap.rs                   (Digital Autopilot supervisor)
+        attitude.rs              (Attitude control: rate damping, attitude hold, maneuver)
+        tvc.rs                   (Thrust Vector Control for SPS burns)
+        rcs_logic.rs             (RCS jet select logic, minimum impulse)
+        imu_control.rs           (IMU coarse/fine align, gyro compensation, drift)
+      
+      programs/
+        mod.rs                   (Major Mode dispatch table)
+        p00.rs                   (CMC Idling -- POO)
+        p01_p02.rs               (Pre-launch initialization / Gyrocompassing)
+        p06.rs                   (Power-down)
+        p11.rs                   (Earth orbit insertion monitor)
+        p15.rs                   (TLI initiate/cutoff)
+        p20_p22.rs               (Rendezvous navigation / tracking)
+        p23.rs                   (Cislunar midcourse navigation -- star/landmark)
+        p30.rs                   (External Delta-V targeting)
+        p31_p34.rs               (Rendezvous maneuver computation)
+        p37.rs                   (Return to Earth)
+        p40_p41.rs               (SPS/RCS thrusting)
+        p47.rs                   (Thrust monitor)
+        p51_p52.rs               (IMU orientation / realignment)
+        p61_p67.rs               (Entry programs -- pre-entry through landing)
+      
+      services/
+        mod.rs
+        average_g.rs             (SERVICER: 2-second navigation cycle using PIPAs)
+        v_n.rs                   (Verb-Noun processor: DSKY command interpreter)
+        display.rs               (PINBALL: display formatting, flashing, blanking)
+        alarm.rs                 (Program alarm system: 1202, 1210, etc.)
+        fresh_start.rs           (FRESH START and RESTART sequences)
+        t4rupt.rs                (T4RUPT periodic I/O: DSKY, IMU monitoring, etc.)
+      
+      tables/
+        mod.rs
+        noun_table.rs            (Noun definitions: addresses, components, scale factors)
+        verb_table.rs            (Verb definitions: routine entry points)
+        alarm_codes.rs           (Alarm code definitions and severity)
+  
+  agc-sim/                       (Host-side simulator -- std allowed)
+    src/
+      lib.rs
+      hardware.rs                (Simulated HAL implementation)
+      dsky_ui.rs                 (Terminal-based DSKY simulator)
+      scenario.rs                (Mission scenario loader)
+      physics.rs                 (Simplified orbital mechanics for testing)
+  
+  agc-test/                      (Integration test harness)
+    src/
+      lib.rs
+    tests/
+      restart_recovery.rs
+      navigation_accuracy.rs
+      timing_compliance.rs
+      dsky_interaction.rs
+```
+
+
+## 3. Type System Design
+
+### 3.1 Numeric Types
+
+The Rust port uses standard Rust numeric primitives throughout. There is no
+custom `AgcWord` type.
+
+| Use | Type | Notes |
+|-----|------|-------|
+| Navigation math (position, velocity, maneuver) | `f64` | Full double-precision; matches original double-word accuracy |
+| Attitude / trig computations | `f64` | Matches interpretive-language double precision |
+| Display and alarm values | `f32` | Single precision sufficient for crew displays |
+| I/O channel words, counter cells | `u16` | Bit-field access; no arithmetic semantics |
+| CDU gimbal angles from hardware | `u16` | Twos-complement counts, full revolution = 2^15 |
+| Signed hardware quantities (PIPA counts, gyro pulses) | `i16` | Raw hardware units |
+
+The original AGC's ones-complement format and fractional scaling were
+constraints of the hardware, not requirements of the guidance algorithms.
+Using `f64` preserves the numerical accuracy that mattered (double-precision
+state vectors) without the bookkeeping overhead of scale factors and
+overflow flags.
+
+### 3.2 Newtypes for Physical Quantities
+
+Physical quantities that have distinct units use newtypes to prevent
+unit errors at compile time:
+
+```rust
+/// CDU gimbal angle. Full revolution = 2^15 counts (scale B-1 revolutions).
+#[derive(Clone, Copy)]
+pub struct CduAngle(pub u16);
+
+impl CduAngle {
+    pub fn to_radians(self) -> f64 {
+        (self.0 as f64) * (core::f64::consts::TAU / 65536.0)
+    }
+}
+
+/// Mission elapsed time in seconds.
+#[derive(Clone, Copy, PartialEq, PartialOrd)]
+pub struct Met(pub f64);
+
+/// Delta-V in meters per second.
+#[derive(Clone, Copy)]
+pub struct DeltaV(pub Vec3);
+```
+
+### 3.3 Vectors and Matrices
+
+```rust
+/// 3-component vector (position m, velocity m/s, delta-V m/s, etc.)
+pub type Vec3 = [f64; 3];
+
+/// 3x3 rotation matrix (REFSMMAT, coordinate frame transforms)
+pub type Mat3x3 = [[f64; 3]; 3];
+```
+
+Helper functions for dot product, cross product, norm, and matrix-vector
+multiply live in `math::linalg` and are plain `fn` calls, not methods on
+wrapper types.
+
+
+## 4. Hardware Abstraction Layer (HAL)
+
+The HAL isolates the flight software from the target hardware. In production
+(bare-metal), the HAL talks to memory-mapped I/O registers. In simulation, it
+talks to a software model.
+
+### 4.1 Core Trait
+
+The HAL is split into focused sub-traits, one per physical subsystem. The
+`AgcHardware` bound collects them. Each bare-metal implementation is a struct
+that wraps the `embedded-hal` peripheral handles for the specific MCU.
+
+```rust
+/// Bound that the flight software requires of the platform.
+/// Each associated type is a focused sub-trait; the bare-metal impl
+/// wires these to `embedded-hal` peripherals.
+pub trait AgcHardware {
+    type Timers: Timers;
+    type Dsky: Dsky;
+    type Imu: Imu;
+    type Optics: Optics;
+    type Engine: Engine;
+    type Rcs: Rcs;
+    type Uplink: Uplink;
+    type Telemetry: Telemetry;
+
+    fn timers(&mut self) -> &mut Self::Timers;
+    fn dsky(&mut self) -> &mut Self::Dsky;
+    fn imu(&mut self) -> &mut Self::Imu;
+    fn optics(&mut self) -> &mut Self::Optics;
+    fn engine(&mut self) -> &mut Self::Engine;
+    fn rcs(&mut self) -> &mut Self::Rcs;
+    fn uplink(&mut self) -> &mut Self::Uplink;
+    fn telemetry(&mut self) -> &mut Self::Telemetry;
+
+    /// Reset the night-watchman timer. Call once per Executive loop.
+    fn pet_watchdog(&mut self);
+
+    /// Trigger a hardware restart.
+    fn hardware_restart(&mut self) -> !;
+}
+```
+
+Example sub-trait:
+
+```rust
+pub trait Imu {
+    /// Read accumulated PIPA delta-V counts since last call (x, y, z).
+    fn read_pipa(&mut self) -> [i16; 3];
+    /// Read CDU gimbal angles as raw u16 counts.
+    fn read_cdu(&self) -> [CduAngle; 3];
+    /// Command gyro torque pulses for fine alignment.
+    fn torque_gyro(&mut self, axis: usize, pulses: i16);
+}
+```
+
+The Rust Embedded HAL (`embedded-hal` v1) provides the SPI/I2C/GPIO traits
+used inside the bare-metal implementations. The flight software never calls
+`embedded-hal` directly; it only calls `AgcHardware` sub-traits.
+
+### 4.2 Interrupt Model
+
+The AGC has 10 program interrupts plus 29 counter interrupts. Program interrupts
+are edge-triggered, latched, and serviced in a fixed-priority order. Only one
+interrupt can be active at a time.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum Interrupt {
+    /// TIME6 decremented to -0. Used for RCS jet timing.
+    T6Rupt = 1,
+    /// TIME5 overflow. Digital autopilot computations.
+    T5Rupt = 2,
+    /// TIME3 overflow. Waitlist task dispatch.
+    T3Rupt = 3,
+    /// TIME4 overflow. Periodic I/O (DSKY, IMU monitoring).
+    T4Rupt = 4,
+    /// Keyboard input from main DSKY.
+    KeyRupt1 = 5,
+    /// Keyboard input from nav DSKY or optics mark.
+    KeyRupt2 = 6,
+    /// Uplink word received from ground.
+    UplinkRupt = 7,
+    /// Telemetry end pulse -- ready for next downlink word pair.
+    DownRupt = 8,
+    /// Radar data ready.
+    RadarRupt = 9,
+    /// Hand controller / discrete input change.
+    HandRupt = 10,
+}
+```
+
+On Cortex-M, context save/restore is handled automatically by the NVIC
+hardware and the `cortex-m-rt` `#[interrupt]` attribute. Each interrupt
+handler is a plain Rust function. The Executive owns all interrupt service
+routines, which it registers at startup via the HAL.
+
+### 4.3 Peripheral Side Effects
+
+The original AGC's I/O channels were hardware registers with physical side
+effects (writing a jet channel fired a thruster; writing a display channel
+drove relay coils). In the Rust port these side effects are encapsulated inside
+each sub-trait implementation. The flight software calls typed methods (`rcs.fire_jets(...)`,
+`dsky.write_relay(...)`) and never manipulates hardware registers directly.
+
+The bare-metal HAL implementation translates each method call to the appropriate
+MCU peripheral operation (GPIO, SPI, timer compare, etc.) using `embedded-hal`.
+Timing constraints (e.g., the DSKY relay must be held for 20ms) are enforced
+inside the HAL implementation, not by the calling flight-software code.
+
+
+## 5. Executive and Waitlist -- The Real-Time Scheduler
+
+The AGC has no operating system. Instead, two cooperating systems manage all
+computation:
+
+### 5.1 Waitlist (Tasks)
+
+A **task** is a short, time-critical computation that runs to completion without
+yielding. Tasks are scheduled to execute at a specific future time, measured in
+centiseconds from "now." The hardware mechanism is TIME3: the software loads
+TIME3 with (2^14 - delay_cs), and when TIME3 overflows, T3RUPT fires and the
+Waitlist dispatcher runs the task.
+
+The Waitlist maintains a table of pending tasks, sorted by execution time. The
+original AGC supports 8 concurrent pending tasks (7 in the table plus the one
+currently being dispatched). Each entry is a pair: (delta-time, task-address).
+
+```rust
+pub const MAX_WAITLIST_TASKS: usize = 8;
+
+pub struct WaitlistEntry {
+    /// Time remaining until execution, in centiseconds.
+    /// Stored as delta from previous entry for efficient management.
+    pub delta_time: u16,
+    /// Entry point of the task.
+    pub task: fn(&mut AgcState),
+}
+
+pub struct Waitlist {
+    entries: [Option<WaitlistEntry>; MAX_WAITLIST_TASKS],
+    /// Number of active entries.
+    count: u8,
+}
+```
+
+Tasks are the highest-priority software activity after interrupt service routines.
+A task may:
+- Schedule another task (WAITLIST call).
+- Establish a job (EXEC call: NOVAC or FINDVAC).
+- Modify output channels directly (e.g., fire jets).
+- NOT perform long computations or use the interpreter.
+
+In Rust, tasks are function pointers (`fn(&mut AgcState)`). They execute with
+interrupts inhibited (INHINT) during the dispatch, then may release interrupts
+(RELINT) if they need to allow higher-priority work.
+
+### 5.2 Executive (Jobs)
+
+A **job** is a longer computation that can be preempted by tasks and interrupts.
+Jobs run at assigned priorities (higher number = higher priority). The Executive
+maintains a table of up to 7 jobs (the CORE SET table). Each job has its own
+register save area.
+
+```rust
+pub const MAX_JOBS: usize = 7;
+
+pub struct JobEntry {
+    /// Priority. 0 = slot empty. Higher = more important.
+    /// The dummy job (idle loop) runs at priority 0.
+    pub priority: u8,
+    /// The function implementing this job's computation.
+    pub entry: fn(&mut AgcState),
+    /// Major mode that owns this job (for restart dispatch).
+    pub major_mode: u8,
+}
+```
+
+The Executive's main loop (`EXEC`) scans the job table for the highest-priority
+ready job and runs it. When a job completes or yields (via `CHANG1` to change
+priority, or task preemption), the scan repeats.
+
+**The night-watchman timer** must be reset by the Executive main loop at least
+once every ~1.28 seconds. If the loop stalls (infinite loop in a job), the
+hardware triggers a restart. In the Rust port this is the `pet_watchdog()` call
+in `AgcHardware`, wired to a hardware watchdog timer on the MCU.
+
+```rust
+impl Executive {
+    /// The main scheduling loop. Never returns in normal operation.
+    /// This is the "idle loop" that the AGC enters when no jobs are ready.
+    pub fn run(&mut self, hw: &mut impl AgcHardware) -> ! {
+        loop {
+            // Sample NEWJOB -- resets night watchman
+            hw.pet_watchdog();  // reset night-watchman timer
+            
+            if let Some(job_index) = self.find_highest_priority_job() {
+                self.dispatch_job(job_index, hw);
+            }
+            // If no jobs ready, loop (the dummy job).
+            // No jobs ready -- COMPUTER ACTIVITY light is off.
+        }
+    }
+}
+```
+
+### 5.3 Priority Inversion and the 1202 Alarm
+
+The original AGC famously encountered "Executive overflow" (alarm 1202) during
+Apollo 11 when the rendezvous radar inadvertently consumed Executive slots. The
+alarm system must be preserved:
+
+- If a NOVAC or FINDVAC call finds no empty job slots, alarm 1202 is raised.
+- The restart logic recovers by dropping the lowest-priority non-critical job.
+- This is NOT a bug to be fixed; it is the correct design. The alarm tells the
+  crew and ground that the computer is shedding load.
+
+
+## 6. Restart Protection
+
+The AGC can restart at any time due to:
+- Parity failure in memory readout
+- Night watchman timeout (NEWJOB not sampled)
+- Software-initiated restart (TC GOJAM)
+- Power transient
+
+After restart, the software must return to a safe state without losing critical
+navigation data. The mechanism is **restart groups and phase tables**.
+
+### 6.1 Phase Tables
+
+The software is divided into **restart groups** (numbered 1-6 in Comanche055).
+Each group maintains a **phase register** that records which step of a multi-step
+computation the group has reached. On restart, the RESTART routine reads all
+phase registers and re-dispatches each group from its recorded phase.
+
+```rust
+pub const NUM_RESTART_GROUPS: usize = 6;
+
+pub struct RestartProtection {
+    /// Phase for each restart group. 0 = idle.
+    /// Positive odd = re-dispatch as task; positive even = re-dispatch as job.
+    /// Negative = restart group from the top of the phase.
+    pub phases: [i16; NUM_RESTART_GROUPS],
+}
+```
+
+### 6.2 Restart-Safe Coding Pattern
+
+In the original AGC assembly, critical computations bracket themselves with
+phase-change calls:
+
+```
+TC PHASCHNG       ; set phase for group N to value P
+... critical work ...
+TC PHASCHNG       ; advance phase
+```
+
+In Rust, this becomes a structured pattern:
+
+```rust
+fn critical_computation(state: &mut AgcState) {
+    state.restart.set_phase(GROUP_3, Phase::new(1));
+    
+    // ... compute step 1 ...
+    
+    state.restart.set_phase(GROUP_3, Phase::new(3));
+    
+    // ... compute step 2 ...
+    
+    state.restart.set_phase(GROUP_3, Phase::IDLE);
+}
+```
+
+### 6.3 Erasable Memory Protection
+
+Navigation state vectors (position and velocity of CSM and target vehicle) are
+the most critical data. They are stored in a protected region of erasable memory
+and are designed to survive restarts. The integration routines use a "swap"
+protocol: new state is computed into a temporary area, then atomically swapped
+into the primary area after the phase register is updated. This ensures that a
+restart mid-computation never corrupts the primary state.
+
+
+## 7. Navigation Programs (Major Modes)
+
+Major modes (also called "programs" -- P00, P01, P11, etc.) represent the
+high-level mission phases. The crew selects a major mode by keying VERB 37 NOUN
+xx ENTER on the DSKY.
+
+### 7.1 Program Lifecycle
+
+```
+VERB 37 ENTER -> V/N Processor -> Major Mode Switch -> Program Entry Point
+                                                        |
+                                                        v
+                                                   [Establish Job]
+                                                        |
+                                                        v
+                                                   [Schedule Tasks]
+                                                        |
+                                                   [Await Crew Input / Time]
+                                                        |
+                                                   [Perform Guidance]
+                                                        |
+                                                   [Display Results]
+                                                        |
+                                                   [Return to P00 or next P]
+```
+
+### 7.2 Programs for the Command Module (Comanche055 Scope)
+
+| Program | Description | Category |
+|---------|-------------|----------|
+| P00 | CMC Idling | Idle |
+| P01 | Pre-launch IMU initialization | Pre-launch |
+| P02 | Gyrocompassing | Pre-launch |
+| P06 | Power-down | System |
+| P11 | Earth orbit insertion monitor | Boost |
+| P15 | TLI (Trans-Lunar Injection) monitor | Boost |
+| P20 | Rendezvous navigation | Navigation |
+| P21 | Ground track determination | Navigation |
+| P22 | Orbital navigation (CM) | Navigation |
+| P23 | Cislunar midcourse nav (star/landmark) | Navigation |
+| P30 | External Delta-V | Targeting |
+| P31 | Rendezvous maneuver (height adjust) | Targeting |
+| P32 | Coelliptic sequence initiation | Targeting |
+| P33 | Constant Delta Height | Targeting |
+| P34 | Transfer Phase Initiation | Targeting |
+| P37 | Return to Earth | Contingency |
+| P40 | SPS thrusting | Maneuver |
+| P41 | RCS thrusting | Maneuver |
+| P47 | Thrust monitoring | Maneuver |
+| P51 | IMU orientation determination | Alignment |
+| P52 | IMU realignment | Alignment |
+| P61-P67 | Entry guidance sequence | Entry |
+
+### 7.3 Program Trait
+
+Each major mode implements a common trait:
+
+```rust
+pub trait MajorMode {
+    /// The program number (e.g., 11 for P11).
+    fn number(&self) -> u8;
+    
+    /// Entry point: called when the crew selects this program.
+    /// Returns a job priority for the Executive to use.
+    fn start(&self, state: &mut AgcState) -> JobPriority;
+    
+    /// Called if the program needs to handle a DSKY verb/noun
+    /// while it is the active major mode.
+    fn handle_display_input(&self, state: &mut AgcState, verb: u8, noun: u8);
+    
+    /// Called on restart to resume from the recorded phase.
+    fn restart_resume(&self, state: &mut AgcState, phase: Phase);
+    
+    /// Cleanup: called when switching away from this major mode.
+    fn terminate(&self, state: &mut AgcState);
+}
+```
+
+### 7.4 SERVICER (Average-G)
+
+The SERVICER is not a major mode but a critical background process that runs
+as a repeating task on a 2-second cycle. It reads the PIPA accelerometer
+counts, transforms them from platform coordinates to the computational
+coordinate frame, and integrates the state vector.
+
+The SERVICER is established by programs that need navigation (P11, P20, P40,
+entry programs) and is cancelled when navigation is not needed.
+
+```
+Every 2 seconds:
+  1. Read PIPA counts (PIPAX, PIPAY, PIPAZ) and reset counters
+  2. Apply PIPA compensation (bias, scale factor, misalignment)
+  3. Rotate from platform frame to reference frame (REFSMMAT)
+  4. Add gravity acceleration (computed from current state vector)
+  5. Integrate state vector (position += velocity*dt + 0.5*accel*dt^2, etc.)
+  6. Update displays
+  7. Reschedule self for T+2 seconds
+```
+
+
+## 8. Memory Layout Strategy
+
+### 8.1 Static Allocation Only
+
+All memory is statically allocated. There is no heap, no `alloc` crate, no
+`Vec`, no `Box`. Every data structure has a fixed, compile-time-known size.
+
+AGC memory addresses are irrelevant in the Rust port. Hardware registers,
+counter cells, and I/O channels are accessed through `AgcHardware` sub-trait
+methods; the MCU's memory-mapped register addresses are hidden inside the
+HAL implementation. All navigation and scheduler state lives in ordinary
+named Rust variables and struct fields.
+
+### 8.2 AgcState -- The Central State Structure
+
+Rather than using global mutable statics scattered across modules, all mutable
+state is collected into a single structure that is threaded through the call
+hierarchy. This makes the data flow explicit and testable.
+
+```rust
+pub struct AgcState {
+    // Executive state
+    pub executive: Executive,
+    pub waitlist: Waitlist,
+    pub restart: RestartProtection,
+    
+    // Navigation state
+    pub csm_state: StateVector,      // CSM position (m) and velocity (m/s)
+    pub target_state: StateVector,   // Target vehicle state (LM or landmark)
+    pub refsmmat: Mat3x3,            // Reference stable member matrix
+    pub time: Met,                   // Mission elapsed time (seconds)
+    
+    // Guidance state
+    pub major_mode: u8,              // Current program number
+    pub dap_state: DapState,         // Digital autopilot state
+    pub tvc_state: TvcState,         // Thrust vector control state
+    
+    // Display state
+    pub dsky: DskyState,             // Current display, verb, noun, registers
+    
+    // Alarm state
+    pub alarm: AlarmState,
+    
+    // Flags (FLAGWRD0-FLAGWRD11 -- bit fields, not arithmetic values)
+    pub flagwords: [u16; 12],
+}
+```
+
+### 8.3 Read-Only Data
+
+Constant tables (star catalog, verb/noun tables, alarm code definitions,
+trigonometric constants) are declared `static` or `const` in their respective
+modules and placed in flash by the linker. The AGC's bank-switching scheme is
+not relevant; the Cortex-M flat address space makes all flash uniformly
+accessible.
+
+
+## 9. Navigation Math -- Replacing the Interpreter
+
+The AGC's interpretive language existed to provide double-precision vector and
+matrix operations on a 15-bit CPU that had no such instructions. That problem
+does not exist on a modern target. The interpreter is **not re-implemented**.
+
+### 9.1 Replacement Strategy
+
+Every computation that was written in the AGC interpretive language is
+reimplemented as a plain Rust function using `f64`. The math module provides
+the building blocks:
+
+| Interpreter construct | Rust equivalent |
+|-----------------------|-----------------|
+| `VLOAD`, `VSTORE` | `let v: Vec3 = ...` / assignment |
+| `VAD`, `VSU`, `VSCALE` | `linalg::vadd`, `linalg::vsub`, `linalg::vscale` |
+| `DOT`, `CROSS` | `linalg::dot`, `linalg::cross` |
+| `UNIT` | `linalg::unit` |
+| `MXV`, `VXM` | `linalg::mxv`, `linalg::vxm` |
+| `SINE`, `COSINE` | `f64::sin`, `f64::cos` |
+| `ASIN`, `ACOS` | `f64::asin`, `f64::acos` |
+| `SQRT` | `f64::sqrt` |
+| `CALL` / `RETURN` | normal Rust function calls |
+| Push-down list | Rust call stack |
+
+### 9.2 Function Granularity
+
+The navigation and guidance modules expose functions that correspond
+one-to-one to the AGC's interpretive subroutines. For example, the KEPSILON
+routine (Kepler equation solver) becomes:
+
+```rust
+/// Solve Kepler's equation for the universal variable.
+/// Inputs are in SI units (m, m/s). Returns the state at time `dt`.
+pub fn kepler_step(r0: Vec3, v0: Vec3, dt: f64, mu: f64) -> (Vec3, Vec3) { ... }
+```
+
+The DAP, SERVICER, targeting, and entry guidance functions follow the same
+pattern: named Rust functions with `f64` parameters, called directly from
+program and task code.
+
+### 9.3 No Interpreter State
+
+There is no `InterpreterState` struct, no MPAC accumulator, no push-down list,
+and no mode register. All intermediate values are local variables or function
+parameters on the Rust call stack.
+
+
+## 10. DSKY Interface and the Verb/Noun System
+
+The DSKY (Display and Keyboard) is the crew's sole interface to the computer.
+It consists of:
+
+**Output**: Electroluminescent display with PROG, VERB, NOUN (2 digits each),
+R1, R2, R3 (5 digits each, signed), plus indicator lights.
+
+**Input**: 19 keys (0-9, VERB, NOUN, +, -, ENTER, CLR, PRO, KEY REL, RSET).
+
+### 10.1 Display Driving
+
+The DSKY display uses a row-select relay matrix. Each row must be held for
+20ms, then cleared before the next row; updating all 11 rows takes ~440ms.
+The flight software calls `dsky.write_row(row, data)` and `dsky.clear_row()`;
+the HAL implementation handles the timing constraints via a hardware timer.
+
+This is driven by the T4RUPT periodic handler, which cycles through display
+update tasks on a 120ms period.
+
+### 10.2 Verb/Noun Processing (PINBALL)
+
+The PINBALL system processes crew keyboard input. Verbs specify actions; nouns
+specify data items. Common verbs:
+
+| Verb | Meaning |
+|------|---------|
+| V01 | Display octal in R1 |
+| V04 | Display octal in R1, R2 |
+| V06 | Display decimal in R1, R2, R3 |
+| V16 | Monitor decimal in R1, R2, R3 (auto-refresh) |
+| V25 | Load decimal from keyboard into R1, R2, R3 |
+| V32 | Recycle (repeat current program display) |
+| V33 | Proceed without data input |
+| V34 | Terminate current program |
+| V37 | Change major mode (program select) |
+| V50 | Please perform (request crew action) |
+
+The Verb/Noun processor is a state machine:
+
+```
+Idle -> Verb Digit 1 -> Verb Digit 2 -> Noun Digit 1 -> Noun Digit 2 -> ENTER
+                                                                          |
+                                                               [Dispatch to verb handler]
+```
+
+### 10.3 Flashing Display
+
+When the computer needs crew input, it flashes the VERB and NOUN indicators via
+`dsky.set_flash(true)`. The crew responds by entering data and pressing ENTER,
+or by pressing PRO (proceed without input), or KEY REL (release display for
+background use).
+
+
+## 11. Digital Autopilot (DAP)
+
+The DAP runs as a task triggered by T5RUPT (every ~100ms for attitude control)
+and T6RUPT (for precise jet timing).
+
+### 11.1 CSM DAP Modes
+
+For the Command Module, the DAP operates in several modes:
+
+**Coast DAP (RCS)**:
+- Rate damping: null body rates using RCS jets
+- Attitude hold: maintain a target attitude quaternion
+- Maneuver: rotate to a commanded attitude at a controlled rate
+
+**Thrust DAP (TVC)**:
+- During SPS burns, the DAP controls the SPS engine gimbal through the TVC
+  system. Pitch and yaw gimbal angles are commanded via `engine.sps_gimbal(pitch, yaw)`
+  to steer the thrust vector through the vehicle center of mass.
+
+### 11.2 RCS Jet Selection
+
+The jet select logic maps desired torques to individual jet firings. The SM RCS
+has 16 jets in 4 quads; the CM RCS has 12 jets in 2 rings. Jet failures
+(sensed or commanded off) are handled by the jet select logic, which
+reconfigures to available jets. Jet commands are issued via `rcs.fire_jets(jet_mask)`.
+
+### 11.3 Timing
+
+T6RUPT provides 0.625ms resolution timing for RCS jet on/off commands.
+The DAP arms T6 with the desired jet-on duration via `timers.arm_t6(counts)`,
+fires the jets, and the T6RUPT handler calls `rcs.quench_jets()` to turn them off.
+
+
+## 12. Error Handling and Alarms
+
+### 12.1 Rust Panic Handler
+
+The `#[panic_handler]` triggers GOJAM (hardware restart):
+
+```rust
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    // Equivalent to TC GOJAM in the original
+    unsafe {
+        HARDWARE.hardware_restart();
+    }
+}
+```
+
+### 12.2 Program Alarms
+
+The AGC software raises alarms (via the ALARM routine) for non-fatal conditions:
+
+| Code | Meaning |
+|------|---------|
+| 0206 | Celestial body too close to Sun for sighting |
+| 0210 | IMU not aligned (REFSMMAT invalid) |
+| 0220 | Optics error -- mark rejected |
+| 0401 | Failed to converge (navigation integration) |
+| 0404 | Invalid orbit (sub-parabolic, etc.) |
+| 1202 | Executive overflow (no free job slots) |
+| 1210 | Executive overflow (no free VAC areas) |
+| 1211 | Waitlist overflow (no free task slots) |
+
+Alarms display on the DSKY PROG register and may or may not abort the current
+program depending on severity.
+
+### 12.3 Design for Robustness in Rust
+
+Rust's type system handles several classes of error that the AGC had to manage
+by convention:
+
+- **Array bounds**: Compile-time-fixed arrays with index checks (panic on
+  out-of-bounds triggers restart, same as original behavior).
+- **Null pointers**: `Option<T>` eliminates null-pointer errors in the job
+  table, waitlist, etc.
+- **Uninitialized memory**: Rust's ownership system prevents reading
+  uninitialized state.
+- **Arithmetic overflow**: The `AgcWord` type implements ones-complement
+  overflow explicitly; Rust's default overflow behavior is NOT used.
+
+However, Rust's safety guarantees do NOT replace the need for restart
+protection. A power glitch that corrupts RAM will corrupt Rust data structures
+just as it corrupted AGC erasable memory. The phase-table restart mechanism
+must be preserved.
+
+
+## 13. Timing Architecture
+
+### 13.1 Clock Source
+
+The AGC timing model requires three interrupt rates:
+
+| Rate | Period | Use |
+|------|--------|-----|
+| 100 Hz | 10 ms | Waitlist dispatch (T3RUPT), periodic I/O (T4RUPT) |
+| ~10 Hz | ~100 ms | Digital autopilot cycle (T5RUPT) |
+| Up to 1600 Hz | 0.625 ms | RCS jet pulse timing (T6RUPT) |
+
+On the Cortex-M target these are implemented with hardware timer peripherals
+configured via `embedded-hal`. The `Timers` sub-trait exposes
+`arm_t3(centiseconds)`, `arm_t5(centiseconds)`, and `arm_t6(counts)` methods;
+the HAL implementation maps these to MCU timer registers.
+
+### 13.2 Interrupt Timing Budget
+
+The AGC has a strict timing budget. Interrupts must complete quickly to avoid
+missing the next event.
+
+| Source | Period | Budget |
+|--------|--------|--------|
+| T6RUPT | 0.625ms (on demand) | ~0.5ms max |
+| T5RUPT | ~100ms | ~20ms max |
+| T3RUPT | variable (10ms min) | ~5ms for dispatch, task runs in foreground |
+| T4RUPT | 120ms | ~10ms per cycle |
+| KeyRupt | async (key press) | ~1ms |
+| DownRupt | ~10ms | ~0.5ms |
+
+Tasks and interrupt handlers must not block. If a computation is too long for
+a task, it must be established as a job.
+
+### 13.3 WAITLIST Timing
+
+Waitlist tasks are scheduled with centisecond resolution (10ms). The minimum
+useful delay is 1 centisecond. The maximum is 16383 centiseconds (~163 seconds)
+due to the 14-bit TIME3 counter.
+
+For delays longer than 163 seconds, the "long waitlist" mechanism chains
+tasks: a task reschedules itself for 163 seconds repeatedly until the remaining
+delay is small enough for a single waitlist call.
+
+
+## 14. Build System and Embedded Target
+
+### 14.1 Rust Embedded Ecosystem
+
+The project targets the [Rust Embedded](https://github.com/rust-embedded)
+ecosystem. Key dependencies:
+
+| Crate | Role |
+|-------|------|
+| [`cortex-m`](https://github.com/rust-embedded/cortex-m) | Core Cortex-M primitives: interrupt enable/disable, SysTick, critical sections |
+| [`cortex-m-rt`](https://github.com/rust-embedded/cortex-m-rt) | Startup, reset handler, `#[entry]`, `#[interrupt]` macros |
+| [`embedded-hal`](https://github.com/rust-embedded/embedded-hal) | Trait abstractions for GPIO, SPI, I2C, UART (used in `agc-hal`) |
+| [`panic-halt`](https://github.com/korken89/panic-halt) | Panic handler for bare-metal (replaced by GOJAM restart handler) |
+| [`defmt`](https://github.com/knurling-rs/defmt) | Efficient logging over probe (development only) |
+
+The minimum target is **Cortex-M4F** (e.g., STM32F4) to guarantee a hardware
+FPU for `f64` operations within the DAP timing budget. Cortex-M7 or M33 targets
+are preferred for the navigation integration cycle.
+
+### 14.2 Feature Flags
+
+```toml
+[features]
+default = ["sim"]
+sim = ["std"]              # Host simulation -- std allowed
+bare-metal = []            # No std, no heap, hardware target
+```
+
+The `agc-core` crate is always `#![no_std]`. The `sim` feature enables
+`agc-sim` to link against it with a hosted HAL.
+
+### 14.3 `#![no_std]` Constraints
+
+Running on `cortex-m-rt` with no OS imposes hard rules:
+
+- **No heap**: `alloc` is not used. All data structures are statically sized.
+- **No threads**: The execution model is single-threaded + interrupts.
+  `static mut` access is safe only with interrupts disabled (`cortex_m::interrupt::free`).
+- **No `f64` soft-float**: The linker must target `thumbv7em-none-eabihf`
+  (hard-float ABI). Soft-float is ~10× slower and breaks the DAP deadline.
+- **No unwinding**: `panic = "abort"` in `Cargo.toml`; panics trigger GOJAM.
+- **Stack size**: The entire call stack (navigation programs + DAP) must fit
+  in the MCU's RAM. Navigation functions must not recurse deeply. The deepest
+  call chain (SERVICER → orbit integrator → Kepler solver → linalg) must be
+  bounded and measured.
+- **Interrupt vectors**: Defined via `#[interrupt]` from `cortex-m-rt`.
+  T3RUPT, T4RUPT, T5RUPT, T6RUPT map to hardware timer interrupts.
+
+### 14.4 Linker Script
+
+```
+MEMORY {
+    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 512K   /* program + const tables */
+    RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 128K   /* AgcState + stacks */
+}
+```
+
+The `AgcState` struct is placed in a named RAM section so the linker can
+verify it fits. Stack size is set conservatively and measured with a watermark
+pattern during integration testing.
+
+### 14.5 Testing Strategy
+
+1. **Unit tests** (`#[cfg(test)]`): Run on host. Test individual math functions,
+   channel bit-field parsing, waitlist ordering, and program logic.
+
+2. **Integration tests** (`agc-test` crate): Run complete mission scenarios
+   against `agc-sim` on the host. Verify navigation accuracy, timing compliance,
+   and restart recovery.
+
+3. **Hardware-in-the-loop**: Run on target MCU connected to a simulated
+   IMU/DSKY via `probe-rs`. Verify real-time compliance and stack depth.
+
+
+## 15. Key Architectural Decisions and Trade-offs
+
+### D1: Interpreter Elimination
+
+**Decision**: Implement all navigation and guidance computations as direct Rust
+functions using `f64`. Do not re-implement the AGC interpretive language VM.
+
+**Rationale**: The interpreter was a space-saving measure on a 15-bit, 2K-ROM
+machine. Its bytecode dispatch, push-down list, and MPAC register add complexity
+with no benefit on a modern target. Native `f64` functions are faster, smaller,
+type-checked, and directly testable.
+
+**Trade-off**: The translation from interpretive code to Rust requires careful
+understanding of each routine's numerical intent. Mitigation: unit tests compare
+outputs against VirtualAGC reference runs for known mission profiles.
+
+### D2: Single AgcState Structure
+
+**Decision**: Collect all mutable state into one structure, passed by mutable
+reference.
+
+**Rationale**: Eliminates `static mut` and `unsafe` from most of the codebase.
+Makes the data flow explicit. Enables unit testing without global state.
+
+**Trade-off**: The single-owner model conflicts with the AGC's concurrent
+access patterns (interrupt handlers modify state that foreground jobs also
+read). Mitigation: interrupt handlers receive a restricted view (`&mut DapState`,
+not `&mut AgcState`) enforced by the type system.
+
+### D3: Native Types Instead of Ones-Complement
+
+**Decision**: Use `f64` for all navigation and guidance math. Use `i16`/`u16`
+for raw hardware values (channel words, counter cells, CDU angles). No custom
+`AgcWord` type.
+
+**Rationale**: The AGC's ones-complement arithmetic was a hardware constraint,
+not a navigation requirement. `f64` provides 53 bits of mantissa (more than
+the AGC's 29-bit double-word precision) and eliminates the entire class of
+scale-factor bookkeeping errors. Hardware I/O uses `i16`/`u16` to faithfully
+represent the 15-bit register values without arithmetic interpretation.
+
+**Trade-off**: Floating-point requires an FPU for real-time performance.
+All viable bare-metal Rust targets (Cortex-M4F and above) include a hardware
+FPU. Soft-float emulation is not acceptable for the DAP timing budget.
+
+### D4: Restart Protection as Explicit State Machine
+
+**Decision**: Preserve the AGC's phase-table restart mechanism rather than
+relying on Rust's safety guarantees alone.
+
+**Rationale**: Rust prevents software bugs but not hardware faults (RAM bit
+flips from radiation, power glitches). The phase-table mechanism provides
+recovery from any cause of restart, including those that corrupt RAM. This is
+essential for a safety-critical system.
+
+### D5: HAL Trait for Hardware Isolation
+
+**Decision**: Define hardware interaction through a trait, with separate
+implementations for simulation and bare-metal.
+
+**Rationale**: The flight software must be testable on a development host
+without hardware. The trait boundary is the natural seam.
+
+**Trade-off**: Trait dispatch adds a vtable indirection on every hardware access.
+Mitigation: use monomorphization (generics) rather than trait objects in the
+hot path. The compiler eliminates the indirection entirely.
+
+### D6: No Dynamic Memory Allocation
+
+**Decision**: `#![no_std]` with no `alloc` crate. All data structures are
+statically sized.
+
+**Rationale**: The original AGC had no heap, and for good reason: heap
+fragmentation in a long-running real-time system is a reliability hazard.
+Fixed-size structures have deterministic access times and cannot fail to
+allocate.
+
+**Trade-off**: Data structure sizes must be determined at compile time. This
+is not a problem because the original AGC had the same constraint, and all
+table sizes are known.
+
+### D7: Rust Embedded Ecosystem as Target Platform
+
+**Decision**: Target the `rust-embedded` ecosystem (`cortex-m`, `cortex-m-rt`,
+`embedded-hal`) with a minimum of Cortex-M4F.
+
+**Rationale**: The `rust-embedded` crates provide the standard, well-maintained
+foundation for bare-metal Rust. `embedded-hal` traits align directly with the
+`agc-hal` abstraction layer. Cortex-M4F guarantees a hardware FPU, which is
+required to meet the DAP's 100ms timing budget with `f64` arithmetic.
+
+**Trade-off**: The minimum target (Cortex-M4F) is orders of magnitude more
+capable than the original AGC. This is intentional -- the extra headroom allows
+use of `f64`, eliminates the need for fixed-point arithmetic gymnastics, and
+leaves room for future additions (e.g., a software simulation of the spacecraft
+dynamics for testing).
