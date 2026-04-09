@@ -11,15 +11,15 @@
 - [x] **Impl** — HAL traits in `agc-core/src/hal/`
 - [x] **Impl** — Simulated HAL in `agc-sim/src/hardware.rs`
 - [x] **Spec** — `Executive` (job table, priority scheduler, NOVAC/FINDVAC, 1202 alarm) → `specs/executive-spec.md`
-- [ ] **Impl** — `executive/scheduler.rs`, `executive/job.rs`
+- [x] **Impl** — `executive/scheduler.rs`, `executive/job.rs`
 - [x] **Spec** — `Waitlist` (delta-time chain, 8 slots, T3RUPT dispatch) → `specs/executive-spec.md` §4.5–4.7
-- [ ] **Impl** — `executive/waitlist.rs`
+- [x] **Impl** — `executive/waitlist.rs`
 - [x] **Spec** — Restart protection (phase tables, group management, GOJAM) → `specs/executive-spec.md` §4.8–4.10
-- [ ] **Impl** — `executive/restart.rs`
+- [x] **Impl** — `executive/restart.rs`
 - [x] **Impl** — `services/alarm.rs` (alarm codes, DSKY alarm display)
-- [ ] **Impl** — `services/fresh_start.rs`
-- [ ] **Tests** — All Executive + Waitlist unit tests passing
-- [ ] Bare-metal build clean: `cargo build --target thumbv7em-none-eabihf -p agc-core`
+- [x] **Impl** — `services/fresh_start.rs` (fresh_start + restart with group re-dispatch, 7 tests)
+- [x] **Tests** — All Executive + Waitlist unit tests passing (29 tests)
+- [x] Bare-metal build clean: `cargo build --target thumbv7em-none-eabihf -p agc-core`
 
 ## Backlog
 
