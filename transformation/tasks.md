@@ -2,28 +2,26 @@
 
 ## Active Tasks
 
-_None — foundation phase complete, implementation not yet started_
+### Milestone 1 — Core Infrastructure (in progress)
 
-## Backlog
-
-### Milestone 1 — Core Infrastructure
-
-- [ ] Create Cargo workspace (`agc-core`, `agc-sim`, `agc-test`) with feature flags (`sim`, `bare-metal`)
-- [ ] **Spec** — `types/` module (CduAngle, Vec3, Mat3x3, Met, DeltaV newtypes with scale docs)
-- [ ] **Impl** — `types/` module
-- [ ] **Spec** — `AgcHardware` trait and all sub-traits (`Timers`, `Dsky`, `Imu`, `Optics`, `Engine`, `Rcs`, `Uplink`, `Telemetry`)
-- [ ] **Impl** — HAL traits in `agc-core/src/hal/`
-- [ ] **Impl** — Simulated HAL in `agc-sim/src/hardware.rs`
-- [ ] **Spec** — `Executive` (job table, priority scheduler, NOVAC/FINDVAC, 1202 alarm)
+- [x] Create Cargo workspace (`agc-core`, `agc-sim`, `agc-test`) with feature flags (`sim`, `bare-metal`)
+- [x] **Spec** — `types/` module (CduAngle, Vec3, Mat3x3, Met, DeltaV newtypes with scale docs) → `specs/types-module-spec.md`
+- [x] **Impl** — `types/` module
+- [x] **Spec** — `AgcHardware` trait and all sub-traits (`Timers`, `Dsky`, `Imu`, `Optics`, `Engine`, `Rcs`, `Uplink`, `Telemetry`) → `specs/hal-spec.md`
+- [x] **Impl** — HAL traits in `agc-core/src/hal/`
+- [x] **Impl** — Simulated HAL in `agc-sim/src/hardware.rs`
+- [x] **Spec** — `Executive` (job table, priority scheduler, NOVAC/FINDVAC, 1202 alarm) → `specs/executive-spec.md`
 - [ ] **Impl** — `executive/scheduler.rs`, `executive/job.rs`
-- [ ] **Spec** — `Waitlist` (delta-time chain, 8 slots, T3RUPT dispatch)
+- [x] **Spec** — `Waitlist` (delta-time chain, 8 slots, T3RUPT dispatch) → `specs/executive-spec.md` §4.5–4.7
 - [ ] **Impl** — `executive/waitlist.rs`
-- [ ] **Spec** — Restart protection (phase tables, group management, GOJAM)
+- [x] **Spec** — Restart protection (phase tables, group management, GOJAM) → `specs/executive-spec.md` §4.8–4.10
 - [ ] **Impl** — `executive/restart.rs`
-- [ ] **Impl** — `services/alarm.rs` (alarm codes, DSKY alarm display)
+- [x] **Impl** — `services/alarm.rs` (alarm codes, DSKY alarm display)
 - [ ] **Impl** — `services/fresh_start.rs`
 - [ ] **Tests** — All Executive + Waitlist unit tests passing
 - [ ] Bare-metal build clean: `cargo build --target thumbv7em-none-eabihf -p agc-core`
+
+## Backlog
 
 ### Milestone 2 — Navigation Foundation
 
