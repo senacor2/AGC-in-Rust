@@ -276,6 +276,60 @@ The Rust Embedded HAL (`embedded-hal` v1) provides the SPI/I2C/GPIO traits
 used inside the bare-metal implementations. The flight software never calls
 `embedded-hal` directly; it only calls `AgcHardware` sub-traits.
 
+#### HAL Implementation Requirements
+
+Bare-metal structs implementing the sub-traits must follow the Rust Embedded
+HAL design patterns:
+
+- **`free()` method** (C-FREE): Every non-`Copy` HAL wrapper must expose a
+  `free()` method that consumes the wrapper and returns the raw peripheral,
+  allowing it to be reclaimed or passed to other drivers.
+
+- **`embedded-hal` trait impls** (C-HAL-TRAITS): Bare-metal structs must
+  implement all applicable `embedded-hal` traits in addition to the custom
+  sub-traits, so standard tooling (`probe-rs`, `defmt`, third-party drivers)
+  can interact with them.
+
+- **Typestate for operational modes** (C-PIN-STATE): IMU and Optics operational
+  modes are encoded as type parameters so misconfiguration is a compile error.
+  Gyro torque commands are only available on an aligned IMU; calling them on an
+  unaligned one is rejected at compile time:
+
+```rust
+use core::marker::PhantomData;
+
+pub struct Unaligned;
+pub struct CoarseAligned;
+pub struct FineAligned;
+
+pub struct ImuImpl<State> {
+    spi: Spi<SPI1>,
+    _state: PhantomData<State>,
+}
+
+impl ImuImpl<Unaligned> {
+    pub fn into_coarse_aligned(self) -> ImuImpl<CoarseAligned> { ... }
+}
+
+impl ImuImpl<CoarseAligned> {
+    /// Only available after coarse alignment -- compile error otherwise.
+    pub fn torque_gyro(&mut self, axis: usize, pulses: i16) { ... }
+    pub fn into_fine_aligned(self) -> ImuImpl<FineAligned> { ... }
+}
+
+impl ImuImpl<CoarseAligned> {
+    pub fn free(self) -> Spi<SPI1> { self.spi }
+}
+```
+
+- **PAC re-export** (C-REEXPORT-PAC): The bare-metal HAL crate re-exports the
+  device PAC under the name `pac`:
+
+```rust
+// In agc-core/src/lib.rs
+pub use stm32f4 as pac;
+```
+
 ### 4.2 Interrupt Model
 
 The AGC has 10 program interrupts plus 29 counter interrupts. Program interrupts
@@ -310,9 +364,58 @@ pub enum Interrupt {
 ```
 
 On Cortex-M, context save/restore is handled automatically by the NVIC
-hardware and the `cortex-m-rt` `#[interrupt]` attribute. Each interrupt
-handler is a plain Rust function. The Executive owns all interrupt service
-routines, which it registers at startup via the HAL.
+hardware. Each interrupt handler is a plain Rust function. The Executive owns
+all interrupt service routines, which it registers at startup via the HAL.
+
+The `#[interrupt]` attribute must be re-exported from the **device PAC crate**
+(e.g., `stm32f4`), not used directly from `cortex-m-rt`. Using the PAC's
+re-export causes the compiler to verify that the interrupt name actually exists
+on the target device, catching typos at compile time instead of silently
+producing an unregistered handler at runtime:
+
+```rust
+// Correct: use the device crate's re-exported attribute
+use stm32f4::interrupt;
+
+#[interrupt]
+fn TIM3() {
+    // T3RUPT -- Waitlist task dispatch
+}
+
+#[interrupt]
+fn TIM4() {
+    // T4RUPT -- periodic I/O (DSKY, IMU monitoring)
+}
+
+#[interrupt]
+fn TIM5() {
+    // T5RUPT -- Digital autopilot cycle
+}
+```
+
+#### HardFault Handler
+
+A `HardFault` handler must always be defined. The `ExceptionFrame` it receives
+contains a full register snapshot including the program counter at the moment
+of the fault, which is essential for debugging. In release builds it triggers
+an immediate restart; in debug builds it halts so a debugger can inspect the
+frame:
+
+```rust
+use cortex_m_rt::{exception, ExceptionFrame};
+
+#[exception]
+unsafe fn HardFault(ef: &ExceptionFrame) -> ! {
+    #[cfg(debug_assertions)]
+    {
+        cortex_m_semihosting::hprintln!("HardFault: {:#?}", ef).ok();
+        loop {} // halt so a debugger can attach and inspect ef.pc
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        cortex_m::peripheral::SCB::sys_reset()
+    }
+}
 
 ### 4.3 Peripheral Side Effects
 
@@ -797,15 +900,30 @@ fires the jets, and the T6RUPT handler calls `rcs.quench_jets()` to turn them of
 
 ### 12.1 Rust Panic Handler
 
-The `#[panic_handler]` triggers GOJAM (hardware restart):
+The `#[panic_handler]` triggers GOJAM (hardware restart). The handler is
+profile-specific: debug builds log the panic message via semihosting so the
+cause is visible to a developer; release builds restart immediately with no
+output overhead.
+
+Do **not** add `panic-halt` or any other panic-handler crate as a dependency —
+only one `#[panic_handler]` is permitted per binary and these crates provide
+one automatically, causing a link error.
 
 ```rust
+// dev profile: log the message, then restart
+// A debugger can set a breakpoint on `rust_begin_unwind` to inspect the cause.
+#[cfg(debug_assertions)]
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    cortex_m_semihosting::hprintln!("PANIC: {}", info).ok();
+    cortex_m::peripheral::SCB::sys_reset()
+}
+
+// release profile: restart immediately; no output, minimal binary size
+#[cfg(not(debug_assertions))]
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
-    // Equivalent to TC GOJAM in the original
-    unsafe {
-        HARDWARE.hardware_restart();
-    }
+    cortex_m::peripheral::SCB::sys_reset()
 }
 ```
 
@@ -905,11 +1023,12 @@ ecosystem. Key dependencies:
 
 | Crate | Role |
 |-------|------|
-| [`cortex-m`](https://github.com/rust-embedded/cortex-m) | Core Cortex-M primitives: interrupt enable/disable, SysTick, critical sections |
-| [`cortex-m-rt`](https://github.com/rust-embedded/cortex-m-rt) | Startup, reset handler, `#[entry]`, `#[interrupt]` macros |
+| [`cortex-m`](https://github.com/rust-embedded/cortex-m) | Core Cortex-M primitives: interrupt enable/disable, SysTick, `Mutex`, critical sections |
+| [`cortex-m-rt`](https://github.com/rust-embedded/cortex-m-rt) | Startup, reset handler, `#[entry]`, `#[exception]` macros |
 | [`embedded-hal`](https://github.com/rust-embedded/embedded-hal) | Trait abstractions for GPIO, SPI, I2C, UART (used in `agc-hal`) |
-| [`panic-halt`](https://github.com/korken89/panic-halt) | Panic handler for bare-metal (replaced by GOJAM restart handler) |
-| [`defmt`](https://github.com/knurling-rs/defmt) | Efficient logging over probe (development only) |
+| [`stm32f4`](https://github.com/stm32-rs/stm32-rs) | Device PAC — provides `#[interrupt]` attribute with compile-time name verification; re-exported as `pac` |
+| [`cortex-m-semihosting`](https://github.com/rust-embedded/cortex-m-semihosting) | Debug logging to host via probe (dev builds only) |
+| [`defmt`](https://github.com/knurling-rs/defmt) | Efficient structured logging over probe (development only) |
 
 The minimum target is **Cortex-M4F** (e.g., STM32F4) to guarantee a hardware
 FPU for `f64` operations within the DAP timing budget. Cortex-M7 or M33 targets
@@ -933,12 +1052,27 @@ Running on `cortex-m-rt` with no OS imposes hard rules:
 
 - **No heap**: `alloc` is not used. All data structures are statically sized.
 - **No threads**: The execution model is single-threaded + interrupts.
+<<<<<<< vitaliy
+  Raw `static mut` is forbidden in application code. All shared mutable state
+  uses `cortex_m::interrupt::Mutex<RefCell<T>>` (heap-free — `Mutex` and
+  `RefCell` are plain stack/static structs with zero allocation overhead). Access
+  always goes through `interrupt::free(|cs| ...)`, which provides a
+  `CriticalSection` token the compiler requires before the `Mutex` will yield
+  its contents. Each shared-state category has a designated static:
+
+  | State | Type |
+  |---|---|
+  | `DapState` | `Mutex<RefCell<DapState>>` |
+  | `AlarmState` | `Mutex<Cell<AlarmState>>` |
+  | `DskyState` | `Mutex<RefCell<DskyState>>` |
+=======
   `static mut` access is safe only with interrupts disabled (`cortex_m::interrupt::free`).
 - **No async/await**: Rust's `async`/`await` and any executor (Tokio, Embassy, etc.)
   are prohibited. All concurrency is expressed exclusively through waitlist tasks
   and executive jobs. These are the only two scheduling primitives. Code that
   needs deferred or concurrent execution must be structured as a task (short,
   time-triggered) or a job (longer, priority-scheduled) — nothing else.
+>>>>>>> main
 - **No `f64` soft-float**: The linker must target `thumbv7em-none-eabihf`
   (hard-float ABI). Soft-float is ~10× slower and breaks the DAP deadline.
 - **No unwinding**: `panic = "abort"` in `Cargo.toml`; panics trigger GOJAM.
@@ -946,8 +1080,11 @@ Running on `cortex-m-rt` with no OS imposes hard rules:
   in the MCU's RAM. Navigation functions must not recurse deeply. The deepest
   call chain (SERVICER → orbit integrator → Kepler solver → linalg) must be
   bounded and measured.
-- **Interrupt vectors**: Defined via `#[interrupt]` from `cortex-m-rt`.
-  T3RUPT, T4RUPT, T5RUPT, T6RUPT map to hardware timer interrupts.
+- **Interrupt vectors**: Defined via `#[interrupt]` re-exported from the device
+  PAC crate (e.g., `stm32f4`), not from `cortex-m-rt` directly. This gives
+  compile-time verification that the interrupt name exists on the target device.
+  T3RUPT, T4RUPT, T5RUPT, T6RUPT map to hardware timer interrupts (e.g.,
+  `TIM3`, `TIM4`, `TIM5` on STM32F4).
 
 ### 14.4 Linker Script
 
@@ -1001,8 +1138,15 @@ Makes the data flow explicit. Enables unit testing without global state.
 
 **Trade-off**: The single-owner model conflicts with the AGC's concurrent
 access patterns (interrupt handlers modify state that foreground jobs also
-read). Mitigation: interrupt handlers receive a restricted view (`&mut DapState`,
-not `&mut AgcState`) enforced by the type system.
+read). Interrupt handlers are called by hardware and cannot receive function
+arguments, so shared state must be in `static` variables. The mechanism is
+`cortex_m::interrupt::Mutex<RefCell<T>>` — a heap-free wrapper (`Mutex` and
+`RefCell` are plain structs, zero allocation overhead) that requires a
+`CriticalSection` token before yielding access. The token can only be obtained
+inside `interrupt::free`, so the compiler statically enforces that shared state
+is never accessed outside a critical section. Each piece of state that is
+touched by both foreground jobs and interrupt handlers gets its own typed
+static, keeping the scope of sharing explicit and minimal.
 
 ### D3: Native Types Instead of Ones-Complement
 
