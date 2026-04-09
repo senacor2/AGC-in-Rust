@@ -27,14 +27,14 @@
 
 - [x] **Spec** — `math/linalg.rs` (dot, cross, norm, unit, mxv, vxm) → `specs/linalg-spec.md`
 - [x] **Impl** — `math/linalg.rs` (11 functions + IDENTITY, 43 tests passing)
-- [ ] **Spec** — `navigation/state_vector.rs` (StateVector, coordinate frames)
-- [ ] **Impl** — `navigation/state_vector.rs`
-- [ ] **Spec** — `navigation/gravity.rs` (Earth/Moon models, oblateness)
-- [ ] **Impl** — `navigation/gravity.rs`
-- [ ] **Spec** — `navigation/integration.rs` (Cowell / Encke propagation)
-- [ ] **Impl** — `navigation/integration.rs`
-- [ ] **Spec** — `services/average_g.rs` (SERVICER 2-second cycle)
-- [ ] **Impl** — `services/average_g.rs`
+- [x] **Spec** — `navigation/state_vector.rs` (StateVector, coordinate frames) → `specs/state-vector-spec.md`
+- [x] **Impl** — `navigation/state_vector.rs` (Frame enum, StateVector, debug_assert_valid, 7 tests)
+- [x] **Spec** — `navigation/gravity.rs` (Earth/Moon models, oblateness) → `specs/gravity-spec.md`
+- [x] **Impl** — `navigation/gravity.rs` (earth_gravity + J2, moon_gravity, third_body_perturbation, 8 tests)
+- [x] **Spec** — `navigation/integration.rs` (Cowell / Encke propagation) → `specs/integration-spec.md`
+- [x] **Impl** — `navigation/integration.rs` (average_g_step, propagate_coast RK4, total_gravity, soi_check, 6 tests)
+- [x] **Spec** — `services/average_g.rs` (SERVICER 2-second cycle) → `specs/average-g-spec.md`
+- [x] **Impl** — `services/average_g.rs` (PipaCalibration, start/stop/servicer_task, 7 tests)
 - [ ] Capture VirtualAGC math fixtures (see `docs/testing.md §6`)
 - [ ] Navigation accuracy tests passing against fixtures
 

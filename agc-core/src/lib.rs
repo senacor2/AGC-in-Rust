@@ -26,7 +26,7 @@ pub mod types;
 use control::{DapState, TvcState};
 use executive::{Executive, RestartProtection, Waitlist};
 use navigation::StateVector;
-use services::{AlarmState, DskyState};
+use services::{AlarmState, DskyState, average_g::PipaCalibration};
 use types::{Mat3x3, Met};
 
 /// Central mutable state of the guidance computer.
@@ -68,6 +68,24 @@ pub struct AgcState {
     /// Bit-field flag words (FLAGWRD0–FLAGWRD11). Addressed by bit position,
     /// not by arithmetic value.
     pub flagwords: [u16; 12],
+
+    // ── SERVICER / PIPA ──────────────────────────────────────────────────────
+    /// PIPA (accelerometer) calibration constants: scale factor, bias, misalignment.
+    /// Initialised to `PipaCalibration::NOMINAL` at FRESH START.
+    pub pipa_cal: PipaCalibration,
+
+    /// Raw PIPA counts staging field.
+    ///
+    /// Written by the T3RUPT handler (Strategy B) or hardware shim before
+    /// dispatching `servicer_task`. Consumed by the SERVICER each 2-second cycle.
+    /// Units: raw PIPA pulse counts (platform frame, destructive read).
+    pub pipa_counts: [i16; 3],
+
+    /// Optional program-specific callback invoked at the end of each SERVICER cycle.
+    ///
+    /// P40 SPS burns set this to `guidance::tvc::cross_product_steering_update`.
+    /// P00 and programs that do not need a SERVICER exit leave this as `None`.
+    pub servicer_exit: Option<fn(&mut AgcState)>,
 }
 
 impl AgcState {
@@ -118,6 +136,9 @@ impl AgcState {
                 lit: false,
             },
             flagwords: [0u16; 12],
+            pipa_cal: PipaCalibration::NOMINAL,
+            pipa_counts: [0i16; 3],
+            servicer_exit: None,
         }
     }
 }
