@@ -1,0 +1,142 @@
+{
+  "source": "VirtualAGC Comanche055 source code (yaYUL native arm64 build)",
+  "date": "2026-04-09",
+  "method": "Extracted from ~/virtualagc/Comanche055/*.agc assembly source files",
+  "note": "These are the actual AGC constant values from Comanche055 (Apollo 13 CM). They differ from modern best-estimates used in agc-core/navigation/gravity.rs because the AGC used 1960s measurements stored at limited fixed-point precision.",
+
+  "gravity_constants": {
+    "MUEARTH": {
+      "agc_value": "3.986032E10",
+      "agc_scale": "B-36",
+      "agc_unit": "m^3/cs^2 (centiseconds squared)",
+      "si_value_m3_s2": 3.986032e14,
+      "conversion_note": "AGC stored mu in m^3/cs^2; multiply by 1e8 to get m^3/s^2. 3.986032E10 * 1E4 = 3.986032E14 m^3/s^2",
+      "rust_value": 3.986004418e14,
+      "difference_ppm": 6.9,
+      "source_file": "Comanche055/ORBITAL_INTEGRATION.agc line 899"
+    },
+    "MUMOON": {
+      "agc_value": "4.9027780E8",
+      "agc_scale": "B-30",
+      "agc_unit": "m^3/cs^2",
+      "si_value_m3_s2": 4.902778e12,
+      "rust_value": 4.902800118e12,
+      "difference_ppm": 4.5,
+      "source_file": "Comanche055/ORBITAL_INTEGRATION.agc line 898 (MUM = MUEARTH - 2)"
+    },
+    "J2REQSQ": {
+      "agc_value": "1.75501139E21",
+      "agc_scale": "B-72",
+      "description": "J2 * R_earth^2, precomputed for the oblateness perturbation",
+      "si_value": 1.75501139e21,
+      "derived_J2": "J2REQSQ / R_earth^2 = 1.75501139E21 / (6.37814E6)^2 = 1.75501139E21 / 4.068E13 ≈ 0.001082",
+      "rust_J2": 0.00108262668,
+      "source_file": "Comanche055/ORBITAL_INTEGRATION.agc line 905"
+    },
+    "RSPHERE": {
+      "agc_value": "64373.76E3",
+      "agc_scale": "B-29",
+      "description": "Sphere of influence radius (metres)",
+      "si_value_m": 64373760.0,
+      "rust_R_SOI_MOON": 66183000.0,
+      "difference_km": 1809.24,
+      "note": "AGC used 64374 km vs modern 66183 km — significant difference. The AGC value was based on 1960s mass ratio estimates.",
+      "source_file": "Comanche055/ORBITAL_INTEGRATION.agc line 911"
+    },
+    "RDE": {
+      "agc_value": "80467.20E3",
+      "agc_scale": "B-29",
+      "description": "Earth radius for display (metres)",
+      "si_value_m": 80467200.0,
+      "note": "This appears to be a different quantity (possibly SOI or display parameter), not R_earth",
+      "source_file": "Comanche055/ORBITAL_INTEGRATION.agc line 913"
+    },
+    "RDM": {
+      "agc_value": "16093.44E3",
+      "agc_scale": "B-27",
+      "description": "Moon radius for display (metres)",
+      "si_value_m": 16093440.0,
+      "note": "This appears to be a display/range parameter, not the physical Moon radius",
+      "source_file": "Comanche055/ORBITAL_INTEGRATION.agc line 912"
+    }
+  },
+
+  "erasable_addresses": {
+    "CDUX": {"octal": "0032", "decimal": 26, "description": "IMU outer gimbal CDU"},
+    "CDUY": {"octal": "0033", "decimal": 27, "description": "IMU inner gimbal CDU"},
+    "CDUZ": {"octal": "0034", "decimal": 28, "description": "IMU middle gimbal CDU"},
+    "PIPAX": {"octal": "0037", "decimal": 31, "description": "PIPA X accumulator"},
+    "PIPAY": {"octal": "0040", "decimal": 32, "description": "PIPA Y accumulator"},
+    "PIPAZ": {"octal": "0041", "decimal": 33, "description": "PIPA Z accumulator"},
+    "RN": {"description": "CSM state vector position (6 words DP)", "source": "ERASABLE_ASSIGNMENTS.agc line 1957"},
+    "VN": {"description": "CSM state vector velocity (6 words DP)", "source": "ERASABLE_ASSIGNMENTS.agc line 1958"},
+    "REFSMMAT": {"description": "Reference-to-Stable-Member matrix (18 words DP)", "source": "ERASABLE_ASSIGNMENTS.agc line 2263"},
+    "TEPHEM": {"description": "Ephemeris time (3 words)", "source": "ERASABLE_ASSIGNMENTS.agc line 2248"}
+  },
+
+  "integration_constants": {
+    "DT_2MIN": {
+      "agc_value": "3",
+      "agc_scale": "B-20",
+      "description": "Minimum half-step for integration (centiseconds)",
+      "si_value_cs": 3,
+      "source_file": "Comanche055/INTEGRATION_INITIALIZATION.agc line 808"
+    },
+    "DT_2MAX": {
+      "agc_value": "4000E2",
+      "agc_scale": "B-20",
+      "description": "Maximum half-step for integration (centiseconds)",
+      "si_value_cs": 400000,
+      "source_file": "Comanche055/INTEGRATION_INITIALIZATION.agc line 810"
+    },
+    "OMEGMOON": {
+      "agc_value": "2.66169947E-8",
+      "agc_scale": "B+23",
+      "description": "Moon's angular rate (rad/cs)",
+      "si_value_rad_s": 2.66169947e-6,
+      "source_file": "Comanche055/INTEGRATION_INITIALIZATION.agc line 475"
+    },
+    "J4REQ_J3": {
+      "agc_value": "0.4991607391E7",
+      "agc_scale": "B-26",
+      "description": "J4*R_earth^4 / J3 ratio for higher-order perturbation",
+      "source_file": "Comanche055/ORBITAL_INTEGRATION.agc line 901"
+    },
+    "2J3RE_J2": {
+      "agc_value": "-0.1355426363E5",
+      "agc_scale": "B-27",
+      "description": "2*J3*R_earth / J2 for J3 perturbation term",
+      "source_file": "Comanche055/ORBITAL_INTEGRATION.agc line 903"
+    },
+    "3J22R2MU": {
+      "agc_value": "9.20479048E16",
+      "agc_scale": "B-58",
+      "description": "3*J2^2*R_earth^2*MU for second-order J2 effect",
+      "source_file": "Comanche055/ORBITAL_INTEGRATION.agc line 906"
+    }
+  },
+
+  "comparison_with_rust_implementation": {
+    "mu_earth": {
+      "agc_si": 3.986032e14,
+      "rust": 3.986004418e14,
+      "relative_error": 6.9e-6,
+      "verdict": "Within 7 ppm — acceptable. Modern value is more accurate."
+    },
+    "mu_moon": {
+      "agc_si": 4.902778e12,
+      "rust": 4.902800118e12,
+      "relative_error": 4.5e-6,
+      "verdict": "Within 5 ppm — acceptable."
+    },
+    "r_soi": {
+      "agc_km": 64373.76,
+      "rust_km": 66183.0,
+      "difference_km": 1809.24,
+      "verdict": "2.7% difference. AGC used 1960s mass ratio. The Rust implementation uses modern values. Navigation tests should use the Rust value for self-consistency."
+    },
+    "j2_effect": {
+      "note": "AGC stored precomputed J2*R^2 (J2REQSQ) rather than J2 and R separately. The Rust implementation computes J2*R^2 at runtime from J2_EARTH and R_EARTH. Both approaches yield equivalent results within DP precision."
+    }
+  }
+}

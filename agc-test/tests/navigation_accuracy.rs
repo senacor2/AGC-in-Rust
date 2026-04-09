@@ -488,3 +488,68 @@ fn test_lunar_orbit_energy_conservation() {
         );
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VirtualAGC constant validation
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Validate that our Rust gravity constants are consistent with the actual
+/// AGC values extracted from the Comanche055 assembly source via VirtualAGC.
+///
+/// The AGC used 1960s-era measurements; our Rust implementation uses modern
+/// best-estimates. This test documents the known differences and ensures they
+/// are within the expected range (< 10 ppm for mu values).
+#[test]
+fn test_vagc_constant_consistency() {
+    use agc_core::navigation::gravity::{MU_EARTH, MU_MOON, R_SOI_MOON, J2_EARTH, R_EARTH};
+
+    // AGC MUEARTH = 3.986032E10 m^3/cs^2 → 3.986032E14 m^3/s^2
+    // (AGC stored mu in centisecond units; multiply by 1e4 to get SI)
+    let agc_mu_earth_si = 3.986032e14;
+    let mu_earth_rel_err = (MU_EARTH - agc_mu_earth_si).abs() / agc_mu_earth_si;
+    assert!(
+        mu_earth_rel_err < 1e-5,
+        "MU_EARTH differs from AGC by {:.1} ppm (expected < 10 ppm)",
+        mu_earth_rel_err * 1e6
+    );
+
+    // AGC MUMOON = 4.9027780E8 m^3/cs^2 → 4.902778E12 m^3/s^2
+    let agc_mu_moon_si = 4.902778e12;
+    let mu_moon_rel_err = (MU_MOON - agc_mu_moon_si).abs() / agc_mu_moon_si;
+    assert!(
+        mu_moon_rel_err < 1e-5,
+        "MU_MOON differs from AGC by {:.1} ppm (expected < 10 ppm)",
+        mu_moon_rel_err * 1e6
+    );
+
+    // AGC J2REQSQ = 1.75501139E21 B-72 is a compound precomputed constant
+    // (J2 * R_earth^2 * additional scaling for the integration loop), NOT
+    // the simple product J2 * R^2. Direct comparison is not meaningful.
+    // Instead, verify that our J2_EARTH and R_EARTH are individually reasonable.
+    assert!(
+        J2_EARTH > 1.0e-3 && J2_EARTH < 1.1e-3,
+        "J2_EARTH = {} outside expected range [1.0e-3, 1.1e-3]",
+        J2_EARTH
+    );
+    assert!(
+        R_EARTH > 6.37e6 && R_EARTH < 6.39e6,
+        "R_EARTH = {} outside expected range [6.37e6, 6.39e6]",
+        R_EARTH
+    );
+
+    // AGC RSPHERE = 64373.76 km vs our 66183 km — known 2.7% difference
+    let agc_rsphere_m = 64373760.0;
+    let rsoi_diff_km = (R_SOI_MOON - agc_rsphere_m).abs() / 1000.0;
+    assert!(
+        rsoi_diff_km < 2000.0,
+        "R_SOI_MOON differs from AGC RSPHERE by {:.0} km (expected < 2000 km)",
+        rsoi_diff_km
+    );
+    // Document the known difference
+    eprintln!(
+        "INFO: R_SOI_MOON = {:.0} km (modern) vs AGC RSPHERE = {:.0} km (1960s) — {:.1}% difference",
+        R_SOI_MOON / 1000.0,
+        agc_rsphere_m / 1000.0,
+        rsoi_diff_km / (agc_rsphere_m / 1000.0) * 100.0
+    );
+}

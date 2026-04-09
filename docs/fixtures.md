@@ -8,11 +8,14 @@ reference inputs and expected outputs for the navigation accuracy tests in
 **Level 2** tests from the testing strategy (`docs/testing.md`) to run without
 a running VirtualAGC instance.
 
-These fixtures are **analytically computed** from first principles using the
-same physical constants implemented in `agc-core/src/navigation/gravity.rs`.
-They are not dumped from VirtualAGC memory. Once Podman becomes available, the
-reference values can be replaced with VirtualAGC-derived values following the
-procedure in §5 below.
+The fixtures combine two sources:
+
+- **Analytically computed** reference values derived from first principles using
+  the same physical constants as `agc-core/src/navigation/gravity.rs`.
+- **VirtualAGC-derived** constants extracted from the Comanche055 assembly source
+  via a native arm64 build of yaAGC/yaYUL (`vagc_constants.json`). These document
+  the actual AGC constant values and quantify the differences from modern
+  best-estimates used in the Rust implementation.
 
 ---
 
@@ -142,6 +145,35 @@ propagator.
 - `dt_s` — propagation interval in seconds.
 - `moon_pos_m` — Moon ECI position supplied to `propagate_coast`.
 - `position_tolerance_m` / `velocity_tolerance_m_s` — per-component absolute tolerances (except for the one-orbit case, which uses radius/speed norm comparisons).
+
+### `vagc_constants.json`
+
+**Purpose**: Documents the actual gravity and integration constants extracted
+from the Comanche055 AGC assembly source via VirtualAGC (yaYUL native arm64
+build). These are NOT test inputs — they are a reference document that maps
+each AGC constant to the corresponding Rust value and quantifies the difference.
+
+**Content**:
+- `gravity_constants` — MUEARTH, MUMOON, J2REQSQ, RSPHERE, RDE, RDM with AGC
+  values, scale factors, SI conversions, and comparison against `gravity.rs`
+- `erasable_addresses` — octal addresses for CDUX/Y/Z, PIPAX/Y/Z, RN, VN,
+  REFSMMAT, TEPHEM
+- `integration_constants` — DT/2MIN, DT/2MAX, OMEGMOON, J4REQ/J3, 2J3RE/J2,
+  3J22R2MU
+- `comparison_with_rust_implementation` — per-constant relative error analysis
+
+**Source**: `~/virtualagc/Comanche055/ORBITAL_INTEGRATION.agc`,
+`~/virtualagc/Comanche055/INTEGRATION_INITIALIZATION.agc`,
+`~/virtualagc/Comanche055/ERASABLE_ASSIGNMENTS.agc`
+
+**Key findings**:
+- MU_EARTH: AGC 3.986032e14 vs Rust 3.986004e14 — 7 ppm difference (modern value more accurate)
+- MU_MOON: AGC 4.902778e12 vs Rust 4.902800e12 — 5 ppm difference
+- RSPHERE (SOI): AGC 64374 km vs Rust 66183 km — 2.7% difference (1960s mass ratio)
+- J2REQSQ is a compound precomputed constant, not simple J2*R^2
+
+**Test**: `test_vagc_constant_consistency` in `navigation_accuracy.rs` validates
+that the Rust constants are within expected tolerance of the AGC values.
 
 ---
 
