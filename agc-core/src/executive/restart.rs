@@ -68,3 +68,63 @@ impl RestartProtection {
         self.phases[group]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // TC-RP-1: positive even → is_job
+    #[test]
+    fn tc_rp_1_positive_even_is_job() {
+        let p = Phase::new(2);
+        assert!(p.is_job());
+        assert!(!p.is_task());
+        assert!(!p.is_idle());
+    }
+
+    // TC-RP-2: positive odd → is_task
+    #[test]
+    fn tc_rp_2_positive_odd_is_task() {
+        let p = Phase::new(3);
+        assert!(p.is_task());
+        assert!(!p.is_job());
+        assert!(!p.is_idle());
+    }
+
+    // TC-RP-3: negative → not idle, not job, not task
+    #[test]
+    fn tc_rp_3_negative() {
+        let p = Phase::new(-1);
+        assert!(!p.is_idle());
+        assert!(!p.is_job());
+        assert!(!p.is_task());
+    }
+
+    // TC-RP-4: IDLE
+    #[test]
+    fn tc_rp_4_idle() {
+        assert!(Phase::IDLE.is_idle());
+    }
+
+    // TC-RP-5: set_phase and phase round-trip
+    #[test]
+    fn tc_rp_5_set_and_read() {
+        let mut rp = RestartProtection::new();
+        rp.set_phase(GROUP_2, Phase::new(4));
+        rp.set_phase(GROUP_5, Phase::IDLE);
+        assert_eq!(rp.phase(GROUP_2), Phase::new(4));
+        assert_eq!(rp.phase(GROUP_5), Phase::IDLE);
+        // All other groups remain IDLE after new()
+        assert_eq!(rp.phase(GROUP_1), Phase::IDLE);
+        assert_eq!(rp.phase(GROUP_3), Phase::IDLE);
+    }
+
+    // TC-RP-new: all groups start IDLE
+    #[test]
+    fn new_all_idle() {
+        let rp = RestartProtection::new();
+        for i in 0..NUM_RESTART_GROUPS {
+            assert!(rp.phase(i).is_idle());
+        }
+    }
+}
