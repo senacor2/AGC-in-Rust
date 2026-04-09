@@ -8,7 +8,7 @@ pub mod telemetry;
 pub mod timers;
 pub mod uplink;
 
-pub use dsky::Dsky;
+pub use dsky::{Dsky, Lamp};
 pub use engine::Engine;
 pub use imu::Imu;
 pub use interrupts::Interrupt;

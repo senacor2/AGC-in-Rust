@@ -36,12 +36,14 @@ impl Met {
         self.0 as f64 / 100.0
     }
 
-    /// Construct from whole seconds (rounded to nearest centisecond).
+    /// Construct from f64 seconds (truncates to nearest centisecond toward zero).
+    /// Precondition: s >= 0.0 and s * 100.0 <= u32::MAX as f64.
     pub fn from_seconds(s: f64) -> Self {
         Met((s * 100.0) as u32)
     }
 
-    /// Elapsed centiseconds between two MET values (saturating at u32::MAX).
+    /// Elapsed centiseconds from an earlier Met to self.
+    /// Uses wrapping subtraction to handle the rare counter wrap-around.
     pub fn elapsed_since(self, earlier: Met) -> u32 {
         self.0.wrapping_sub(earlier.0)
     }
@@ -50,3 +52,114 @@ impl Met {
 /// Delta-V vector in metres per second.
 #[derive(Clone, Copy, Default, Debug)]
 pub struct DeltaV(pub Vec3);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::f64::consts::{PI, TAU};
+
+    const EPS: f64 = 1e-10;
+
+    // ── CduAngle tests (TC-CDU-1 through TC-CDU-5) ──────────────────────────
+
+    #[test]
+    fn tc_cdu_1_zero() {
+        assert!((CduAngle(0x0000).to_radians() - 0.0).abs() < EPS);
+        assert!((CduAngle(0x0000).to_degrees() - 0.0).abs() < EPS);
+    }
+
+    #[test]
+    fn tc_cdu_2_quarter_rev() {
+        assert!((CduAngle(0x4000).to_radians() - PI / 2.0).abs() < EPS);
+        assert!((CduAngle(0x4000).to_degrees() - 90.0).abs() < 1e-8);
+    }
+
+    #[test]
+    fn tc_cdu_3_half_rev() {
+        assert!((CduAngle(0x8000).to_radians() - PI).abs() < EPS);
+        assert!((CduAngle(0x8000).to_degrees() - 180.0).abs() < 1e-8);
+    }
+
+    #[test]
+    fn tc_cdu_4_three_quarter_rev() {
+        assert!((CduAngle(0xC000).to_radians() - 3.0 * PI / 2.0).abs() < EPS);
+        assert!((CduAngle(0xC000).to_degrees() - 270.0).abs() < 1e-8);
+    }
+
+    #[test]
+    fn tc_cdu_5_max_count() {
+        let expected_rad = TAU * (65535.0 / 65536.0);
+        assert!((CduAngle(0xFFFF).to_radians() - expected_rad).abs() < EPS);
+        assert!((CduAngle(0xFFFF).to_degrees() - 359.9945068359375).abs() < 1e-6);
+    }
+
+    // ── Met tests (TC-MET-1 through TC-MET-7) ───────────────────────────────
+
+    #[test]
+    fn tc_met_1_zero() {
+        assert_eq!(Met(0).to_seconds(), 0.0);
+    }
+
+    #[test]
+    fn tc_met_2_one_second() {
+        assert_eq!(Met(100).to_seconds(), 1.0);
+    }
+
+    #[test]
+    fn tc_met_3_one_day() {
+        assert_eq!(Met(8_640_000).to_seconds(), 86400.0);
+    }
+
+    #[test]
+    fn tc_met_4_from_seconds() {
+        assert_eq!(Met::from_seconds(1.5).0, 150);
+    }
+
+    #[test]
+    fn tc_met_5_truncation() {
+        // 0.007 s * 100 = 0.7, truncated to 0
+        assert_eq!(Met::from_seconds(0.007).0, 0);
+    }
+
+    #[test]
+    fn tc_met_6_elapsed() {
+        assert_eq!(Met(5).elapsed_since(Met(3)), 2);
+    }
+
+    #[test]
+    fn tc_met_7_elapsed_wrapping() {
+        // Met(1) - Met(0xFFFFFFFF) with wrapping = 2
+        assert_eq!(Met(1).elapsed_since(Met(0xFFFFFFFF)), 2);
+    }
+
+    // ── DeltaV tests (TC-DV-1 through TC-DV-4) ──────────────────────────────
+
+    #[test]
+    fn tc_dv_1_zero() {
+        let dv = DeltaV([0.0, 0.0, 0.0]);
+        assert_eq!(dv.0, [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn tc_dv_2_single_axis() {
+        let dv = DeltaV([100.0, 0.0, 0.0]);
+        assert_eq!(dv.0[0], 100.0);
+    }
+
+    #[test]
+    fn tc_dv_3_agc_fixed_point_import() {
+        // AGC DP pair: w_hi = 512, w_lo = 0, scale B+7
+        // f64 = (512 / 16384.0) * 128.0 = 4.0 m/s
+        let w_hi: f64 = 512.0;
+        let dv_x = (w_hi / 16384.0) * 128.0;
+        assert!((dv_x - 4.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn tc_dv_4_realistic_burn() {
+        // Apollo 11 LOI ≈ 867 m/s
+        let dv = DeltaV([867.0, 0.0, 0.0]);
+        let mag = libm::sqrt(dv.0[0] * dv.0[0] + dv.0[1] * dv.0[1] + dv.0[2] * dv.0[2]);
+        assert!((mag - 867.0).abs() < 1e-10);
+    }
+}

@@ -6,6 +6,8 @@
 pub trait Timers {
     /// Arm TIME3 (waitlist dispatch) to fire in `centiseconds` (1–16383 cs).
     /// The T3RUPT interrupt fires when the timer expires.
+    /// Precondition: `1 <= centiseconds <= 16383`. Passing 0 or > 16383 is
+    /// undefined on bare metal. Use long-waitlist chaining for delays > 163 s.
     fn arm_t3(&mut self, centiseconds: u16);
 
     /// Arm TIME5 (DAP cycle) to fire in `centiseconds`.

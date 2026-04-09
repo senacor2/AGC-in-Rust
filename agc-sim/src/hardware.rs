@@ -127,3 +127,231 @@ impl AgcHardware for SimHardware {
         panic!("SimHardware: hardware_restart triggered")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agc_core::hal::{Dsky, Engine, Imu, Optics, Rcs, Telemetry, Timers, Uplink};
+    use agc_core::hal::dsky::Lamp;
+    use agc_core::types::CduAngle;
+
+    // ── Timers (TC-TIMERS-01 through TC-TIMERS-03) ──────────────────────────
+
+    #[test]
+    fn tc_timers_01_arm_t3_no_panic() {
+        let mut hw = SimHardware::new();
+        hw.timers().arm_t3(100);
+        assert_eq!(hw.timers().mission_time(), 0);
+    }
+
+    #[test]
+    fn tc_timers_02_mission_time_injected() {
+        let mut hw = SimHardware::new();
+        hw.timers.mission_time_cs = 54321;
+        assert_eq!(hw.timers().mission_time(), 54321);
+    }
+
+    #[test]
+    fn tc_timers_03_disarm_t6_idempotent() {
+        let mut hw = SimHardware::new();
+        hw.timers().disarm_t6();
+        hw.timers().disarm_t6();
+    }
+
+    // ── DSKY (TC-DSKY-01 through TC-DSKY-03) ────────────────────────────────
+
+    #[test]
+    fn tc_dsky_01_read_key_empty() {
+        let mut hw = SimHardware::new();
+        assert_eq!(hw.dsky().read_key(), None);
+    }
+
+    #[test]
+    fn tc_dsky_02_read_key_fifo() {
+        let mut hw = SimHardware::new();
+        hw.dsky.keys.push_back(25); // ENTER key code
+        hw.dsky.keys.push_back(31); // VERB key code
+        assert_eq!(hw.dsky().read_key(), Some(25));
+        assert_eq!(hw.dsky().read_key(), Some(31));
+        assert_eq!(hw.dsky().read_key(), None);
+    }
+
+    #[test]
+    fn tc_dsky_03_write_row_no_panic() {
+        let mut hw = SimHardware::new();
+        hw.dsky().write_row(1, 0x7FF);
+        hw.dsky().clear_row(1);
+        hw.dsky().set_lamp(Lamp::ProgAlarm, true);
+        hw.dsky().set_flash(true);
+    }
+
+    // ── IMU (TC-IMU-01 through TC-IMU-03) ───────────────────────────────────
+
+    #[test]
+    fn tc_imu_01_read_pipa_destructive() {
+        let mut hw = SimHardware::new();
+        hw.imu.pipa = [100, -50, 25];
+        let counts = hw.imu().read_pipa();
+        assert_eq!(counts, [100, -50, 25]);
+        assert_eq!(hw.imu().read_pipa(), [0, 0, 0]); // cleared
+    }
+
+    #[test]
+    fn tc_imu_02_read_cdu_non_destructive() {
+        let mut hw = SimHardware::new();
+        hw.imu.cdu = [CduAngle(8192), CduAngle(0), CduAngle(16384)];
+        let first = hw.imu().read_cdu();
+        let second = hw.imu().read_cdu();
+        assert_eq!(first, second);
+        assert_eq!(first[0].0, 8192);
+    }
+
+    #[test]
+    fn tc_imu_03_torque_gyro_no_side_effects() {
+        let mut hw = SimHardware::new();
+        hw.imu.cdu = [CduAngle(1000), CduAngle(2000), CduAngle(3000)];
+        hw.imu().torque_gyro(0, 512);
+        hw.imu().torque_gyro(1, -256);
+        hw.imu().torque_gyro(2, 1);
+        assert_eq!(hw.imu().read_cdu()[0].0, 1000);
+    }
+
+    // ── Optics (TC-OPTICS-01 through TC-OPTICS-03) ──────────────────────────
+
+    #[test]
+    fn tc_optics_01_initial_angles() {
+        let mut hw = SimHardware::new();
+        assert_eq!(hw.optics().trunnion_angle().0, 0);
+        assert_eq!(hw.optics().shaft_angle().0, 0);
+    }
+
+    #[test]
+    fn tc_optics_02_injected_angles() {
+        let mut hw = SimHardware::new();
+        hw.optics.trunnion = CduAngle(4096);
+        hw.optics.shaft = CduAngle(32768);
+        assert_eq!(hw.optics().trunnion_angle().0, 4096);
+        assert_eq!(hw.optics().shaft_angle().0, 32768);
+    }
+
+    #[test]
+    fn tc_optics_03_drive_no_panic() {
+        let mut hw = SimHardware::new();
+        hw.optics().drive(100, -200);
+        assert!(!hw.optics().mark_pressed());
+    }
+
+    // ── Engine (TC-ENGINE-01 through TC-ENGINE-03) ──────────────────────────
+
+    #[test]
+    fn tc_engine_01_toggle_thrust() {
+        let mut hw = SimHardware::new();
+        assert!(!hw.engine().thrust_on());
+        hw.engine().sps_enable(true);
+        assert!(hw.engine().thrust_on());
+        hw.engine().sps_enable(false);
+        assert!(!hw.engine().thrust_on());
+    }
+
+    #[test]
+    fn tc_engine_02_gimbal_no_thrust_change() {
+        let mut hw = SimHardware::new();
+        hw.engine().sps_enable(true);
+        hw.engine().sps_gimbal(100, -50);
+        assert!(hw.engine().thrust_on());
+    }
+
+    #[test]
+    fn tc_engine_03_initial_state() {
+        let hw = SimHardware::new();
+        assert!(!hw.engine.thrusting);
+    }
+
+    // ── RCS (TC-RCS-01 through TC-RCS-03) ───────────────────────────────────
+
+    #[test]
+    fn tc_rcs_01_quench_idempotent() {
+        let mut hw = SimHardware::new();
+        hw.rcs().quench_all();
+        hw.rcs().quench_all();
+    }
+
+    #[test]
+    fn tc_rcs_02_fire_sm_jets() {
+        let mut hw = SimHardware::new();
+        hw.rcs().fire_sm_jets(0b1010_0101, 0b0101_1010);
+        hw.rcs().fire_sm_jets(0x00, 0x00);
+    }
+
+    #[test]
+    fn tc_rcs_03_fire_cm_jets() {
+        let mut hw = SimHardware::new();
+        hw.rcs().fire_cm_jets(0b0000_1111_1111);
+        hw.rcs().quench_all();
+    }
+
+    // ── Uplink (TC-UPLINK-01 through TC-UPLINK-03) ──────────────────────────
+
+    #[test]
+    fn tc_uplink_01_empty() {
+        let mut hw = SimHardware::new();
+        assert_eq!(hw.uplink().read_word(), None);
+    }
+
+    #[test]
+    fn tc_uplink_02_fifo() {
+        let mut hw = SimHardware::new();
+        hw.uplink.words.push_back(0x1234);
+        hw.uplink.words.push_back(0x5678);
+        assert_eq!(hw.uplink().read_word(), Some(0x1234));
+        assert_eq!(hw.uplink().read_word(), Some(0x5678));
+        assert_eq!(hw.uplink().read_word(), None);
+    }
+
+    #[test]
+    fn tc_uplink_03_single_word() {
+        let mut hw = SimHardware::new();
+        hw.uplink.words.push_back(0xABCD);
+        assert_eq!(hw.uplink().read_word(), Some(0xABCD));
+    }
+
+    // ── Telemetry (TC-TELEM-01 through TC-TELEM-03) ─────────────────────────
+
+    #[test]
+    fn tc_telem_01_send_word_logged() {
+        let mut hw = SimHardware::new();
+        hw.telemetry().send_word(0x1111);
+        hw.telemetry().send_word(0x2222);
+        assert_eq!(hw.telemetry.log, vec![0x1111, 0x2222]);
+    }
+
+    #[test]
+    fn tc_telem_02_initial_log_empty() {
+        let hw = SimHardware::new();
+        assert!(hw.telemetry.log.is_empty());
+    }
+
+    #[test]
+    fn tc_telem_03_send_multiple() {
+        let mut hw = SimHardware::new();
+        for i in 0..10 {
+            hw.telemetry().send_word(i);
+        }
+        assert_eq!(hw.telemetry.log.len(), 10);
+    }
+
+    // ── AgcHardware (TC-HW-01 through TC-HW-02) ────────────────────────────
+
+    #[test]
+    fn tc_hw_01_pet_watchdog_noop() {
+        let mut hw = SimHardware::new();
+        hw.pet_watchdog(); // must not panic
+    }
+
+    #[test]
+    #[should_panic(expected = "hardware_restart")]
+    fn tc_hw_02_hardware_restart_panics() {
+        let mut hw = SimHardware::new();
+        hw.hardware_restart();
+    }
+}

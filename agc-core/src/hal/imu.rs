@@ -8,8 +8,11 @@ use crate::types::CduAngle;
 /// - Gyro torque commands for fine alignment
 pub trait Imu {
     /// Read and reset the PIPA delta-V pulse counts accumulated since the last
-    /// call. Returns [x, y, z] counts; each count ≈ 0.0585 m/s on the real AGC.
-    /// The exact scale factor is mission-calibrated and applied in `imu_control`.
+    /// call (destructive read — counters are zeroed). Returns [x, y, z] counts;
+    /// each count ≈ 0.0585 m/s on the real AGC.
+    ///
+    /// Called only by `services::average_g` (SERVICER) every 2 seconds.
+    /// Calling more frequently reads partial counts and corrupts navigation.
     fn read_pipa(&mut self) -> [i16; 3];
 
     /// Read the three IMU CDU gimbal angles (outer, inner, middle).
