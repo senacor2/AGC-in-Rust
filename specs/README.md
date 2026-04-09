@@ -1,104 +1,122 @@
-# Spec Templates
+# Specifications
 
-This directory contains specification templates for systematically transforming Comanche055 (Command Module) AGC assembly into idiomatic Rust.
+This directory contains functional specifications for porting Comanche055 (Command Module) AGC assembly to idiomatic Rust. Each spec is the handoff document between the **analyst-reengineer** agent (who reads the AGC source) and the **developer** agent (who writes the Rust).
+
+## Status Overview
+
+See [`transformation/specifications.md`](../transformation/specifications.md) for the full tracking table.
+
+**Milestone 1 — complete:**
+
+| Component | Rust module | Status |
+|---|---|---|
+| Types (`CduAngle`, `Vec3`, `Mat3x3`, `Met`, `DeltaV`) | `agc-core/src/types/` | Complete |
+| HAL traits (`AgcHardware` + 8 sub-traits) | `agc-core/src/hal/` | Complete |
+| Executive (7-slot job table, priority dispatch, alarm 1202) | `agc-core/src/executive/scheduler.rs` | Complete |
+| Waitlist (8-slot delta-time chain, T3RUPT dispatch) | `agc-core/src/executive/waitlist.rs` | Complete |
+| Restart protection (phase tables, 6 groups) | `agc-core/src/executive/restart.rs` | Complete |
+| Alarm system (1202, 1210, 1211) | `agc-core/src/services/alarm.rs` | Complete |
+| Fresh-start / restart sequences | `agc-core/src/services/fresh_start.rs` | Complete |
+| Simulated HAL + DSKY TUI | `agc-sim/` | Complete |
 
 ## Spec-Driven Workflow
 
-1. **Choose the right template** based on what you are transforming
-2. **Fill out the spec** — AGC source reference, Rust API design, test cases, scaling factors
-3. **Review** — design errors are cheaper to fix in a spec than in code
-4. **Implement** — hand the spec to the developer agent
-5. **Validate** — run tests, compare against VirtualAGC fixtures
-6. **Iterate** — update spec if design issues emerge, then regenerate
+```
+AGC source
+    └─► analyst-reengineer  →  spec file in specs/
+            └─► architect   →  docs/architecture.md update
+                    └─► developer    →  agc-core Rust code
+                            └─► tester  →  agc-test tests
+                                    └─► update agc-sim TUI
+```
 
-## Available Templates
+1. **analyst-reengineer** reads `docs/AGC Symbolic Listing.md` and the Apollo-11 GitHub source, then writes a spec here.
+2. **architect** reviews the spec against `docs/architecture.md` and adds any necessary design notes.
+3. **developer** implements the spec. Every new observable state must also be wired into `agc-sim` (see [agc-sim/README.md](../agc-sim/README.md)).
+4. **tester** writes unit tests, scenario tests (using `SimHardware`), and spec-linked tests.
 
-| Template | Use For | Example AGC Components |
-|----------|---------|----------------------|
-| `routine-spec.md` | Individual subroutines | KEPRTN, LAMBERT, BANKCALL |
-| `module-spec.md` | Complete modules | EXECUTIVE, WAITLIST, SERVICER |
-| `guidance-algorithm-spec.md` | Guidance P-programs | P40 SPS burn, P61–P67 entry |
-| `interrupt-spec.md` | Interrupt handlers | T3RUPT, T4RUPT, T5RUPT, T6RUPT |
-| `data-structure-spec.md` | Memory structures, tables | StateVector, phase tables, noun tables |
+## What a Spec Contains
+
+A spec file documents the following before any Rust is written:
+
+- **AGC source reference** — file, routine, and line range in Comanche055
+- **Behavior summary** — what the routine/module does, in plain language
+- **Rust API** — proposed type signatures, ownership model, module path
+- **Scale factors** — AGC fixed-point units → `f64` SI units (must be explicit)
+- **Invariants** — pre/post-conditions, restart safety requirements, no-heap constraints
+- **Test cases** — at least 3, ideally from a VirtualAGC run
+- **DSKY / sim impact** — what new state or events `agc-sim` needs to expose
+
+### AGC source reference format
+
+```
+AGC source: Comanche055/CONIC_SUBROUTINES.agc
+Routine:    KEPRTN
+Lines:      234–456
+```
 
 ## AGC Quick Reference (Comanche055)
 
 ### Memory
-- **Erasable**: 2048 words RAM — `ERASABLE_ASSIGNMENTS.agc`
-- **Fixed**: 36864 words ROM in 36 switchable banks
-- **Channels**: 12-bit I/O-mapped hardware registers
+
+| Region | Size | Purpose |
+|---|---|---|
+| Erasable (RAM) | 2 048 words | Defined in `ERASABLE_ASSIGNMENTS.agc` |
+| Fixed (ROM) | 36 864 words | 36 switchable banks |
+| Channels | 12-bit registers | I/O-mapped hardware |
 
 ### Scaling Conventions
-All AGC arithmetic is scaled fixed-point. **Always document scale factors in specs.**
-- Positions: meters, scale B-28 (1 unit = 2²⁸ m)
-- Velocities: m/s, scale B-7 (1 unit = 2⁷ m/s)
-- Time: centiseconds, scale B-14
-- Angles: half-revolutions or radians
-- CDU angles: full revolution = 2¹⁵ counts (B-1 revolutions)
 
-In the Rust port, these are `f64` values in SI units. The spec must document the conversion from AGC fixed-point to `f64` so fixture tests can be written correctly.
+All AGC arithmetic is scaled fixed-point. **Document scale factors in every spec.**
 
-### Common Patterns
-- **Cooperative multitasking**: EXECUTIVE runs highest-priority ready job; jobs yield voluntarily
-- **Deferred tasks**: WAITLIST schedules tasks by delta-time via T3RUPT
-- **Restart protection**: PHASE_TABLE_MAINTENANCE checkpoints long calculations
-- **Interpretive language**: all eliminated — replaced by plain `f64` Rust functions (ADR-001)
+| Quantity | AGC unit | Scale | `f64` SI unit |
+|---|---|---|---|
+| Position | words | B-28 (1 unit = 2²⁸ m) | metres |
+| Velocity | words | B-7 (1 unit = 2⁷ m/s) | m/s |
+| Time | centiseconds | B-14 | seconds |
+| CDU angle | counts | 2¹⁵ counts = full revolution | radians |
 
-## Spec Quality Checklist
+### Common Patterns in `agc-core`
 
-Before handing a spec to the developer agent:
+| AGC pattern | Rust equivalent |
+|---|---|
+| EXECUTIVE cooperative scheduler | `executive::Executive`, `JobEntry` |
+| WAITLIST delta-time chain | `executive::Waitlist` |
+| PHASE_TABLE restart protection | `executive::RestartProtection` |
+| AGC interpretive language | Eliminated — plain `f64` Rust functions (ADR-001) |
+| Shared state (ISR + foreground) | `Mutex<RefCell<T>>` via `cortex_m::interrupt::free` |
 
-- [ ] AGC source file and line range referenced
-- [ ] All erasable variables and their AGC addresses listed
-- [ ] Scale factors documented for all fixed-point values
-- [ ] Corresponding `f64` SI units documented
-- [ ] Input/output preconditions and postconditions stated
-- [ ] Edge cases and error handling specified
-- [ ] At least 3 test cases with expected values (ideally from VirtualAGC run)
-- [ ] Rust API signature designed (types, ownership, lifetimes)
-- [ ] Invariants explicitly stated
-- [ ] Consistency with `docs/architecture.md` checked (types, module boundaries, HAL usage)
+## `agc-sim` Integration Rule
 
-## AGC Source Reference Format
-
-Always include exact source reference:
+Every spec for a new component **must** include an "agc-sim impact" section:
 
 ```
-AGC source: Comanche055/CONIC_SUBROUTINES.agc
-Routine: KEPRTN
-Lines: 234–456
+## agc-sim Impact
+
+- DskyDisplayState: add field `imu_aligned: bool`
+- SimLog: emit `.info("IMU coarse-align complete")` on transition
+- dsky_terminal.rs: render a FINE ALIGN light in the lights row
+- dsky_demo.rs: no new keyboard bindings needed
 ```
 
-## Transformation Strategy
+The developer is responsible for landing both the `agc-core` implementation and the `agc-sim` update in the same PR.
 
-### Bottom-Up (Recommended for infrastructure)
-1. Data structures (`types/`, `navigation/state_vector`)
-2. Math utilities (`math/linalg`, `math/trig`)
-3. Core services (`executive/`, `services/`)
-4. Guidance algorithms (`math/kepler`, `math/lambert`, `guidance/`)
-5. Interrupt handlers (`hal/interrupts`, `services/t4rupt`)
+## Next Specs to Write
 
-### Top-Down (Useful for P-codes)
-1. Define the `MajorMode` trait API
-2. Stub algorithm interfaces
-3. Implement with real functions once math foundation exists
+These are the highest-priority unstarted components (see `transformation/specifications.md` for the full list):
 
-## Using Specs with the Developer Agent
-
-```
-I have a spec for transforming AGC [routine/module/algorithm] to Rust.
-The spec is at specs/[filename].
-
-Please implement it following:
-- docs/architecture.md for type and module conventions
-- AGENTS.md for coding rules
-- No heap, no static mut, f64 for nav math, i16/u16 for hardware values
-- Cross-reference the AGC source in doc comments
-```
+1. `specs/math-linalg.md` — vector/matrix ops (`math/linalg`) replacing AGC interpretive VLOAD/DOT/CROSS
+2. `specs/math-trig.md` — trig wrappers (`math/trig`) with AGC domain conventions
+3. `specs/math-kepler.md` — universal-variable Kepler solver (`CONIC_SUBROUTINES.agc/KEPRTN`)
+4. `specs/services-average-g.md` — 2-second PIPA integration cycle (`SERVICER207.agc`)
+5. `specs/navigation-state-vector.md` — `StateVector`, coordinate frames, `ERASABLE_ASSIGNMENTS.agc`
 
 ## Related Documentation
 
-- `docs/architecture.md` — Full architecture and type conventions
-- `docs/testing.md` — VirtualAGC fixture capture strategy
-- `AGENTS.md` — Coding conventions and embedded rules
-- `transformation/specifications.md` — Status of all specs
+| File | Purpose |
+|---|---|
+| [`docs/architecture.md`](../docs/architecture.md) | Type conventions, module boundaries, HAL design |
+| [`docs/testing.md`](../docs/testing.md) | VirtualAGC fixture capture strategy, tolerances |
+| [`AGENTS.md`](../AGENTS.md) | Coding rules, embedded constraints, no_std rules |
+| [`transformation/specifications.md`](../transformation/specifications.md) | Status of all specs |
+| [`agc-sim/README.md`](../agc-sim/README.md) | DSKY TUI layout, keyboard map, sim modules |

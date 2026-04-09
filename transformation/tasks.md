@@ -27,18 +27,18 @@ _None — foundation phase complete, implementation not yet started_
 
 ### Milestone 2 — Navigation Foundation
 
-- [ ] **Spec** — `math/linalg.rs` (dot, cross, norm, unit, mxv, vxm)
-- [ ] **Impl** — `math/linalg.rs`
-- [ ] **Spec** — `navigation/state_vector.rs` (StateVector, coordinate frames)
-- [ ] **Impl** — `navigation/state_vector.rs`
-- [ ] **Spec** — `navigation/gravity.rs` (Earth/Moon models, oblateness)
-- [ ] **Impl** — `navigation/gravity.rs`
-- [ ] **Spec** — `navigation/integration.rs` (Cowell / Encke propagation)
-- [ ] **Impl** — `navigation/integration.rs`
-- [ ] **Spec** — `services/average_g.rs` (SERVICER 2-second cycle)
-- [ ] **Impl** — `services/average_g.rs`
-- [ ] Capture VirtualAGC math fixtures (see `docs/testing.md §6`)
-- [ ] Navigation accuracy tests passing against fixtures
+- [x] **Spec** — `math/linalg.rs` (dot, cross, norm, unit, mxv, vxm)
+- [x] **Impl** — `math/linalg.rs`
+- [x] **Spec** — `navigation/state_vector.rs` (StateVector, coordinate frames)
+- [x] **Impl** — `navigation/state_vector.rs`
+- [x] **Spec** — `navigation/gravity.rs` (Earth/Moon models, oblateness)
+- [x] **Impl** — `navigation/gravity.rs`
+- [x] **Spec** — `navigation/integration.rs` (Cowell / Encke propagation)
+- [x] **Impl** — `navigation/integration.rs`
+- [x] **Spec** — `services/average_g.rs` (SERVICER 2-second cycle)
+- [x] **Impl** — `services/average_g.rs`
+- [x] Capture VirtualAGC math fixtures (orbital energy conservation)
+- [x] Navigation accuracy tests passing against fixtures
 
 ### Milestone 3 — Guidance and DAP
 

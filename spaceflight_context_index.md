@@ -2,6 +2,16 @@
 
 Two source documents are indexed here for fast lookup. All page numbers refer to **book/document page numbers** as printed on each page (headers/footers), not PDF viewer page numbers.
 
+--- 
+
+## PDFs on File System
+
+| Document | File Location |
+|---|---|
+`The Apollo Guidance Computer.pdf` | '/Users/Vitaliy.Schreibmann/Downloads/The Apollo Guidance Computer.pdf' |
+`Computers in Spaceflight.pdf` | '/Users/Vitaliy.Schreibmann/Downloads/Computers in Spaceflight.pdf' |
+
+
 ---
 
 ## PDF Page Offset Guide
@@ -10,7 +20,7 @@ To convert a **book page number → PDF viewer page number**, apply the offset:
 
 | Document | File | Offset |
 |---|---|---|
-| **AGC** | `The Apollo Guidance Computer.pdf` | **book page + 16** = PDF page |
+| **AGC** | `The Apollo Guidance Computer.pdf` | **book page + 16** = PDF page | 
 | **CIS** | `Computers in Spaceflight.pdf` | **book page + 9** = PDF page |
 
 > Example: AGC book p. 37 → PDF p. 53 · CIS book p. 27 → PDF p. 36

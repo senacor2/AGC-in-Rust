@@ -13,6 +13,7 @@ argument-hint: Describe the Rust feature, refactor, or AGC component to implemen
 - Add or extend HAL sub-traits, newtypes, or math functions
 - Improve error handling, tests, or Cargo configuration
 - Build embedded bare-metal code for the `thumbv7em-none-eabihf` target
+- Update `agc-sim` to expose new state or events in the DSKY TUI
 
 ## Procedure
 

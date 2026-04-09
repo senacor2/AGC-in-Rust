@@ -41,6 +41,7 @@ These override general Rust style where they conflict.
 - Integration tests in `agc-test` use the `agc-sim` hosted HAL. They are the primary place for end-to-end scenario testing.
 - Math function tests must include at least one case from a VirtualAGC reference run (see `docs/testing.md`).
 - Do not leave `dbg!`, `println!`, or temporary `hprintln!` calls in finished changes.
+- Validate all implemented features or tasks with the source code found in https://github.com/chrislgarry/Apollo-11/tree/master/Comanche055 
 
 ## Conventions
 

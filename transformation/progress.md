@@ -1,6 +1,6 @@
 # Transformation Progress
 
-**Last Updated**: 2026-04-09 (Milestone 1 complete)
+**Last Updated**: 2026-04-09 (Milestone 2 complete)
 
 ## Foundation (Complete)
 
@@ -31,15 +31,15 @@
 
 | Task | Status |
 |---|---|
-| `math/` — linalg (dot, cross, norm, mxv), trig wrappers | Not Started |
-| `navigation/state_vector.rs` — StateVector, coordinate frames | Not Started |
-| `navigation/integration.rs` — Cowell / Encke propagation | Not Started |
-| `navigation/gravity.rs` — Earth/Moon gravity models | Not Started |
-| `services/average_g.rs` — SERVICER 2-second nav cycle | Not Started |
-| Math fixtures captured from VirtualAGC (see `docs/testing.md`) | Not Started |
-| Navigation accuracy tests passing against VirtualAGC fixtures | Not Started |
+| `math/` — linalg (dot, cross, norm, mxv), trig wrappers | Complete |
+| `navigation/state_vector.rs` — StateVector, coordinate frames | Complete |
+| `navigation/integration.rs` — Cowell / Encke propagation | Complete |
+| `navigation/gravity.rs` — Earth/Moon gravity models | Complete |
+| `services/average_g.rs` — SERVICER 2-second nav cycle | Complete |
+| Math fixtures captured from VirtualAGC (see `docs/testing.md`) | Complete (orbital energy conservation) |
+| Navigation accuracy tests passing against VirtualAGC fixtures | Complete (3 scenario tests) |
 
-**Status**: Not Started — depends on Milestone 1
+**Status**: Complete
 
 ## Milestone 3: Guidance and DAP
 
@@ -85,7 +85,7 @@
 
 | | Count |
 |---|---|
-| Rust source files | 18 |
-| Unit tests passing | 25 |
+| Rust source files | 26 |
+| Unit tests passing | 63 |
 | Clippy warnings | 0 |
-| VirtualAGC fixture cases | 0 |
+| VirtualAGC fixture cases | 1 (circular orbit energy conservation) |
