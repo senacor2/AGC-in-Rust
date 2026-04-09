@@ -163,6 +163,7 @@ custom `AgcWord` type.
 |-----|------|-------|
 | Navigation math (position, velocity, maneuver) | `f64` | Full double-precision; matches original double-word accuracy |
 | Attitude / trig computations | `f64` | Matches interpretive-language double precision |
+| Mission elapsed time | `u32` (centiseconds) | Integer counter; convert to `f64` seconds only at math call sites |
 | Display and alarm values | `f32` | Single precision sufficient for crew displays |
 | I/O channel words, counter cells | `u16` | Bit-field access; no arithmetic semantics |
 | CDU gimbal angles from hardware | `u16` | Twos-complement counts, full revolution = 2^15 |
@@ -190,9 +191,10 @@ impl CduAngle {
     }
 }
 
-/// Mission elapsed time in seconds.
-#[derive(Clone, Copy, PartialEq, PartialOrd)]
-pub struct Met(pub f64);
+/// Mission elapsed time in centiseconds (integer counter, wraps after ~497 days).
+/// Convert to f64 seconds only at call sites that need it for math.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Met(pub u32);
 
 /// Delta-V in meters per second.
 #[derive(Clone, Copy)]
@@ -629,7 +631,7 @@ pub struct AgcState {
     pub csm_state: StateVector,      // CSM position (m) and velocity (m/s)
     pub target_state: StateVector,   // Target vehicle state (LM or landmark)
     pub refsmmat: Mat3x3,            // Reference stable member matrix
-    pub time: Met,                   // Mission elapsed time (seconds)
+    pub time: Met,                   // Mission elapsed time (centiseconds, integer)
     
     // Guidance state
     pub major_mode: u8,              // Current program number
@@ -836,8 +838,12 @@ by convention:
   table, waitlist, etc.
 - **Uninitialized memory**: Rust's ownership system prevents reading
   uninitialized state.
-- **Arithmetic overflow**: The `AgcWord` type implements ones-complement
-  overflow explicitly; Rust's default overflow behavior is NOT used.
+- **Arithmetic overflow**: Rust's integer overflow semantics apply. In debug
+  builds, integer overflow panics (triggering a restart). In release builds,
+  wrapping arithmetic is used where overflow is possible and expected (e.g.,
+  `Met` centisecond counter). Navigation code uses `f64`, which handles
+  out-of-range values through IEEE 754 infinity and NaN; callers check for
+  these where the result feeds into a safety-critical decision.
 
 However, Rust's safety guarantees do NOT replace the need for restart
 protection. A power glitch that corrupts RAM will corrupt Rust data structures
@@ -928,6 +934,11 @@ Running on `cortex-m-rt` with no OS imposes hard rules:
 - **No heap**: `alloc` is not used. All data structures are statically sized.
 - **No threads**: The execution model is single-threaded + interrupts.
   `static mut` access is safe only with interrupts disabled (`cortex_m::interrupt::free`).
+- **No async/await**: Rust's `async`/`await` and any executor (Tokio, Embassy, etc.)
+  are prohibited. All concurrency is expressed exclusively through waitlist tasks
+  and executive jobs. These are the only two scheduling primitives. Code that
+  needs deferred or concurrent execution must be structured as a task (short,
+  time-triggered) or a job (longer, priority-scheduled) — nothing else.
 - **No `f64` soft-float**: The linker must target `thumbv7em-none-eabihf`
   (hard-float ABI). Soft-float is ~10× slower and breaks the DAP deadline.
 - **No unwinding**: `panic = "abort"` in `Cargo.toml`; panics trigger GOJAM.
@@ -1044,6 +1055,25 @@ allocate.
 **Trade-off**: Data structure sizes must be determined at compile time. This
 is not a problem because the original AGC had the same constraint, and all
 table sizes are known.
+
+### D8: No Async — Tasks and Jobs Are the Only Concurrency Primitives
+
+**Decision**: `async`/`await` and any async executor are prohibited in `agc-core`.
+All deferred and concurrent execution must use the waitlist (tasks) or the
+executive (jobs).
+
+**Rationale**: The AGC's cooperative scheduling model is load-bearing for
+restart safety and timing guarantees. An async executor would introduce a
+second, hidden scheduler with its own ready queue, wakeup mechanism, and
+stack discipline — undermining the determinism that the phase-table restart
+mechanism depends on. Tasks and jobs have explicit priorities, bounded
+execution times, and well-defined preemption points; futures do not.
+
+**How to apply**: If a computation needs to be deferred, split it into a
+task (if it is short and time-triggered) or a job (if it is longer and
+priority-driven). If it needs to wait for crew input, use the
+verb/noun flashing protocol and resume via a job that is unblocked by
+the DSKY interrupt handler. There is no third option.
 
 ### D7: Rust Embedded Ecosystem as Target Platform
 
