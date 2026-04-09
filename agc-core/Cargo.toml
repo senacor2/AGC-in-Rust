@@ -1,0 +1,19 @@
+[package]
+name = "agc-core"
+version = "0.1.0"
+edition = "2021"
+description = "Apollo Guidance Computer – Comanche055 (Command Module) flight software in Rust"
+
+[features]
+# bare-metal: activates cortex-m / cortex-m-rt dependencies for hardware targets.
+# Without this feature the crate compiles on the host for testing and simulation.
+bare-metal = ["dep:cortex-m", "dep:cortex-m-rt"]
+
+[dependencies]
+libm         = "0.2"
+cortex-m     = { version = "0.7", optional = true }
+cortex-m-rt  = { version = "0.7", optional = true }
+
+# embedded-hal v1 trait bounds are used only in documentation and HAL implementor
+# guidance; the flight software calls its own sub-traits, not embedded-hal directly.
+# Add it here as an optional dep when a bare-metal HAL crate is created.

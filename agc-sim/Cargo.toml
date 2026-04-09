@@ -1,0 +1,8 @@
+[package]
+name = "agc-sim"
+version = "0.1.0"
+edition = "2021"
+description = "Host-side simulator and HAL implementation for agc-core"
+
+[dependencies]
+agc-core = { path = "../agc-core" }

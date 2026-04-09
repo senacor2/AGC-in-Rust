@@ -1,0 +1,9 @@
+[package]
+name = "agc-test"
+version = "0.1.0"
+edition = "2021"
+description = "Integration and property-based tests for agc-core"
+
+[dependencies]
+agc-core = { path = "../agc-core" }
+agc-sim  = { path = "../agc-sim" }

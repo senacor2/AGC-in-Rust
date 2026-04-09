@@ -1,0 +1,11 @@
+[workspace]
+members = ["agc-core", "agc-sim", "agc-test"]
+resolver = "2"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+overflow-checks = false
+
+[profile.dev]
+overflow-checks = true
