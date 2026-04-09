@@ -22,18 +22,19 @@ Each agent reads outputs from the prior stage. The analyst's functional specs ar
 ## Key Reference Material
 
 - `docs/AGC Symbolic Listing.md` — markdown conversion of the formal AGC hardware/software specification (Block 2 AGC, Comanche/Colossus 2D for Apollo 13)
+- `/Users/Juergen.Schiewe/Documents/Digital Editions/The Apollo Guidance Computer.pdf` — Frank O'Brien: *The Apollo Guidance Computer - Architecture and Operation*. Comprehensive reference on AGC hardware, software architecture, and mission operations. Use for understanding the Executive, Waitlist, interpreter, navigation algorithms, and DSKY interface in depth.
 - [Apollo-11 source on GitHub](https://github.com/chrislgarry/Apollo-11) — digitized AGC assembler source (Comanche055 = Command Module)
 - [AGC Assembly Language Manual](https://www.ibiblio.org/apollo/assembly_language_manual.html) — machine, interpreter, and pseudocode instruction descriptions
 
 ## Build & Test
 
-No Rust code exists yet. Once a `Cargo.toml` is created:
-
 ```sh
-cargo build          # build
-cargo test           # run all tests
-cargo test <name>    # run a single test by name
-cargo clippy         # lint
+cargo build                                                    # build (host)
+cargo build --target thumbv7em-none-eabihf -p agc-core         # bare-metal build
+cargo test                                                     # run all tests
+cargo test -p agc-core -- executive                            # run tests for a module
+cargo test <name>                                              # run a single test by name
+cargo clippy                                                   # lint
 ```
 
 ## Architecture Constraints
