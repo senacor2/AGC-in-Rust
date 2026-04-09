@@ -4,7 +4,7 @@
 
 The primary verification challenge for this project is **D1 (Interpreter Elimination)**: every navigation and guidance computation that was originally written in the AGC interpretive language must be re-implemented as a plain Rust `f64` function, and those functions must produce the same results as the original software.
 
-The strategy is to use the Docker-based VirtualAGC (yaAGC) as a **reference oracle**: feed identical inputs to both VirtualAGC and the Rust implementation, then compare outputs.
+The strategy is to use the Podman-based VirtualAGC (yaAGC) as a **reference oracle**: feed identical inputs to both VirtualAGC and the Rust implementation, then compare outputs.
 
 
 ## 1. What VirtualAGC Exposes
@@ -29,7 +29,7 @@ Additionally, yaAGC can dump erasable memory on demand via `--debug=erasable`, p
 - Commit the extracted values as JSON fixtures in `agc-test/fixtures/`.
 - Write Rust unit tests asserting that `kepler_step()`, `lambert()`, etc. produce the same results within defined tolerance.
 
-This level does **not** require the container to be running during `cargo test`. VirtualAGC is run once to capture reference data; the fixtures are committed and tests run without Docker.
+This level does **not** require the container to be running during `cargo test`. VirtualAGC is run once to capture reference data; the fixtures are committed and tests run without Podman.
 
 ### Level 2 — SERVICER / Navigation Cycle (medium complexity)
 
@@ -68,12 +68,12 @@ agc-test/
       fixture_capture.rs       ← one-shot tool: run scenario, capture, save fixture
 
   tests/
-    navigation_accuracy.rs     ← fixture-based, no Docker required
-    servicer_cycle.rs          ← fixture-based, no Docker required
-    integration_e2e.rs         ← requires Docker; gated by VAGC_AVAILABLE env var
+    navigation_accuracy.rs     ← fixture-based, no Podman required
+    servicer_cycle.rs          ← fixture-based, no Podman required
+    integration_e2e.rs         ← requires Podman; gated by VAGC_AVAILABLE env var
 ```
 
-Level 1 and 2 tests always run in CI. Level 3 tests run only when `VAGC_AVAILABLE=1` is set (Docker available), making them suitable for nightly or manual runs.
+Level 1 and 2 tests always run in CI. Level 3 tests run only when `VAGC_AVAILABLE=1` is set (Podman available), making them suitable for nightly or manual runs.
 
 
 ## 4. The yaAGC Channel Protocol
@@ -163,7 +163,7 @@ After the major mode programs are implemented, capture golden channel-word trace
 
 | Question | Decision |
 |---|---|
-| When does Docker run in CI? | Only in nightly / manual runs, gated by `VAGC_AVAILABLE=1` |
+| When does Podman run in CI? | Only in nightly / manual runs, gated by `VAGC_AVAILABLE=1` |
 | Fixture format | JSON (human-readable, diffable in PR review) |
 | AGC scale-factor conversion | Central `from_agc_word` / `from_agc_dword` utility in `agc-test/src/oracle/` |
 | Tolerance source | AGC alarm thresholds and convergence checks from assembly listing |

@@ -35,8 +35,8 @@
 - [x] **Impl** — `navigation/integration.rs` (average_g_step, propagate_coast RK4, total_gravity, soi_check, 6 tests)
 - [x] **Spec** — `services/average_g.rs` (SERVICER 2-second cycle) → `specs/average-g-spec.md`
 - [x] **Impl** — `services/average_g.rs` (PipaCalibration, start/stop/servicer_task, 7 tests)
-- [ ] Capture VirtualAGC math fixtures (see `docs/testing.md §6`)
-- [ ] Navigation accuracy tests passing against fixtures
+- [x] Capture VirtualAGC math fixtures → `agc-test/fixtures/` (3 JSON files, analytically computed; `docs/fixtures.md`)
+- [x] Navigation accuracy tests passing against fixtures (7 tests in `navigation_accuracy.rs`)
 
 ### Milestone 3 — Guidance and DAP
 

@@ -7,3 +7,5 @@ description = "Integration and property-based tests for agc-core"
 [dependencies]
 agc-core = { path = "../agc-core" }
 agc-sim  = { path = "../agc-sim" }
+serde    = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -1,0 +1,74 @@
+[
+  {
+    "name": "earth_surface_equatorial_point_mass_and_j2",
+    "description": "Earth gravity at the equatorial surface [R_EARTH, 0, 0]. J2 correction at z=0 is purely inward (negative x). a_pm = -MU_EARTH/R_EARTH^2 ≈ -9.79829 m/s^2. J2 correction a_j2_x = -J2F/R_EARTH^4 ≈ -0.01591 m/s^2. Total ≈ -9.81420 m/s^2. J2F = 1.5*J2_EARTH*MU_EARTH*R_EARTH^2 ≈ 2.63333e25.",
+    "position_m": [6378137.0, 0.0, 0.0],
+    "frame": "ECI",
+    "body": "earth",
+    "expected_accel_m_s2": [-9.81420, 0.0, 0.0],
+    "tolerance_m_s2": 0.001
+  },
+  {
+    "name": "earth_leo_200km_equatorial",
+    "description": "Earth gravity at 200 km circular LEO altitude [R_EARTH+200000, 0, 0]. r = 6578137 m. a_pm = -MU/r^2 ≈ -9.21154 m/s^2. J2 equatorial correction a_j2_x ≈ -0.01407 m/s^2. Total ≈ -9.22561 m/s^2.",
+    "position_m": [6578137.0, 0.0, 0.0],
+    "frame": "ECI",
+    "body": "earth",
+    "expected_accel_m_s2": [-9.22561, 0.0, 0.0],
+    "tolerance_m_s2": 0.001
+  },
+  {
+    "name": "earth_leo_400km_equatorial",
+    "description": "Earth gravity at 400 km circular LEO altitude [R_EARTH+400000, 0, 0] (near-ISS orbit). r = 6778137 m. a_pm = -MU/r^2 ≈ -8.67597 m/s^2. J2 equatorial correction a_j2_x ≈ -0.01248 m/s^2. Total ≈ -8.68845 m/s^2.",
+    "position_m": [6778137.0, 0.0, 0.0],
+    "frame": "ECI",
+    "body": "earth",
+    "expected_accel_m_s2": [-8.68845, 0.0, 0.0],
+    "tolerance_m_s2": 0.001
+  },
+  {
+    "name": "earth_geo_equatorial",
+    "description": "Earth gravity at geostationary orbit altitude. r = 42164000 m (standard GEO radius). J2 correction is negligibly small at this distance (~8e-6 m/s^2). a_pm = -MU/r^2 ≈ -0.22421 m/s^2. J2 term ≈ -8e-6. Total ≈ -0.22422 m/s^2.",
+    "position_m": [42164000.0, 0.0, 0.0],
+    "frame": "ECI",
+    "body": "earth",
+    "expected_accel_m_s2": [-0.22422, 0.0, 0.0],
+    "tolerance_m_s2": 0.001
+  },
+  {
+    "name": "earth_cislunar_midpoint",
+    "description": "Earth gravity at 192000 km from Earth (between Earth and Moon). J2 correction is completely negligible at this range. a_pm = -MU/r^2 = -3.986004418e14/(1.92e8)^2 = -3.986004418e14/3.6864e16 ≈ -0.010813 m/s^2.",
+    "position_m": [192000000.0, 0.0, 0.0],
+    "frame": "ECI",
+    "body": "earth",
+    "expected_accel_m_s2": [-0.010813, 0.0, 0.0],
+    "tolerance_m_s2": 0.0001
+  },
+  {
+    "name": "moon_surface",
+    "description": "Moon gravity at the lunar surface [R_MOON, 0, 0] in MCI. Point-mass only. a = -MU_MOON/R_MOON^2 = -4.902800118e12/(1737400)^2. R_MOON^2 = 1737400^2 = 3.01857e12. a ≈ -1.62418 m/s^2.",
+    "position_m": [1737400.0, 0.0, 0.0],
+    "frame": "MCI",
+    "body": "moon",
+    "expected_accel_m_s2": [-1.62418, 0.0, 0.0],
+    "tolerance_m_s2": 0.001
+  },
+  {
+    "name": "moon_llo_100km",
+    "description": "Moon gravity at 100 km LLO altitude [R_MOON+100000, 0, 0] in MCI. r = 1837400 m. a = -MU_MOON/r^2 = -4.902800118e12/(1837400)^2 = -4.902800118e12/3.37606e12 ≈ -1.45228 m/s^2.",
+    "position_m": [1837400.0, 0.0, 0.0],
+    "frame": "MCI",
+    "body": "moon",
+    "expected_accel_m_s2": [-1.45228, 0.0, 0.0],
+    "tolerance_m_s2": 0.001
+  },
+  {
+    "name": "moon_500km_altitude",
+    "description": "Moon gravity at 500 km altitude [R_MOON+500000, 0, 0] in MCI. r = 2237400 m. a = -MU_MOON/r^2 = -4.902800118e12/(2237400)^2 = -4.902800118e12/5.00596e12 ≈ -0.97943 m/s^2.",
+    "position_m": [2237400.0, 0.0, 0.0],
+    "frame": "MCI",
+    "body": "moon",
+    "expected_accel_m_s2": [-0.97943, 0.0, 0.0],
+    "tolerance_m_s2": 0.001
+  }
+]
