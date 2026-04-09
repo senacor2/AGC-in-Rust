@@ -25,8 +25,8 @@
 
 ### Milestone 2 — Navigation Foundation
 
-- [ ] **Spec** — `math/linalg.rs` (dot, cross, norm, unit, mxv, vxm)
-- [ ] **Impl** — `math/linalg.rs`
+- [x] **Spec** — `math/linalg.rs` (dot, cross, norm, unit, mxv, vxm) → `specs/linalg-spec.md`
+- [x] **Impl** — `math/linalg.rs` (11 functions + IDENTITY, 43 tests passing)
 - [ ] **Spec** — `navigation/state_vector.rs` (StateVector, coordinate frames)
 - [ ] **Impl** — `navigation/state_vector.rs`
 - [ ] **Spec** — `navigation/gravity.rs` (Earth/Moon models, oblateness)
