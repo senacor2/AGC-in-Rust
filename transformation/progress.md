@@ -1,6 +1,6 @@
 # Transformation Progress
 
-**Last Updated**: 2026-04-09
+**Last Updated**: 2026-04-09 (Milestone 1 complete)
 
 ## Foundation (Complete)
 
@@ -14,18 +14,18 @@
 
 | Task | Status |
 |---|---|
-| Cargo workspace scaffold (`agc-core`, `agc-sim`, `agc-test`) | Not Started |
-| `types/` — `CduAngle`, `Vec3`, `Mat3x3`, `Met`, `DeltaV` newtypes | Not Started |
-| `hal/` — `AgcHardware` trait + all sub-traits | Not Started |
-| `hal/` — Simulated HAL implementation in `agc-sim` | Not Started |
-| `executive/` — Job table, priority scheduler, `EXEC` loop | Not Started |
-| `executive/` — Waitlist (delta-time chain, 8 slots) | Not Started |
-| `executive/` — Restart protection / phase tables | Not Started |
-| `services/alarm.rs` — Program alarm system (1202, 1210, 1211) | Not Started |
-| `services/fresh_start.rs` — FRESH START / RESTART sequences | Not Started |
-| All Executive + Waitlist unit tests passing | Not Started |
+| Cargo workspace scaffold (`agc-core`, `agc-sim`, `agc-test`) | Complete |
+| `types/` — `CduAngle`, `Vec3`, `Mat3x3`, `Met`, `DeltaV` newtypes | Complete |
+| `hal/` — `AgcHardware` trait + all sub-traits | Complete |
+| `hal/` — Simulated HAL implementation in `agc-sim` | Complete |
+| `executive/` — Job table, priority scheduler, `EXEC` loop | Complete |
+| `executive/` — Waitlist (delta-time chain, 8 slots) | Complete |
+| `executive/` — Restart protection / phase tables | Complete |
+| `services/alarm.rs` — Program alarm system (1202, 1210, 1211) | Complete |
+| `services/fresh_start.rs` — FRESH START / RESTART sequences | Complete |
+| All Executive + Waitlist unit tests passing | Complete (25 tests) |
 
-**Status**: Not Started
+**Status**: Complete
 
 ## Milestone 2: Navigation Foundation
 
@@ -85,7 +85,7 @@
 
 | | Count |
 |---|---|
-| Rust source files | 0 |
-| Unit tests passing | 0 |
-| Clippy warnings | — |
+| Rust source files | 18 |
+| Unit tests passing | 25 |
+| Clippy warnings | 0 |
 | VirtualAGC fixture cases | 0 |

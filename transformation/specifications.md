@@ -4,12 +4,12 @@
 
 | Spec | AGC Source (Comanche055) | Status | Notes |
 |------|--------------------------|--------|-------|
-| `types/` module | `ERASABLE_ASSIGNMENTS.agc` | Not started | CduAngle, Vec3, Mat3x3, Met, DeltaV |
-| `AgcHardware` trait + sub-traits | `INTERRUPT_LEAD_INS.agc`, channel definitions | Not started | HAL boundary |
-| `Executive` | `EXECUTIVE.agc` | Not started | Job table, 7 slots, NOVAC/FINDVAC |
-| `Waitlist` | `WAITLIST.agc` | Not started | Delta-time chain, 8 slots |
-| Restart protection | `FRESH_START_AND_RESTART.agc`, `PHASE_TABLE_MAINTENANCE.agc` | Not started | Phase tables, group management |
-| Alarm system | `ALARM_AND_ABORT.agc` | Not started | 1202, 1210, 1211 |
+| `types/` module | `ERASABLE_ASSIGNMENTS.agc` | Complete | CduAngle, Vec3, Mat3x3, Met, DeltaV |
+| `AgcHardware` trait + sub-traits | `INTERRUPT_LEAD_INS.agc`, channel definitions | Complete | HAL boundary; SimHardware in agc-sim |
+| `Executive` | `EXECUTIVE.agc` | Complete | Job table, 7 slots, NOVAC/FINDVAC |
+| `Waitlist` | `WAITLIST.agc` | Complete | Delta-time chain, 8 slots |
+| Restart protection | `FRESH_START_AND_RESTART.agc`, `PHASE_TABLE_MAINTENANCE.agc` | Complete | Phase tables, group management |
+| Alarm system | `ALARM_AND_ABORT.agc` | Complete | 1202, 1210, 1211 |
 
 ## Navigation
 
