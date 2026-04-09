@@ -6,10 +6,13 @@
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]
 
+pub mod control;
 pub mod executive;
+pub mod guidance;
 pub mod hal;
 pub mod math;
 pub mod navigation;
+pub mod programs;
 pub mod services;
 pub mod types;
 

@@ -112,6 +112,7 @@ the WGS84 mean radius (6,371 km).
 | `y` | Inject −100 PIPA counts on Y axis (−5.85 m/s) |
 | `Z` | Inject +100 PIPA counts on Z axis (+5.85 m/s) |
 | `z` | Inject −100 PIPA counts on Z axis (−5.85 m/s) |
+| `B` | Plan and execute a +50 m/s prograde SPS burn (DAP switches to BURN mode) |
 | `+` / `=` | Double the time factor (max ×512 cycles/frame) |
 | `-` | Halve the time factor (min ×1) |
 | `C` | Clear all pending PIPA counts |

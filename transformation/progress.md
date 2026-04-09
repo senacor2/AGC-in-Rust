@@ -1,6 +1,6 @@
 # Transformation Progress
 
-**Last Updated**: 2026-04-09 (Milestone 2 complete)
+**Last Updated**: 2026-04-09 (Milestone 4 complete)
 
 ## Foundation (Complete)
 
@@ -45,30 +45,32 @@
 
 | Task | Status |
 |---|---|
-| `math/kepler.rs` — Kepler equation solver | Not Started |
-| `math/lambert.rs` — Lambert's problem | Not Started |
-| `navigation/conics.rs` — Conic trajectory routines | Not Started |
-| `control/dap.rs` — Digital Autopilot supervisor | Not Started |
-| `control/attitude.rs` — Rate damping, attitude hold, maneuver | Not Started |
-| `control/tvc.rs` — Thrust Vector Control | Not Started |
-| `control/rcs_logic.rs` — Jet select logic | Not Started |
-| `guidance/targeting.rs` — TIG computation | Not Started |
-| `guidance/maneuver.rs` — Delta-V, cross-product steering | Not Started |
+| `math/kepler.rs` — Universal-variable Kepler solver | Complete |
+| `math/lambert.rs` — Lambert's problem (universal variable) | Complete |
+| `navigation/conics.rs` — Orbital elements, vis-viva, apsides | Complete |
+| `control/dap.rs` — Digital Autopilot supervisor (T5RUPT) | Complete |
+| `control/attitude.rs` — Phase-plane attitude error, rate damping | Complete |
+| `control/rcs_logic.rs` — SM RCS jet selection (16-jet topology) | Complete |
+| `control/tvc.rs` — TVC gimbal steering, gain scheduling | Complete |
+| `guidance/targeting.rs` — TIG, delta-V, burn time (Tsiolkovsky) | Complete |
+| `guidance/maneuver.rs` — VG tracking, cross-product steering | Complete |
 
-**Status**: Not Started — depends on Milestone 2
+**Status**: Complete
 
 ## Milestone 4: Programs (P-codes)
 
 | Task | Status |
 |---|---|
-| P00 — CMC Idling | Not Started |
-| P11 — Earth orbit insertion monitor | Not Started |
-| P40/P41 — SPS/RCS thrusting | Not Started |
-| P51/P52 — IMU alignment | Not Started |
-| P61–P67 — Entry programs | Not Started |
-| Remaining P-codes (P01, P06, P15, P20–P23, P30–P37, P47) | Not Started |
+| P00 — CMC Idling | Complete |
+| P11 — Earth orbit insertion monitor | Complete |
+| P30 — External Delta-V targeting | Complete |
+| P37 — Return to Earth (Lambert) | Complete |
+| P40/P41 — SPS/RCS thrusting (6-phase burn execution) | Complete |
+| P51/P52 — IMU alignment (SMNB two-vector method) | Complete |
+| P61–P67 — Entry guidance (7-phase state machine) | Complete |
+| `control/imu_control.rs` — IMU coarse/fine align, typestate | Complete |
 
-**Status**: Not Started — depends on Milestone 3
+**Status**: Complete
 
 ## Milestone 5: DSKY and Crew Interface
 
@@ -85,7 +87,8 @@
 
 | | Count |
 |---|---|
-| Rust source files | 26 |
-| Unit tests passing | 63 |
+| Rust source files | 43 |
+| Unit tests passing | 171 |
+| Scenario tests passing | 10 |
 | Clippy warnings | 0 |
 | VirtualAGC fixture cases | 1 (circular orbit energy conservation) |

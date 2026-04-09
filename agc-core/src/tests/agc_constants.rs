@@ -99,6 +99,23 @@ fn agc_dsky_key_codes() {
     assert_eq!(DskyKey::Nine as u8, 0o11);    // OCT 11
 }
 
+// ── SPS engine constants (P40-P47.agc) ───────────────────────────────────────
+
+#[test]
+fn agc_sps_thrust_feng() {
+    use crate::guidance::targeting::SPS_THRUST_N;
+    // P40-P47.agc: FENG 2DEC 9.1188544 B-7 # SPS THRUST (20500LBS)
+    assert!((SPS_THRUST_N - 91_188.544).abs() < 0.001);
+}
+
+#[test]
+fn agc_sps_exhaust_velocity() {
+    use crate::guidance::targeting::SPS_VE_MS;
+    // P40-P47.agc: 2VEXHUST 2DEC 63.020792 B-7
+    // Ve = 63.020792 / 2 * 100 = 3151.0396 m/s
+    assert!((SPS_VE_MS - 3_151.0396).abs() < 0.001);
+}
+
 // ── Alarm codes (ALARM_AND_ABORT.agc) ────────────────────────────────────────
 
 #[test]

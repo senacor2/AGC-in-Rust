@@ -63,6 +63,28 @@ pub struct NavSnapshot {
     pub alarm_code: Option<String>,
     /// Simulated time acceleration factor (1 = real-time SERVICER cadence).
     pub time_factor: u32,
+    /// Semi-major axis (km) — from conics module.
+    pub sma_km: f64,
+    /// Eccentricity.
+    pub ecc: f64,
+    /// Inclination (degrees).
+    pub inc_deg: f64,
+    /// Apoapsis altitude (km). `f64::NAN` if not applicable (hyperbolic).
+    pub apo_alt_km: f64,
+    /// Periapsis altitude (km).
+    pub peri_alt_km: f64,
+    /// DAP mode label (e.g., "FREE", "HOLD", "BURN").
+    pub dap_mode: &'static str,
+    /// Whether a burn is in progress.
+    pub burn_active: bool,
+    /// Velocity-to-be-gained magnitude (m/s), 0 if no burn.
+    pub vg_mag: f64,
+    /// Active program number (0, 11, 30, 37, 40, 51, 61-67).
+    pub active_prog: u8,
+    /// P40 burn phase label (e.g., "ATTMVR", "COUNT", "ULLAGE", "BURN", "CUTOFF", "DONE").
+    pub burn_phase: &'static str,
+    /// Entry phase label for P61-P67 (e.g., "P61 PREP", "P63 INIT", "P66 BANK", etc.).
+    pub entry_phase: &'static str,
 }
 
 // ── Top-level entry ───────────────────────────────────────────────────────────
@@ -86,22 +108,25 @@ fn render_nav(f: &mut Frame, nav: &NavSnapshot, area: Rect) {
     f.render_widget(outer, area);
 
     let rows = Layout::vertical([
-        Constraint::Length(1), // MET / cycle
-        Constraint::Length(1), // spacer
-        Constraint::Length(1), // column headers
-        Constraint::Length(1), // X row
-        Constraint::Length(1), // Y row
-        Constraint::Length(1), // Z row
-        Constraint::Length(1), // spacer
-        Constraint::Length(1), // altitude / speed
-        Constraint::Length(1), // orbit fraction
-        Constraint::Length(1), // spacer
-        Constraint::Length(1), // PIPA / alarm
-        Constraint::Length(1), // cumulative delta-V
-        Constraint::Length(1), // time factor
-        Constraint::Length(1), // spacer
-        Constraint::Length(1), // keys row 1
-        Constraint::Length(1), // keys row 2
+        Constraint::Length(1), // [0]  MET / cycle
+        Constraint::Length(1), // [1]  spacer
+        Constraint::Length(1), // [2]  column headers
+        Constraint::Length(1), // [3]  X row
+        Constraint::Length(1), // [4]  Y row
+        Constraint::Length(1), // [5]  Z row
+        Constraint::Length(1), // [6]  spacer
+        Constraint::Length(1), // [7]  altitude / speed
+        Constraint::Length(1), // [8]  orbit fraction
+        Constraint::Length(1), // [9]  orbital elements row 1 (SMA/ECC/INC)
+        Constraint::Length(1), // [10] orbital elements row 2 (APO/PERI/DAP) or burn
+        Constraint::Length(1), // [11] program + phase + DAP combined row
+        Constraint::Length(1), // [12] spacer
+        Constraint::Length(1), // [13] PIPA / alarm
+        Constraint::Length(1), // [14] cumulative delta-V
+        Constraint::Length(1), // [15] time factor
+        Constraint::Length(1), // [16] spacer
+        Constraint::Length(1), // [17] keys row 1
+        Constraint::Length(1), // [18] keys row 2
         Constraint::Min(0),
     ])
     .split(inner);
@@ -113,11 +138,14 @@ fn render_nav(f: &mut Frame, nav: &NavSnapshot, area: Rect) {
     render_vector_row(f, "Z", nav.r_m[2] / 1000.0, nav.v_ms[2], rows[5]);
     render_alt_speed(f, nav, rows[7]);
     render_orbit_progress(f, nav, rows[8]);
-    render_pipa_alarm(f, nav, rows[10]);
-    render_total_dv(f, nav, rows[11]);
-    render_time_factor(f, nav, rows[12]);
-    render_keys1(f, rows[14]);
-    render_keys2(f, rows[15]);
+    render_orbital_elements_row1(f, nav, rows[9]);
+    render_orbital_elements_row2(f, nav, rows[10]);
+    render_prog_dap(f, nav, rows[11]);
+    render_pipa_alarm(f, nav, rows[13]);
+    render_total_dv(f, nav, rows[14]);
+    render_time_factor(f, nav, rows[15]);
+    render_keys1(f, rows[17]);
+    render_keys2(f, rows[18]);
 }
 
 fn render_met_line(f: &mut Frame, nav: &NavSnapshot, area: Rect) {
@@ -125,10 +153,7 @@ fn render_met_line(f: &mut Frame, nav: &NavSnapshot, area: Rect) {
     let met_cs = nav.met_cs % 100;
     let line = Line::from(vec![
         Span::styled("MET ", dim()),
-        Span::styled(
-            format!("{:+06}s.{:02}", met_s, met_cs),
-            bold(),
-        ),
+        Span::styled(format!("{:+06}s.{:02}", met_s, met_cs), bold()),
         Span::styled("  cycle ", dim()),
         Span::styled(format!("{}", nav.cycle), bold()),
     ]);
@@ -204,12 +229,81 @@ fn render_orbit_progress(f: &mut Frame, nav: &NavSnapshot, area: Rect) {
     f.render_widget(Paragraph::new(line), area);
 }
 
+fn fmt_alt_km(alt_km: f64) -> String {
+    if alt_km.is_nan() || alt_km.is_infinite() {
+        "     ---".to_string()
+    } else {
+        format!("{:+8.1}", alt_km)
+    }
+}
+
+fn render_orbital_elements_row1(f: &mut Frame, nav: &NavSnapshot, area: Rect) {
+    let line = Line::from(vec![
+        Span::styled("SMA ", dim()),
+        Span::styled(format!("{:8.1} km", nav.sma_km), bold()),
+        Span::styled("  ECC ", dim()),
+        Span::styled(format!("{:.3}", nav.ecc), bold()),
+        Span::styled("  INC ", dim()),
+        Span::styled(format!("{:5.1}°", nav.inc_deg), bold()),
+    ]);
+    f.render_widget(Paragraph::new(line), area);
+}
+
+fn render_orbital_elements_row2(f: &mut Frame, nav: &NavSnapshot, area: Rect) {
+    if nav.burn_active {
+        let line = Line::from(vec![
+            Span::styled("BURN VG ", dim()),
+            Span::styled(format!("{:+8.3} m/s", nav.vg_mag), bold()),
+            Span::styled("  DAP ", dim()),
+            Span::styled(nav.dap_mode, lit()),
+        ]);
+        f.render_widget(Paragraph::new(line), area);
+    } else {
+        let line = Line::from(vec![
+            Span::styled("APO ", dim()),
+            Span::styled(format!("{} km", fmt_alt_km(nav.apo_alt_km)), bold()),
+            Span::styled("  PER ", dim()),
+            Span::styled(format!("{} km", fmt_alt_km(nav.peri_alt_km)), bold()),
+            Span::styled("  DAP ", dim()),
+            Span::styled(nav.dap_mode, normal()),
+        ]);
+        f.render_widget(Paragraph::new(line), area);
+    }
+}
+
+fn render_prog_dap(f: &mut Frame, nav: &NavSnapshot, area: Rect) {
+    let prog_label = format!("P{:02}", nav.active_prog);
+
+    let phase_span = if !nav.entry_phase.is_empty() {
+        // Entry guidance active (P61-P67).
+        Span::styled(nav.entry_phase, lit())
+    } else if nav.burn_active {
+        // P40 burn in progress — show phase and VG.
+        Span::styled(
+            format!("{}  VG {:+.1} m/s", nav.burn_phase, nav.vg_mag),
+            lit(),
+        )
+    } else if nav.burn_phase != "IDLE" && !nav.burn_phase.is_empty() {
+        // Phase set but burn not yet active (e.g., ATTMVR).
+        Span::styled(nav.burn_phase, bold())
+    } else {
+        Span::styled("IDLE", dim())
+    };
+
+    let line = Line::from(vec![
+        Span::styled("PROG ", dim()),
+        Span::styled(prog_label, bold()),
+        Span::styled("  ", normal()),
+        phase_span,
+        Span::styled("  DAP ", dim()),
+        Span::styled(nav.dap_mode, if nav.burn_active { lit() } else { normal() }),
+    ]);
+    f.render_widget(Paragraph::new(line), area);
+}
+
 fn render_pipa_alarm(f: &mut Frame, nav: &NavSnapshot, area: Rect) {
     let alarm_span = if nav.alarm_lit {
-        let code = nav
-            .alarm_code
-            .as_deref()
-            .unwrap_or("????");
+        let code = nav.alarm_code.as_deref().unwrap_or("????");
         Span::styled(format!("ALARM {}", code), lit())
     } else {
         Span::styled("ALARM -----", dim())
@@ -217,10 +311,7 @@ fn render_pipa_alarm(f: &mut Frame, nav: &NavSnapshot, area: Rect) {
     let line = Line::from(vec![
         Span::styled("PIPA ", dim()),
         Span::styled(
-            format!(
-                "[{:+4} {:+4} {:+4}]",
-                nav.pipa[0], nav.pipa[1], nav.pipa[2]
-            ),
+            format!("[{:+4} {:+4} {:+4}]", nav.pipa[0], nav.pipa[1], nav.pipa[2]),
             bold(),
         ),
         Span::styled("  ", normal()),
@@ -249,7 +340,7 @@ fn render_time_factor(f: &mut Frame, nav: &NavSnapshot, area: Rect) {
 
 fn render_keys1(f: &mut Frame, area: Rect) {
     let line = Line::from(vec![Span::styled(
-        "X/x Y/y Z/z → ±PIPA (100 cnts = ±5.85 m/s)",
+        "X/x Y/y Z/z → ±PIPA  [B]urn +50 m/s",
         normal(),
     )]);
     f.render_widget(Paragraph::new(line), area);
@@ -257,7 +348,7 @@ fn render_keys1(f: &mut Frame, area: Rect) {
 
 fn render_keys2(f: &mut Frame, area: Rect) {
     let line = Line::from(vec![
-        Span::styled("[+]/[-] time×  [C]lear PIPA  ", normal()),
+        Span::styled("[+]/[-] time×  [C]lear  [0]P00 [1]P11 [3]P30  ", normal()),
         Span::styled("[Q]uit", dim()),
     ]);
     f.render_widget(Paragraph::new(line), area);

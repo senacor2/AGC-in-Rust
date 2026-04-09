@@ -23,6 +23,15 @@ Each Rust module maps to one or more AGC assembler files.
 | `executive/restart` | FRESH_START_AND_RESTART.agc, RESTART_TABLES.agc | `docs/agc-source/FRESH_START_AND_RESTART.agc` |
 | `services/alarm` | ALARM_AND_ABORT.agc | `docs/agc-source/ALARM_AND_ABORT.agc` |
 | `hal/dsky` | PINBALL_GAME_BUTTONS_AND_LIGHTS.agc, T4RUPT_PROGRAM.agc | `docs/agc-source/PINBALL_GAME_BUTTONS_AND_LIGHTS.agc` |
+| `math/kepler` | CONIC_SUBROUTINES.agc (KEPRTN/KEPLERN) | `docs/agc-source/CONIC_SUBROUTINES.agc` |
+| `math/lambert` | CONIC_SUBROUTINES.agc (LAMROUT/TIMETHET) | `docs/agc-source/CONIC_SUBROUTINES.agc` |
+| `navigation/conics` | CONIC_SUBROUTINES.agc (KEPPREP/CSMCONIC) | `docs/agc-source/CONIC_SUBROUTINES.agc` |
+| `control/dap` | RCS-CSM_DIGITAL_AUTOPILOT.agc | `docs/agc-source/RCS-CSM_DIGITAL_AUTOPILOT.agc` |
+| `control/attitude` | KALCMANU_STEERING.agc, RCS-CSM_DIGITAL_AUTOPILOT.agc | `docs/agc-source/KALCMANU_STEERING.agc` |
+| `control/rcs_logic` | JET_SELECTION_LOGIC.agc | `docs/agc-source/JET_SELECTION_LOGIC.agc` |
+| `control/tvc` | TVCEXECUTIVE.agc, TVCDAPS.agc | `docs/agc-source/TVCEXECUTIVE.agc` |
+| `guidance/targeting` | P30-P37.agc (P30/S40.1), P40-P47.agc (FENG/2VEXHUST) | `docs/agc-source/P30-P37.agc` |
+| `guidance/maneuver` | P40-P47.agc (S40.8/CROSS_PRODUCT_STEERING) | `docs/agc-source/P40-P47.agc` |
 
 ---
 
@@ -41,6 +50,10 @@ modern IAU/WGS84 values; the AGC value takes precedence for fidelity).
 | Earth J2 coefficient | `J2_EARTH` | `1.082_626_68e-3` | dimensionless | ORBITAL_INTEGRATION.agc: J2 term coefficient |
 | PIPA scale factor | `PIPA_SCALE` | `0.0585` | m/s per count | SERVICER207.agc: `KPIP1 2DEC 0.074880 # 1 PULSE = 5.85 CM/SEC` |
 | SERVICER cycle period | `CYCLE_DT` | `2.0` | seconds | SERVICER207.agc: `CAF 2SECS; TC WAITLIST; 2CADR READACCS` |
+| SPS thrust | `SPS_THRUST_N` | `91_188.544` | N | P40-P47.agc: `FENG 2DEC 9.1188544 B-7 # SPS THRUST (20500LBS)` |
+| SPS exhaust velocity | `SPS_VE_MS` | `3_151.0396` | m/s | P40-P47.agc: `2VEXHUST 2DEC 63.020792 B-7` (= 63.020792/2 m/cs × 100) |
+| SPS specific impulse | `SPS_ISP_S` | `321.3` | s | Derived: `SPS_VE_MS / G0 = 3151.04 / 9.80665` |
+| Kepler iteration limit | — | `20` | — | CONIC_SUBROUTINES.agc: `SSP ITERCTR 20D` (Rust uses 50) |
 
 ---
 

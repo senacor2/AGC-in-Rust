@@ -19,6 +19,8 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 
+use agc_core::guidance::maneuver::BurnState;
+use agc_core::navigation::conics::{apsides, rv_to_elements};
 use agc_core::navigation::gravity::MU_EARTH;
 use agc_core::navigation::state_vector::{Frame, Refsmmat, StateVector};
 use agc_core::services::average_g::{average_g, AverageGState, CYCLE_DT};
@@ -67,13 +69,14 @@ fn run() -> io::Result<()> {
     let mut time_factor: u32 = 1; // cycles per render frame
     let mut total_dv_ms: f64 = 0.0; // cumulative PIPA delta-V (m/s)
     let mut avg_g_state = AverageGState::new(); // predictor-corrector carry-over state
+    let mut burn_state: Option<BurnState> = None;
+    let mut active_prog: u8 = 0; // P00 idle
 
     hw.log.info("AGC-in-Rust — SERVICER / AVERAGE G demo");
+    hw.log.info(format!("LEO 200 km  v_circ={:.1} m/s", v_circ));
+    hw.log.info(format!("Orbital period T={:.0} s", period_s));
     hw.log
-        .info(format!("LEO 200 km  v_circ={:.1} m/s", v_circ));
-    hw.log
-        .info(format!("Orbital period T={:.0} s", period_s));
-    hw.log.info("X/x Y/y Z/z = ±100 PIPA  +/- = time×  Q = quit");
+        .info("X/x Y/y Z/z = ±100 PIPA  +/- = time×  Q = quit");
 
     enable_raw_mode()?;
     execute!(io::stdout(), EnterAlternateScreen)?;
@@ -83,9 +86,35 @@ fn run() -> io::Result<()> {
     loop {
         // ── Advance navigation ─────────────────────────────────────────────
         for _ in 0..time_factor {
+            // If a burn is active, compute PIPA counts to simulate SPS thrust.
+            if let Some(ref bs) = burn_state {
+                if !bs.complete {
+                    // SPS accel ≈ 91188.544 N / 20000 kg = 4.5594 m/s²
+                    let accel = 91_188.544_f64 / 20_000.0;
+                    let dv_cycle = accel * CYCLE_DT;
+                    let vg = bs.vg;
+                    let vg_mag = f64::sqrt(vg[0] * vg[0] + vg[1] * vg[1] + vg[2] * vg[2]);
+                    if vg_mag > 1e-6 {
+                        let vg_unit = [vg[0] / vg_mag, vg[1] / vg_mag, vg[2] / vg_mag];
+                        let counts = (dv_cycle / 0.0585) as i16;
+                        pipa = [
+                            (vg_unit[0] * counts as f64) as i16,
+                            (vg_unit[1] * counts as f64) as i16,
+                            (vg_unit[2] * counts as f64) as i16,
+                        ];
+                    }
+                }
+            }
+
             let pipa_i16: [i16; 3] = pipa;
             // Run one SERVICER cycle (AVERAGE G).
-            let result = average_g(&sv, pipa_i16, &Refsmmat::IDENTITY, CYCLE_DT, &mut avg_g_state);
+            let result = average_g(
+                &sv,
+                pipa_i16,
+                &Refsmmat::IDENTITY,
+                CYCLE_DT,
+                &mut avg_g_state,
+            );
             sv = result.sv;
             cycle += 1;
 
@@ -93,12 +122,36 @@ fn run() -> io::Result<()> {
             if pipa[0] != 0 || pipa[1] != 0 || pipa[2] != 0 {
                 let dv = result.delta_v_total.magnitude();
                 total_dv_ms += dv;
-                hw.log.io(format!(
-                    "cycle {} ΔV={:.3} m/s  ΣΔV={:.3} m/s",
-                    cycle, dv, total_dv_ms
-                ));
+                // Only log individual PIPA cycles that are NOT part of an auto-burn
+                // (burns log completion separately).
+                if burn_state.is_none() {
+                    hw.log.io(format!(
+                        "cycle {} ΔV={:.3} m/s  ΣΔV={:.3} m/s",
+                        cycle, dv, total_dv_ms
+                    ));
+                }
                 // Drain PIPA after applying (one-shot per render frame).
                 pipa = [0; 3];
+            }
+
+            // Update VG for active burn.
+            if let Some(ref mut bs) = burn_state {
+                bs.update_vg(&result.delta_v_total.0);
+                if bs.complete {
+                    let acc_dv = bs.dv_accumulated;
+                    let acc_mag = f64::sqrt(
+                        acc_dv[0] * acc_dv[0] + acc_dv[1] * acc_dv[1] + acc_dv[2] * acc_dv[2],
+                    );
+                    hw.log
+                        .info(format!("BURN complete! Total ΔV: {:.1} m/s", acc_mag));
+                }
+            }
+            // Remove completed burn state and return to P00.
+            if burn_state.as_ref().is_some_and(|b| b.complete) {
+                burn_state = None;
+                if active_prog == 40 {
+                    active_prog = 0;
+                }
             }
         }
 
@@ -120,6 +173,39 @@ fn run() -> io::Result<()> {
             None
         };
 
+        // Orbital elements from the conics module.
+        let el = rv_to_elements(&sv.r, &sv.v, MU_EARTH);
+        let (peri_r, apo_r) = apsides(el.sma, el.ecc);
+        // For hyperbolic orbits (ecc > 1) the mathematical apoapsis is negative —
+        // no physical apoapsis exists; signal that to the renderer with NAN.
+        let apo_alt_km = if el.ecc >= 1.0 || !el.sma.is_finite() {
+            f64::NAN
+        } else {
+            (apo_r - R_EARTH_M) / 1000.0
+        };
+        let peri_alt_km = (peri_r - R_EARTH_M) / 1000.0;
+
+        let burn_active = burn_state.as_ref().is_some_and(|b| !b.complete);
+        let dap_mode: &'static str = if burn_active { "BURN" } else { "FREE" };
+        let vg_mag = burn_state.as_ref().map_or(0.0, |b| b.vg_magnitude());
+
+        // Derive P40 burn phase from burn_state and active_prog.
+        let burn_phase: &'static str = if active_prog == 40 {
+            if burn_active {
+                if vg_mag > 40.0 {
+                    "BURN"
+                } else if vg_mag > 0.1 {
+                    "CUTOFF"
+                } else {
+                    "DONE"
+                }
+            } else {
+                "ATTMVR"
+            }
+        } else {
+            "IDLE"
+        };
+
         // ── Render ─────────────────────────────────────────────────────────
         let snap = NavSnapshot {
             met_cs: sv.t.0,
@@ -135,6 +221,17 @@ fn run() -> io::Result<()> {
             alarm_lit,
             alarm_code,
             time_factor,
+            sma_km: el.sma / 1000.0,
+            ecc: el.ecc,
+            inc_deg: el.inc * 180.0 / core::f64::consts::PI,
+            apo_alt_km,
+            peri_alt_km,
+            dap_mode,
+            burn_active,
+            vg_mag,
+            active_prog,
+            burn_phase,
+            entry_phase: "",
         };
         terminal.draw(|f| nav_terminal::render(f, &snap, &hw.log))?;
 
@@ -181,6 +278,36 @@ fn run() -> io::Result<()> {
                     KeyCode::Char('-') => {
                         time_factor = (time_factor / 2).max(1);
                         hw.log.info(format!("time× {}", time_factor));
+                    }
+
+                    // Plan and start a prograde burn of 50 m/s (P40).
+                    KeyCode::Char('b') | KeyCode::Char('B') => {
+                        let v = sv.v;
+                        let speed_now = f64::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+                        if speed_now > 1e-6 {
+                            let dv = [
+                                v[0] / speed_now * 50.0,
+                                v[1] / speed_now * 50.0,
+                                v[2] / speed_now * 50.0,
+                            ];
+                            burn_state = Some(BurnState::new(&dv));
+                            active_prog = 40;
+                            hw.log.info("P40 BURN planned: +50 m/s prograde");
+                        }
+                    }
+
+                    // Program selection keys.
+                    KeyCode::Char('0') => {
+                        active_prog = 0;
+                        hw.log.info("P00 IDLE");
+                    }
+                    KeyCode::Char('1') => {
+                        active_prog = 11;
+                        hw.log.info("P11 ORBIT MONITOR");
+                    }
+                    KeyCode::Char('3') => {
+                        active_prog = 30;
+                        hw.log.info("P30 TARGETING DISPLAY");
                     }
 
                     // Clear pending PIPA.

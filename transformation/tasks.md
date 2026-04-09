@@ -42,27 +42,27 @@ _None — foundation phase complete, implementation not yet started_
 
 ### Milestone 3 — Guidance and DAP
 
-- [ ] **Spec + Impl** — `math/kepler.rs` (KEPRTN)
-- [ ] **Spec + Impl** — `math/lambert.rs` (Lambert targeting)
-- [ ] **Spec + Impl** — `navigation/conics.rs`
-- [ ] **Spec + Impl** — `control/imu_control.rs` (coarse/fine align, typestate)
-- [ ] **Spec + Impl** — `control/dap.rs` (T5RUPT driven)
-- [ ] **Spec + Impl** — `control/attitude.rs`
-- [ ] **Spec + Impl** — `control/rcs_logic.rs` (jet select, T6RUPT timing)
-- [ ] **Spec + Impl** — `control/tvc.rs`
-- [ ] **Spec + Impl** — `guidance/targeting.rs`
-- [ ] **Spec + Impl** — `guidance/maneuver.rs`
+- [x] **Spec + Impl** — `math/kepler.rs` (universal-variable Kepler solver)
+- [x] **Spec + Impl** — `math/lambert.rs` (Lambert targeting, universal variable)
+- [x] **Spec + Impl** — `navigation/conics.rs` (orbital elements, vis-viva, apsides)
+- [x] **Spec + Impl** — `control/dap.rs` (T5RUPT DAP supervisor)
+- [x] **Spec + Impl** — `control/attitude.rs` (phase-plane, rate damping)
+- [x] **Spec + Impl** — `control/rcs_logic.rs` (16-jet SM RCS selection)
+- [x] **Spec + Impl** — `control/tvc.rs` (SPS gimbal steering, gain scheduling)
+- [x] **Spec + Impl** — `guidance/targeting.rs` (TIG, burn time, maneuver plan)
+- [x] **Spec + Impl** — `guidance/maneuver.rs` (VG tracking, cross-product steering)
+- [ ] **Spec + Impl** — `control/imu_control.rs` (coarse/fine align, typestate) — deferred to Milestone 4
 
 ### Milestone 4 — Programs (P-codes)
 
-- [ ] P00 — CMC Idling
-- [ ] P11 — Earth orbit insertion
-- [ ] P40/P41 — SPS/RCS thrusting
-- [ ] P51/P52 — IMU alignment
-- [ ] P61–P67 — Entry guidance sequence
-- [ ] P30 — External Delta-V (needed for Lambert fixture tests)
-- [ ] P37 — Return to Earth
-- [ ] Remaining P-codes
+- [x] P00 — CMC Idling
+- [x] P11 — Earth orbit insertion monitor
+- [x] P30 — External Delta-V targeting (crew-entered VGTIG)
+- [x] P37 — Return to Earth (Kepler propagation + Lambert solver)
+- [x] P40/P41 — SPS/RCS thrusting (6-phase burn execution)
+- [x] P51/P52 — IMU alignment (SMNB two-vector determination)
+- [x] P61–P67 — Entry guidance (7-phase: prep → separation → blackout → constant-g → skip → bank steer → drogue)
+- [x] `control/imu_control.rs` — IMU coarse/fine align, typestate modes
 
 ### Milestone 5 — DSKY and Crew Interface
 
