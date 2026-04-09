@@ -1216,11 +1216,290 @@ for more details on addition and overflow.
 
 ## IIH Interrupts
 
+There are two distinct types of interrrupts incorporated in the
+computer logical design: counter interrupts and program interrupts.
+Since they are quite different, separate sub-sections are devoted to
+each below.
 
+Since the counter interrupts represent one hardware approach
+(others could have been selected, although probably with the need for
+additional hardware) to the mechanization of computer inputs driven by
+external signals, their existence for most programming purposes can be
+ignored. Program interrupts, on the other hand, perform an integral
+portion of the program control logic: consequently, it is conventional
+that the term "interrupt", unless otherwise specified, refers to these
+program interrupts.
 
 ### Counter Interrupts
 
+The 29 counter interrupts in the computer are associated with the
+29 erasable memory cells (0024~8~ - 0060~8~, see Section IID) that may contain
+counter-type information. Seven "involuntary" (i.e. not under computer
+program control) counter instructions are associated with these counters,
+and can be performed when an appropriate counter interrupt is received.
+In some cases, a counter interrupt can select different involuntary
+instructions to be performed, depending on the nature of the external
+signal (such as positive or negative changes to the value of a counter)
+or the value of the quantity in the counter (positive or negative output
+pulses). The seven involuntary instructions, and the cells to which
+they apply, are given on the following pages.
+
+1. DINC, applying to cell 0031~8~ (TIME6) and cells 0047~8~ - 0056~8~
+(GIROCMD, CDU error counter drives, THRUST, and not used).
+If the contents of the ce1I are positive non-zero, they are
+decremented by 1 and positive output pulses are provided; if
+the contents are negative non-zero, the contents are incremented
+by 1 (i.e. nagnitude decreased by 1) and negative output pulses
+are provided. Output pulses must be enabled from 0047~8~- 0056~8~ by bit
+of channel 14 (10, 15-11, 4, and 5 respctively), which is reset
+to O when the counter contents are equal to -0 and another
+DINC pufse is generated (-0 is the result of a DINC to a cell
+equal to +1 or -1). Consequently, zeroing of cells by program
+means must load -0, not +0. Use of DINC with cell 0031~8~ is
+enabled by bit 15 of channel 13, although the cell's output
+pulses are not used: instead, its decrement to -0 causes
+program interrupt #1 to be generated at the next DINC (and the
+enabling bit to be reset).
+
+2. MCDU, applying to cells 0032~8~- 0036~8~(input CDU angles from
+IMU and optics/rendezvous radar). This instruction subtracts 1
+(in twos complement) from the contents of the cell.
+
+3. MINC, applying to cells 0037~8~ - 0044~8~ (accelerometer inputs and
+RHC/unused BMAG analog inputs). This instruction subtracts 1
+(in ones complement) from the contents of the cell.
+
+4. PCDU, applying to cells 0032~8~ - 0036~8~ (input CDU angles from
+IMU and optics/rendezvous radar). This instruction adds 1
+(in twos complement) to the contents of the cell.
+
+5. PINC, applying to cells 0024~8~ - 0030~8~ (TIMEi, i = 1-5) and cells
+0037~8~ - 0044~8~ (accelerometer inputs and RHS/unused BMAG analog
+inputs). This instruction adds 1 (in ones complement) to the
+contents of the cell.
+
+6. SHANC, applying to cells 0045~8~ - 0046~8~ (INLINK and RNRAD). This instruction shifts
+the contents of the cell left one place, and then adds 1
+(it is used for a binary one of a serial bit stream).
+
+7. SHINC, applying to cells 0045~8~ - 0046~8~ (INLINK and RNRAD) and
+to cells 0057~8~ - 0060~8~ (unused OUTLINK and ALTM). This
+instruction shifts the contents of the cell left by one place
+(it is used for a binary zero of a serial bit stream or to
+generate a serial output bit stream from the cell overflow bit).
+
+A counter interrupt request can be generated (in general) at any
+time. AIl requests are retained by the hardware until the end of the
+current computer instruction. At that time, provided that the next
+instruction is not a special-purpose TC order (EXTEND, INHINT, or RELINT),
+the request is honored. This means, for example, that a double precision
+computer instruction (such as DCA) can be used to sample the values of
+cells 0024~8~ - OO25~8~ (the computer clock) without concern that a counter
+interrupt will cause the two halves to be inconsistent due to an overflow
+of ce1l 0025~8~ (see Section IID).
+
+Satisfaction of a counter interrupt takes one MCT (memory cycle
+time of about 11.7 microseconds) per request (due to the need to read
+the counter from memory, modify it, and store it back). Priority for
+satisfaction of the requests is based upon the value of the counters
+address (0024~8~ has the highest priority and 0060~8~ has the lowest), but
+all requests are satisfied before the next program instruction is
+started. See Section VII for the sequence with which the computer
+hardware perfoms its various functions.
+
+Counter interrupts are not under computer program control (once
+the appropriate control bits, in some cases, have been set), cannot be
+inhibited by the program, and in fact can only be determined by the
+software to have occurred by sampling the cell in question. It is
+sometimes necessary (such as when the accelerometer cells are sampled)
+to sampie and reset a counter without losing any counts: the machine
+language order XCH (Exchange) can be used for this purpose, since this
+order exchanges the contents of the A register and the cell specified
+by the address field of the order. In other instances, it is necessary
+to change the value of an output-generating counter cell. (such as the
+cell used to generate gyro torquing pulses) while it may be controlling
+output pulse generation. In this case, the machine-language order
+ADS (Add and Store) can be used.
+
 ### Program Interrupts
+
+Eleven program interrupts are incorporated into the computer
+design. Most interrupts (provided certain conditions are satisfied)
+cause the performance of the program to be suspended, the contents of
+certain registers to be saved (some by hardware means, some by software),
+and the next instruction to be executed be the one at a special address
+(different for each interrupt) in order to start the "task".
+
+The interrupt is mecnahized through the involuntary instruction
+RUPT, which takes 3 MCT to perform. If necessary, it can also be
+programmed as EDRUPT, an extended order, using the following sequence:
+
+```
+     CA start address desired, in ADRES form
+     TC bank 3 address (i.e. in fixed-fixed, form 7xxx~8~)
+     -------
+BNK3 EXTEND (BNK3 is address to which TC is done, form 7xxx~8~)
+     EDRUPT BNK3
+```
+
+This sequence causes the hardware to initiate computations at the ADRES
+address contained in the accumulator, with various hardware flip-flops
+set as they would be for a "normal" hardware induced program interrupt
+(FBANK setting is that from which the BNK3 step was entered). In either
+case, resumption of the program is triggered by the special purpose
+instruction RESUME (triggered by INDEX order for cell 0017~8~, see Section
+VA), taking 2 MCT to perform. The mnemonic stems from the
+phrase "Ed Smally's interrupt instruction".
+
+The individual interrupts, with their titles, starting addresses,
+causes and functions are:
+
+1. T6RUPT, starting address 4004~8~, generated by the next DINC after
+TIME6 (cell 0031~8~, see Section IID) has been reduced to -0.
+Conventionally used to control the timing of RCS jet commands in
+output channels 05 and 06 (by suitable software).
+
+2. T5RUPT, starting address 4010~8~, generated by overflow of TIME5
+(cell 0030~8~, see Section IID). Conventionally used to control
+cycling of computations associated with the digital autopilots
+(jet timing conventionally controlled by program interrupt #1).
+
+3. T3RUPT, starting address 0014~8~, generated by overflow of TIME3
+(cell 0026~8~, see Section IID). Conventionally used to control
+performance of "waitlist" tasks (see Section VIIA).
+
+4. T4RUPT, starting address 4020~8~, generated by overflow of TIME4
+(cell 0027~8~, see Section IID). Conventionally used to control
+cycling of periodic input/output functions (such as driving of
+DSKY digits, see Section IIJ).
+
+5. KEYRUPT1, starting address 4024~8, generated by depression of a
+key on the DSKY keynoard (main panel DSKY for CM). Input trap
+circuit reset when key is released. Used by software to
+initiate processing of keyboard input from channel 15.
+
+6. KEYRUPT2, starting address 4030~8~, generated for CM by depression
+of a key on lower equipment bay (or "navigation panel"). DSKY or
+depression of optics mark or mark reject button. For LM, it
+is generated by depression of a mark or mark reject button or
+by rate-of-descent switch offset. Input trap circuit reset when
+key or button released, or rate-of-descent switch returned to
+middle (neutral) position. Used by software to start channel 16
+processing.
+
+7. UPRUPT, starting address 4034~8~, generated by overflow of cell
+0045~8~ (INLINK, see Section IID) due to shifting of the first
+binary 1 (in the 16-bit word sent to the computer) out of the
+cell. Used by software to start processing of information in
+INLINK (including its reset). If the checks are passed, the
+same computational job is established as that for program
+interrupts #S and #6 if a DSKY input is involved.
+
+8. DOWNRUPT, starting address 4040~8~, generated by an end pulse
+from the telemetry system. The basic telemetry format consists
+of eight-bit data words transmitted at a rate depending on the
+setting of spacecraft switches. At the "high bit rate" (51.2
+kbps), 5 of the 128 words in each frame are allocated to computer
+digital data (giving 40 bits), thus permitting 50 of the 40-bit
+computer words to be sent per second. Computer words are loaded
+for downlink transmission in channels 34 and 35 (plus bit 7 of
+channel 13 for "word order code" information). The 40 bits
+are transmitted in the following sequence:
+  a. Bit #1 is the word order code bit.
+  b. Bits #2 - #16 are bits 15-1 (sign first) of channel 34.
+  c. Bit #17 is an odd parity bit for channel 34 data.
+  d. Bits #18 - #32 are bits 15-1 (sign first) of channel 35.
+  e. Bit #33 is an odd parity bit for channel 35 data.
+  f. Bits #34 - #40 are the same as bits #2 - #8 (i.e. bits
+  16-9 of channel 34).
+After the final bit, the end pulse from the telemetry system is
+received, generating the interrupt (request). At the high bit
+rate, the program has about 19.2 ms in which to respond to the
+interrupt and load new data into channels 34-35 before the
+transmission is started again. Garbled downlink data, of course,
+would result if loading not accomplished (ground resynchronization
+could be accomplished when the word order code bit flagged data).
+The "low bit rate" in the CM is 1.6 kbps (200 eight bit words per
+second), in which 50 of the 200 words are digital data (giving
+an end-pulse rate of one every 0.1 second rather than the rate of
+one every 0.02 second at the high bit rate.) In the LM no LGC data
+is transmitted at low bit rate (hence AGC initialization, for example
+must be accomplished at high bit rate). If bit 12 of channel 33 is a 
+binary 0, this indicates that a telemetry end pulse was rejected.
+
+9. RADAR RUPT, starting address 4044~8~, generated by completion of the
+shifting of radar into cell 0046~8~(RNRAD). The time
+delay between the setting of bit 4 of channel 13 and the
+generation of the interrupt is 90-100ms (see Section IID). Used
+by software to start processing of information in RNRAD.
+
+10. HAND CONTROL RUPT, starting address 4050~8~, generated by the
+setting of interrupt traps 31A, 31B or 32. These traps are
+reset by bits 12-14 of channel 13 respectively, and are required
+because of the duration of the input signals (which otherwise
+could produce multiple program interrupts). Trap 31A is
+associated with bits 6-1 of channel 31 (rotational hand controller
+deflections); trap 31B is associated with bits 12-7 of channel
+31 (translation hand controller interrupts); and trap 32 is
+associated with bits 10-1 of channel 32 (CM minimum impulse
+controller and LM; thruster fail and descent engine gimbal fail
+inputs). A signal fed into indicated bit positions causes the
+indicated trap to be set. In the CM software, this program
+interrupt is not used, since sampling of the input signals
+involved is done sufficiently often as a consequence of the
+normal digital autopilot cycling. In the LM software, a similar
+argument applies (the digital autopilot cycling and logic performs
+functions equivalent to those originally intended by the hardware
+design), so that only trap 31A is employed in order to monitor
+for hand controller deflections associated with the landing point
+designation (see bits 6,5,2, and 1 of channel 31, Section IIE).
+
+11. GOPROG, starting address 4000~8~, caused by an internally generated
+hardware signal in response to various hardware difficulties.
+A "hardware restart" is produced, as described in more detail below.
+
+Program interrupts #1. #10 have the following common features:
+
+a. Their first few steps store A in ARUPT, L in LRUPT and transfer
+control to a routine that performs the necessary computations
+(after saving Q and/or BBANK and/or SUPERBNK if necessary).
+
+b. They initiate the performance of a task, at the conclusion of
+which (after restoration of A, L, and any other cells necessary)
+the operation RESUME (see Section VA) causes the program to
+start again from where it was interrupted, provided of course
+that another program interrupt is not waiting to be processed.
+
+c. Their priority for initiation is the order in which they were
+listed above (#1 is the highest and #10 is the lowest). Once
+a program interrupt has had its processing started, however,
+it will continue on to completion: the "priority" is significant
+only in determining which interrupt should be processed first.
+
+d. They will not be acted upon (processed), but instead will be
+retained for future action, if any of the following criteria
+are satisfied:
+  1. The current machine language order is not yet complete.
+  2. An "extended" machine language order is about to be
+  performed (see Section IV), since information retained
+  when interrupt processing is started does not include
+  the "extended order code" bit.
+  3. An accumulator overflow (see Section IIG) condition
+  exists, since information retained when interrupt
+  processing is started does not include the overflow bit.
+  Other overflows (e.g Q register) are not protected.
+  4. The INHINT/RELINT flip-flop (see Section VA) is set
+  to inhibit program interrupts, meaning that interrupts
+  not desired by programmer (permitting flagword bits to
+  be changed, downlink state vectors to be consistent,m etc.)
+  5. A program interrupt (even one of lower priority) is
+  already being processed.
+  6. A special-purpose TC order (EXTEND, INHINT, or RELINT)
+  is the next instruction to be executed.
+
+For a summary of the sequence in which the computer hardware (and
+software) performs its various functions, see Section VII.
+
 
 ## IIJ Display System
 
