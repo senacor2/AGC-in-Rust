@@ -416,6 +416,7 @@ unsafe fn HardFault(ef: &ExceptionFrame) -> ! {
         cortex_m::peripheral::SCB::sys_reset()
     }
 }
+````
 
 ### 4.3 Peripheral Side Effects
 
