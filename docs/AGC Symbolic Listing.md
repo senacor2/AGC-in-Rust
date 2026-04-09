@@ -1193,8 +1193,30 @@ significant half of the word processed. Hence DXCH L, for example, starts
 by putting L in Q and Q in L, and then puts A in L and the (new) L in A,
 giving the net effect of putting A in L, L in Q and Q in A.
 
+There is no hardware requirement that sign agreement exist between
+the two halves of the double precision words: they are treated essentially
+as independent single precision quantities unless there is need to propagate
+a carry (or borrow) from the least significant half. The DV (divide)
+order employs a double precision dividend (in A,L) and forces sign agreement
+by hardware means before initiating the division sequence.
+
+The assembly program increments the address of the symbol provided
+for a double precision order so as to read the least significant half
+first (as described above). Consequently, the symbol provided with the
+double precisicn order (either an absolute or a symbolic address) must
+be that of the most significant half of the word, and naturally the last
+cell in a switched memory bank cannot be considered the "most significant
+half" for such orders.
+
+A detailed description of the hardware algorithms employed for
+multiplication and division can be found in the appropriate hardware
+documentation, and therefore is not included here. To minimize
+execution time, these algorithms are fairly elaborate. See Appendix A
+for more details on addition and overflow.
 
 ## IIH Interrupts
+
+
 
 ### Counter Interrupts
 

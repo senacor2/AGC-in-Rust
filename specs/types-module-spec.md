@@ -66,10 +66,15 @@ the original hardware delivers them in **twos-complement** form (see
 `docs/AGC Symbolic Listing.md` §IIA: "Angle information is in twos complement
 form").
 
-- Scale factor: **B-1 revolutions** — i.e. 1 full revolution = 2^15 = 32768 LSB
-  in a single 15-bit word. With the hardware register widened to 16 bits in the
-  real CDU interface (channel-word size), the Rust port uses **`u16`** where a
-  full revolution = 2^15 = 32768 counts but the counter wraps at 65536.
+- **Original AGC hardware** (15-bit register): Scale factor **B-1 revolutions**
+  — 1 full revolution = 2^15 = 32768 counts in a signed 15-bit word. The most
+  significant bit is the sign bit; negative angles are stored as counts in the
+  range [32768, 65535] in twos-complement.
+- **Rust port** (`u16`, 16-bit unsigned): A full revolution maps to
+  **2^16 = 65536 counts**, giving uniform angular resolution across the full
+  circle. Count 0 = 0°, count 32768 = 180° (= -180° in twos-complement
+  convention), count 65535 = one step below 360°. The `u16` wraps at exactly
+  one revolution, so wrapping arithmetic on counts is always correct.
 
   > Comanche055 CDU erasable cells: `CDUX` (octal 0033), `CDUY` (octal 0034),
   > `CDUZ` (octal 0035) — IMU gimbal angles (outer, inner, middle).
@@ -147,20 +152,21 @@ subsystem via I/O channels. The inner `u16` is the twos-complement angle value
 exactly as read from the hardware register (I/O channel 30–33 octal range for
 CDU read-back in Comanche055).
 
-The full angular range of one revolution is encoded over 2^15 = 32768 counts,
-consistent with the AGC B-1 revolution scale factor. Because the `u16` wraps at
-65536, angles beyond one revolution (> 32767 counts) are represented as negative
-angles in the hardware convention but stored as unsigned values ≥ 32768 in
-`u16`.
+In the Rust `u16` representation, a full revolution is encoded as 2^16 = 65536
+counts (see §2.2 above and `docs/architecture.md` §3.2). Count 32768 (0x8000)
+represents exactly 180° / π radians, which is also -180° in the twos-complement
+angular convention. Counts in the range [32768, 65535] represent the negative
+half of the angular range (-π, 0) in the hardware convention but are stored as
+unsigned values in `u16`.
 
 #### Valid range and invariants
 
 - **Storage invariant**: All `u16` values are structurally valid. There is no
   illegal bit pattern.
 - **Semantic invariant**: Angles are only meaningful modulo 2^16 counts (one
-  full revolution in the twos-complement representation). Callers must not
-  interpret a count of 32768–65535 as "more than one revolution"; it represents
-  a negative angle in the range (-π, 0).
+  full revolution). Callers must not interpret a count of 32768–65535 as "more
+  than one revolution"; it represents a negative angle in the range (-π, 0) in
+  the twos-complement convention.
 - **Wrapping**: Arithmetic on counts must use wrapping addition/subtraction
   (`u16::wrapping_add`, `u16::wrapping_sub`) to preserve the angular modular
   arithmetic. No saturation or panic on overflow is correct.
@@ -631,7 +637,8 @@ Cross-reference with `docs/architecture.md` §3:
 | §3.1: `u16` for CDU gimbal angles | §3.1 (CduAngle inner field is `u16`) |
 | §3.1: `i16` for signed hardware quantities (PIPA, gyro) | Not in this module — belongs in `hal/imu.rs` |
 | §3.1: `u32` centiseconds for MET | §3.2 (Met inner field is `u32`) |
-| §3.2: `CduAngle` newtype with `to_radians` | §3.1 |
+| §3.2: `CduAngle` with full revolution = 2^16 = 65536 counts in u16 | §2.2, §3.1 |
+| §3.2: `CduAngle` newtype with `to_radians` using `TAU / 65536.0` | §3.1 |
 | §3.2: `Met` with `to_seconds` / `from_seconds` | §3.2 |
 | §3.2: `DeltaV(Vec3)` newtype | §3.3 |
 | §3.3: `Vec3 = [f64; 3]` type alias | §3.4 |

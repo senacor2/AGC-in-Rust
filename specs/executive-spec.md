@@ -47,11 +47,13 @@ hardware restarts.
   job is created while one is running), never mid-function.
 - It is not a thread library. There is no stack switching, no heap, and no
   context save/restore beyond what the hardware interrupt mechanism provides.
-- There is no VAC area management (VAC = vector accumulator, a scratchpad area
-  in the original AGC used by the interpretive language). Since the interpretive
-  language is eliminated in this port (see ADR-001, `docs/architecture.md` §9),
-  both NOVAC and FINDVAC map to the same `create_job` call with no VAC
-  allocation.
+- There is no dynamic VAC area pool. The original AGC's VAC (vector accumulator)
+  areas were scratchpad blocks used by the interpretive language, which is
+  eliminated in this port (ADR-001, `docs/architecture.md` §9). The `has_vac`
+  field on `JobEntry` records whether a job was created via FINDVAC (meaning it
+  needs a scratch workspace struct); this is a static annotation, not a runtime
+  allocation. Alarm 1210 is raised if a FINDVAC-style job cannot be served. See
+  §6.2 for details.
 
 ---
 
@@ -71,7 +73,8 @@ After a job completes, EXEC scans again. This is a strict, non-pre-emptive,
 cooperative multitasking discipline.
 
 New jobs are created by calling NOVAC (no VAC area needed) or FINDVAC (allocates
-a VAC area from a free list). In this port, both are replaced by `create_job`.
+a VAC area from a free list). In this port, both are replaced by `create_job`,
+with the `has_vac` flag distinguishing them.
 
 **NEWJOB** (erasable cell octal 0061): Reading this cell resets the hardware
 night-watchman flip-flop. The Executive must sample NEWJOB on every loop
@@ -180,13 +183,23 @@ pub struct JobEntry {
     /// Major mode (program number) that created this job.
     /// Used by the restart mechanism to re-dispatch after a power-on restart.
     pub major_mode: u8,
+    /// Whether this job was created via FINDVAC (i.e., it requires an associated
+    /// scratch workspace struct for intermediate computation results).
+    /// `false` for jobs created via NOVAC (no scratch workspace needed).
+    /// In the original AGC, FINDVAC allocated a VAC (vector accumulator) block
+    /// from a free list for the interpretive language. Since the interpreter is
+    /// eliminated in this port (ADR-001), `has_vac` is a static annotation only;
+    /// no dynamic pool allocation occurs. Alarm 1210 is raised if a FINDVAC job
+    /// cannot be accommodated (see §6.2).
+    pub has_vac: bool,
 }
 ```
 
 **Invariants**:
 - A slot is empty if and only if `priority == 0`.
 - The `entry` function pointer in an empty slot is unspecified. Do not call it.
-- `JobEntry::EMPTY` provides the canonical empty slot value with a no-op entry.
+- `JobEntry::EMPTY` provides the canonical empty slot value with a no-op entry
+  and `has_vac: false`.
 
 ### 3.3 Executive
 
@@ -305,12 +318,16 @@ pub fn create_job(
     priority: JobPriority,
     entry: fn(&mut AgcState),
     major_mode: u8,
+    has_vac: bool,
 ) -> bool
 ```
 
-Maps to both AGC NOVAC and FINDVAC. Since the interpretive language is
-eliminated, there is no VAC area to allocate, so both original calls reduce to
-this single operation.
+Maps to AGC NOVAC (`has_vac = false`) and FINDVAC (`has_vac = true`). Since
+the interpretive language is eliminated, no dynamic VAC area pool exists; the
+`has_vac` flag is stored in `JobEntry` as a static annotation for diagnostic
+and restart-recovery purposes. If `has_vac = true` and all 7 slots are already
+occupied, alarm 1210 (no free VAC areas) should be raised in addition to the
+normal alarm 1202 path (see §6.2).
 
 **Preconditions**:
 - `priority > 0`: priority 0 is the empty-slot sentinel and is illegal.
@@ -320,31 +337,31 @@ this single operation.
   a running job.
 
 **Postconditions (success, returns `true`)**:
-- One previously-empty slot now holds `JobEntry { priority, entry, major_mode }`.
+- One previously-empty slot now holds `JobEntry { priority, entry, major_mode, has_vac }`.
 - The new job will be dispatched on the next Executive scan iteration in which
   its priority is the highest.
 
 **Postconditions (failure, returns `false`)**:
 - All 7 slots were occupied. No slot is modified.
-- The caller is responsible for raising alarm 1202 (see §6.1) and calling
-  `drop_lowest_job` if recovery is desired.
+- The caller is responsible for raising alarm 1202 (§6.1) and, if `has_vac`,
+  also alarm 1210 (§6.2). Then call `drop_lowest_job` if recovery is desired.
 
 **Side effects**:
 - None beyond the slot assignment. Does not immediately preempt a running job.
 
 **Error conditions**:
-- Returns `false` when all slots are full (alarm 1202 condition). The caller
-  must handle this.
+- Returns `false` when all slots are full (alarm 1202 / 1210 condition).
 
 **Test cases**:
 
 | # | Initial state | Call | Expected result |
 |---|---------------|------|-----------------|
-| TC-CJ-1 | All 7 slots empty | `create_job(20, f, 0)` | Returns `true`; slot 0 holds priority 20 |
-| TC-CJ-2 | 6 slots occupied (priorities 1–6) | `create_job(7, f, 0)` | Returns `true`; one slot now holds priority 7 |
-| TC-CJ-3 | All 7 slots occupied | `create_job(5, f, 0)` | Returns `false`; table unchanged; alarm 1202 must be raised by caller |
-| TC-CJ-4 | Slot 0 occupied (priority 1), others empty | `create_job(1, g, 0)` | Returns `true`; slot 1 holds the new job (first empty slot is chosen) |
-| TC-CJ-5 | All slots empty | `create_job(0, f, 0)` | Undefined behavior (priority 0 is reserved); spec requires `priority > 0` |
+| TC-CJ-1 | All 7 slots empty | `create_job(20, f, 0, false)` | Returns `true`; slot 0 holds priority 20, has_vac=false |
+| TC-CJ-2 | 6 slots occupied (priorities 1–6) | `create_job(7, f, 0, true)` | Returns `true`; one slot now holds priority 7, has_vac=true |
+| TC-CJ-3 | All 7 slots occupied | `create_job(5, f, 0, false)` | Returns `false`; table unchanged; alarm 1202 must be raised by caller |
+| TC-CJ-4 | All 7 slots occupied | `create_job(5, f, 0, true)` | Returns `false`; table unchanged; alarms 1202 and 1210 must be raised by caller |
+| TC-CJ-5 | Slot 0 occupied (priority 1), others empty | `create_job(1, g, 0, false)` | Returns `true`; slot 1 holds the new job (first empty slot is chosen) |
+| TC-CJ-6 | All slots empty | `create_job(0, f, 0, false)` | Undefined behavior (priority 0 is reserved); spec requires `priority > 0` |
 
 ---
 
@@ -530,7 +547,7 @@ pub enum ScheduleResult {
 | TC-SC-2 | [{delta=200, task=f}] | `schedule(100, g)` | count=2; entries[0]={delta=100, g}, entries[1]={delta=100, f}; returns `OkReloadT3(100)` (new earliest) |
 | TC-SC-3 | [{delta=50, task=f}] | `schedule(100, g)` | count=2; entries[0]={delta=50, f}, entries[1]={delta=50, g}; returns `Ok` (g fires at 50+50=100, after f at 50) |
 | TC-SC-4 | 8 entries occupied | `schedule(10, h)` | returns `Full`; count unchanged |
-| TC-SC-5 | [{delta=100, f}, {delta=100, g}] | `schedule(150, h)` | entries[0]={100,f}, [1]={50,g}, [2]={50,h}; returns `Ok` (absolute times: f=100, g=200, h=200+wait=...); let me recalculate: g fires at 100+100=200, h inserted at 150 absolute: after f (100) but before g (200), so entries[0]={100,f}, [1]={50,h} (150-100=50), [2]={50,g} (200-150=50); returns `Ok` |
+| TC-SC-5 | [{delta=100, f}, {delta=100, g}] | `schedule(150, h)` | entries[0]={100,f}, [1]={50,h} (150-100=50), [2]={50,g} (200-150=50); returns `Ok` |
 
 **Clarifying TC-SC-5**:
 - `f` fires at absolute time 100 cs.
@@ -708,7 +725,7 @@ restart), the RESTART routine in `services/fresh_start.rs` executes:
 4. For each restart group `i` in `GROUP_1..=GROUP_6`:
    a. Read `state.restart.phases[i]`.
    b. If `Phase::IDLE`: do nothing.
-   c. If positive even: call `state.executive.create_job(default_priority, group_entry_fn[i], major_mode)`.
+   c. If positive even: call `state.executive.create_job(default_priority, group_entry_fn[i], major_mode, has_vac)`.
    d. If positive odd: call `state.waitlist.schedule(default_delay, group_task_fn[i])`.
    e. If negative: call the group's restart-from-top entry point directly or
       schedule it with the negative phase as context.
@@ -757,12 +774,22 @@ that exact behavior.
 **Trigger**: In the original AGC, FINDVAC could not find a free VAC area
 (vector accumulator scratchpad) for the interpretive language.
 
-**Mapping in this port**: The interpretive language is eliminated (ADR-001).
-Alarm 1210 cannot be triggered by normal operation. It is retained in the alarm
-code table for completeness and to match the original alarm display behavior if
-the alarm code is uplinked or referenced by test code. Implementation note: map
-1210 to the same alarm display path as 1202 but do not call `drop_lowest_job`.
-Flag as "N/A in this port" in comments.
+**Mapping in this port**: The interpretive language is eliminated (ADR-001), so
+there is no runtime VAC pool. Alarm 1210 is raised when `create_job` is called
+with `has_vac = true` (i.e., a FINDVAC-equivalent call) but returns `false`
+because all 7 job slots are occupied. In other words, alarm 1210 is a refinement
+of alarm 1202 that specifically identifies the failing request as a FINDVAC type.
+
+**Required response**:
+1. Raise alarm 1202 first (the slot-full condition always applies).
+2. Additionally set alarm code 1210 on the DSKY to communicate the nature of
+   the failure (a job that needed a scratch workspace could not be started).
+3. Recovery is identical to alarm 1202: call `drop_lowest_job` and re-attempt.
+4. Do NOT restart. This alarm is advisory.
+
+**Implementation note**: Both 1202 and 1210 may be raised for the same
+`create_job` failure when `has_vac = true`. The alarm display should show the
+most specific code (1210) if the request was FINDVAC-style.
 
 ### 6.3 Alarm 1211 — Waitlist Overflow
 
@@ -779,9 +806,10 @@ are occupied).
 
 | # | Scenario | Expected |
 |---|----------|----------|
-| TC-AL-1 | 7 jobs in table; `create_job` called | Returns `false`; alarm 1202 should be raised by caller; `drop_lowest_job` creates room |
-| TC-AL-2 | After 1202 recovery via `drop_lowest_job`; `create_job` re-attempted | Returns `true`; alarm indicator remains lit (crew must acknowledge) |
-| TC-AL-3 | 8 tasks in Waitlist; `schedule` called | Returns `Full`; task dropped; alarm 1211 raised |
+| TC-AL-1 | 7 jobs in table; `create_job` called with `has_vac=false` | Returns `false`; alarm 1202 raised by caller; `drop_lowest_job` creates room |
+| TC-AL-2 | 7 jobs in table; `create_job` called with `has_vac=true` | Returns `false`; alarms 1202 and 1210 raised; `drop_lowest_job` creates room |
+| TC-AL-3 | After 1202/1210 recovery via `drop_lowest_job`; `create_job` re-attempted | Returns `true`; alarm indicator remains lit (crew must acknowledge) |
+| TC-AL-4 | 8 tasks in Waitlist; `schedule` called | Returns `Full`; task dropped; alarm 1211 raised |
 
 ---
 
@@ -910,7 +938,7 @@ All other modules in `agc-core` import from `crate::executive::*` or from
 - [x] At least 3 test cases with expected values per component (TC-CJ, TC-DL, TC-RUN, TC-SC, TC-DS, TC-RP, TC-AL)
 - [x] Rust API signatures designed (types, ownership — all `&mut self` or `&self`, no lifetimes needed, no heap)
 - [x] Invariants explicitly stated (priority 0 = empty, delta-chain sorted, phase semantics)
-- [x] Consistency with `docs/architecture.md` checked (§5, §6, §12; types match §3.1; HAL usage matches §4.1)
+- [x] Consistency with `docs/architecture.md` checked (§5, §6, §12; types match §3.1; HAL usage matches §4.1; `has_vac` field per §5.2; alarm 1210 per §5.3)
 - [x] Consistency with `specs/hal-spec.md` checked (`pet_watchdog`, `hardware_restart`, `arm_t3`)
 - [x] Consistency with `specs/types-module-spec.md` checked (no `AgcWord`, `u16` for time, `u8` for priority)
 - [x] FRESH START vs RESTART distinction documented

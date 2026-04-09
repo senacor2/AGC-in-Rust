@@ -19,11 +19,14 @@ impl Executive {
         }
     }
 
-    /// Create a new job. Returns `false` if all slots are occupied (alarm 1202).
-    pub fn create_job(&mut self, priority: JobPriority, entry: fn(&mut crate::AgcState), major_mode: u8) -> bool {
+    /// Create a new job. Returns `false` if all slots are occupied (alarm 1202;
+    /// alarm 1210 if `has_vac` is true).
+    ///
+    /// Maps to both AGC NOVAC (`has_vac = false`) and FINDVAC (`has_vac = true`).
+    pub fn create_job(&mut self, priority: JobPriority, entry: fn(&mut crate::AgcState), major_mode: u8, has_vac: bool) -> bool {
         for slot in &mut self.jobs {
             if slot.priority == 0 {
-                *slot = JobEntry { priority, entry, major_mode };
+                *slot = JobEntry { priority, entry, major_mode, has_vac };
                 return true;
             }
         }
@@ -87,7 +90,7 @@ mod tests {
     #[test]
     fn tc_cj_1_create_into_empty() {
         let mut exec = Executive::new();
-        assert!(exec.create_job(20, dummy_job, 0));
+        assert!(exec.create_job(20, dummy_job, 0, false));
         assert_eq!(exec.jobs[0].priority, 20);
     }
 
@@ -96,9 +99,9 @@ mod tests {
     fn tc_cj_2_create_with_6_occupied() {
         let mut exec = Executive::new();
         for i in 1..=6 {
-            assert!(exec.create_job(i, dummy_job, 0));
+            assert!(exec.create_job(i, dummy_job, 0, false));
         }
-        assert!(exec.create_job(7, dummy_job, 0));
+        assert!(exec.create_job(7, dummy_job, 0, false));
     }
 
     // TC-CJ-3: create_job when full returns false
@@ -106,17 +109,17 @@ mod tests {
     fn tc_cj_3_create_when_full() {
         let mut exec = Executive::new();
         for i in 1..=7 {
-            assert!(exec.create_job(i, dummy_job, 0));
+            assert!(exec.create_job(i, dummy_job, 0, false));
         }
-        assert!(!exec.create_job(5, dummy_job, 0));
+        assert!(!exec.create_job(5, dummy_job, 0, false));
     }
 
     // TC-CJ-4: create_job picks first empty slot
     #[test]
     fn tc_cj_4_first_empty_slot() {
         let mut exec = Executive::new();
-        exec.create_job(1, dummy_job, 0);
-        exec.create_job(1, dummy_job_b, 0);
+        exec.create_job(1, dummy_job, 0, false);
+        exec.create_job(1, dummy_job_b, 0, false);
         assert_eq!(exec.jobs[0].priority, 1);
         assert_eq!(exec.jobs[1].priority, 1);
     }
@@ -125,11 +128,11 @@ mod tests {
     #[test]
     fn tc_dl_1_drop_minimum() {
         let mut exec = Executive::new();
-        exec.create_job(10, dummy_job, 0);
-        exec.create_job(20, dummy_job, 0);
-        exec.create_job(5, dummy_job, 0);
-        exec.create_job(30, dummy_job, 0);
-        exec.create_job(15, dummy_job, 0);
+        exec.create_job(10, dummy_job, 0, false);
+        exec.create_job(20, dummy_job, 0, false);
+        exec.create_job(5, dummy_job, 0, false);
+        exec.create_job(30, dummy_job, 0, false);
+        exec.create_job(15, dummy_job, 0, false);
         exec.drop_lowest_job();
         // Slot 2 (priority 5) should be cleared
         assert_eq!(exec.jobs[2].priority, 0);
@@ -147,9 +150,9 @@ mod tests {
     #[test]
     fn tc_dl_3_drop_tie_lowest_index() {
         let mut exec = Executive::new();
-        exec.create_job(10, dummy_job, 0);
-        exec.create_job(10, dummy_job, 0);
-        exec.create_job(10, dummy_job, 0);
+        exec.create_job(10, dummy_job, 0, false);
+        exec.create_job(10, dummy_job, 0, false);
+        exec.create_job(10, dummy_job, 0, false);
         exec.drop_lowest_job();
         // Should drop slot 0 (lowest index on tie)
         assert_eq!(exec.jobs[0].priority, 0);
@@ -161,9 +164,9 @@ mod tests {
     #[test]
     fn find_highest_tiebreak_lowest_index() {
         let mut exec = Executive::new();
-        exec.create_job(10, dummy_job, 0);   // slot 0
-        exec.create_job(20, dummy_job, 0);   // slot 1
-        exec.create_job(20, dummy_job_b, 0); // slot 2 (same priority)
+        exec.create_job(10, dummy_job, 0, false);   // slot 0
+        exec.create_job(20, dummy_job, 0, false);   // slot 1
+        exec.create_job(20, dummy_job_b, 0, false); // slot 2 (same priority)
         assert_eq!(exec.find_highest_priority_job(), Some(1)); // lowest index wins
     }
 }

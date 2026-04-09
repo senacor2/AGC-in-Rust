@@ -264,7 +264,7 @@ pub enum Interrupt {
 | `T6Rupt` | Program interrupt #1 | TIME6 decremented to `-0`; bit 15 of channel 13 auto-cleared | `TIME6` (octal 0031) | 0.625 ms per count (up to 1600 Hz) |
 | `T5Rupt` | Program interrupt #2 | TIME5 overflow | `TIME5` (octal 0030) | Programmable; typically ~100 ms for DAP cycle |
 | `T3Rupt` | Program interrupt #3 | TIME3 overflow | `TIME3` (octal 0026) | Programmable; 10 ms minimum; waitlist dispatch |
-| `T4Rupt` | Program interrupt #4 | TIME4 overflow | `TIME4` (octal 0027) | 120 ms; DSKY update, IMU monitoring; phased 7.5 ms after T3 |
+| `T4Rupt` | Program interrupt #4 | TIME4 overflow | `TIME4` (octal 0027) | 120 ms; rotating I/O task cycle (DSKY update, IMU monitoring, gyro drift comp; see §13.4) |
 | `KeyRupt1` | Program interrupt #5 | Keystroke on main DSKY | Channel 15 (MNKEYIN) | Asynchronous |
 | `KeyRupt2` | Program interrupt #6 | Keystroke on nav DSKY / optics mark | Channel 16 (NAVKEYIN) | Asynchronous |
 | `UplinkRupt` | Program interrupt #7 | Uplink word received in INLINK (octal 0045) | `INLINK` (octal 0045) | Asynchronous |
@@ -734,7 +734,7 @@ The SERVICER must be the only caller.
 | Attribute | Value |
 |-----------|-------|
 | AGC counter cells | CDUX (octal 0033), CDUY (octal 0034), CDUZ (octal 0035) |
-| Return | `[outer, inner, middle]` gimbal angles as `CduAngle` (twos-complement, full revolution = 32768 counts) |
+| Return | `[outer, inner, middle]` gimbal angles as `CduAngle` (u16 twos-complement, full revolution = 65536 counts — see `specs/types-module-spec.md` §2.2 and §3.1) |
 | Side effect | None (non-destructive) |
 | Called from | `control/imu_control.rs`, `programs/p51_p52.rs` alignment programs |
 
@@ -1476,10 +1476,18 @@ buffer; a dedicated lower-priority timer ISR sequences the relays.
 
 ### 14.5 Cortex-M Target Requirements
 
-- **Minimum**: Cortex-M4F (STM32F4). Hardware FPU required for `f64` DAP math.
-- **Preferred**: Cortex-M7 or M33 for the 2-second navigation integration cycle.
+- **Minimum**: Cortex-M7 with double-precision FPU (e.g., STM32H743,
+  STM32F767). Hardware `f64` operations are required for the DAP's 100 ms
+  timing budget. Cortex-M4F has only a single-precision (f32) FPU; `f64` on
+  M4F would require software emulation, which is approximately 10x slower and
+  would violate the DAP deadline for attitude computations.
+- **Cortex-M33**: May be used if the target includes the optional
+  double-precision FPU extension.
 - **Soft-float is prohibited**: Soft-float emulation breaks the DAP 100 ms
   timing budget. The build system must enforce a hard-float ABI.
+
+See `docs/architecture.md` §14.1 for the authoritative statement of this
+requirement and the rationale.
 
 ---
 
@@ -1506,11 +1514,11 @@ Verified against `specs/README.md`:
 
 - [x] AGC source file and line range referenced (§IIE, §IIH, §IID of AGC Symbolic Listing)
 - [x] All erasable variables and their AGC addresses listed (TIME3/4/5/6, PIPA cells, CDU cells, INLINK, GYROCMD)
-- [x] Scale factors documented (CDU: B-1 revolutions; PIPA: ~0.0585 m/s/count; TIME: 0.01 s/count; T6: 0.000625 s/count)
+- [x] Scale factors documented (CDU: B-1 revolutions original / 2^16 counts in Rust u16; PIPA: ~0.0585 m/s/count; TIME: 0.01 s/count; T6: 0.000625 s/count)
 - [x] Corresponding `f64` SI units documented (conversion noted at call sites)
 - [x] Input/output preconditions and postconditions stated (each method in §6–13)
 - [x] Edge cases and error handling specified (§15 and per-method error conditions)
 - [x] At least 3 test cases per sub-trait with expected values (§6.4, §7.5, §8.5, §9.5, §10.5, §11.5, §12.5, §13.5)
 - [x] Rust API signatures designed (types, ownership — all methods take `&mut self` or `&self`)
 - [x] Invariants explicitly stated (destructive reads, relay timing, jet T6 pairing)
-- [x] Consistency with `docs/architecture.md` checked (§4.1, §4.2, §4.3, §11, §13)
+- [x] Consistency with `docs/architecture.md` checked (§4.1, §4.2, §4.3, §11, §13, §14.1)

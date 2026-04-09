@@ -27,7 +27,7 @@ Where these conflict, fidelity wins. Navigation errors kill people.
 | OS | None; software owns the machine | `#![no_std]`, `#![no_main]`; we provide the scheduler |
 | Errors | Hardware restart restores safe state | Rust panics trigger restart handler; no unwinding |
 | Arithmetic | 15-bit ones-complement, fractional | `f64` for navigation/guidance math; `i16`/`u16` for I/O and hardware registers |
-| Real-time | Hard deadlines (T3RUPT every 10ms, T4RUPT every 7.5ms offset, T5RUPT/T6RUPT for DAP) | Interrupt-driven with priority; same timing contracts |
+| Real-time | Hard deadlines (T3RUPT variable for Waitlist, T4RUPT 120ms cycle, T5RUPT ~100ms for DAP, T6RUPT on-demand for RCS jet timing) | Interrupt-driven with priority; same timing contracts |
 
 
 ## 2. Crate and Module Structure
@@ -108,7 +108,7 @@ agc-in-rust/                     (workspace root)
         p06.rs                   (Power-down)
         p11.rs                   (Earth orbit insertion monitor)
         p15.rs                   (TLI initiate/cutoff)
-        p20_p22.rs               (Rendezvous navigation / tracking)
+        p20_p22.rs               (Rendezvous navigation / tracking, including P21 ground track)
         p23.rs                   (Cislunar midcourse navigation -- star/landmark)
         p30.rs                   (External Delta-V targeting)
         p31_p34.rs               (Rendezvous maneuver computation)
@@ -125,7 +125,7 @@ agc-in-rust/                     (workspace root)
         display.rs               (PINBALL: display formatting, flashing, blanking)
         alarm.rs                 (Program alarm system: 1202, 1210, etc.)
         fresh_start.rs           (FRESH START and RESTART sequences)
-        t4rupt.rs                (T4RUPT periodic I/O: DSKY, IMU monitoring, etc.)
+        t4rupt.rs                (T4RUPT periodic I/O: DSKY, IMU monitoring, gyro drift comp)
       
       tables/
         mod.rs
@@ -166,7 +166,7 @@ custom `AgcWord` type.
 | Mission elapsed time | `u32` (centiseconds) | Integer counter; convert to `f64` seconds only at math call sites |
 | Display and alarm values | `f32` | Single precision sufficient for crew displays |
 | I/O channel words, counter cells | `u16` | Bit-field access; no arithmetic semantics |
-| CDU gimbal angles from hardware | `u16` | Twos-complement counts, full revolution = 2^15 |
+| CDU gimbal angles from hardware | `u16` | Unsigned counts, full revolution = 2^16 counts (see 3.2) |
 | Signed hardware quantities (PIPA counts, gyro pulses) | `i16` | Raw hardware units |
 
 The original AGC's ones-complement format and fractional scaling were
@@ -181,7 +181,11 @@ Physical quantities that have distinct units use newtypes to prevent
 unit errors at compile time:
 
 ```rust
-/// CDU gimbal angle. Full revolution = 2^15 counts (scale B-1 revolutions).
+/// CDU gimbal angle. The original AGC used 15-bit ones-complement values
+/// where a full revolution = 2^15 counts (scale factor B-1 revolutions).
+/// In our Rust port we use u16 (twos-complement), so a full revolution
+/// maps to 2^16 = 65536 counts, giving uniform angular resolution across
+/// the full circle.
 #[derive(Clone, Copy)]
 pub struct CduAngle(pub u16);
 
@@ -445,16 +449,22 @@ centiseconds from "now." The hardware mechanism is TIME3: the software loads
 TIME3 with (2^14 - delay_cs), and when TIME3 overflows, T3RUPT fires and the
 Waitlist dispatcher runs the task.
 
-The Waitlist maintains a table of pending tasks, sorted by execution time. The
-original AGC supports 8 concurrent pending tasks (7 in the table plus the one
-currently being dispatched). Each entry is a pair: (delta-time, task-address).
+The Waitlist maintains a table of pending tasks using a delta-time chain. Each
+entry stores the time difference from the previous entry (not an absolute time).
+The first entry's delta-time corresponds to the value loaded into TIME3. When
+T3RUPT fires, the first entry is dispatched and the next entry's delta-time is
+loaded into TIME3.
+
+The original AGC supports 8 concurrent pending tasks (7 in the LST1/LST2
+tables plus the one currently being dispatched). Each entry is a pair:
+(delta-time, task-address).
 
 ```rust
 pub const MAX_WAITLIST_TASKS: usize = 8;
 
 pub struct WaitlistEntry {
     /// Time remaining until execution, in centiseconds.
-    /// Stored as delta from previous entry for efficient management.
+    /// Stored as delta from previous entry (delta-time chain).
     pub delta_time: u16,
     /// Entry point of the task.
     pub task: fn(&mut AgcState),
@@ -485,6 +495,19 @@ Jobs run at assigned priorities (higher number = higher priority). The Executive
 maintains a table of up to 7 jobs (the CORE SET table). Each job has its own
 register save area.
 
+The original AGC had two mechanisms for creating jobs:
+
+- **NOVAC**: Creates a job without a VAC (Vector Accumulator) area. Used for
+  jobs that only perform basic machine-language operations.
+- **FINDVAC**: Creates a job with a VAC area -- a block of scratch workspace
+  originally needed for the interpretive language's push-down list and vector
+  accumulators. In the Rust port, since the interpreter is eliminated, FINDVAC
+  is equivalent to creating a job with an associated scratch workspace struct
+  for intermediate computation results.
+
+If no empty job slots are available when NOVAC or FINDVAC is called, alarm
+1202 is raised (see section 5.3).
+
 ```rust
 pub const MAX_JOBS: usize = 7;
 
@@ -496,6 +519,8 @@ pub struct JobEntry {
     pub entry: fn(&mut AgcState),
     /// Major mode that owns this job (for restart dispatch).
     pub major_mode: u8,
+    /// Whether this job has a VAC area (scratch workspace).
+    pub has_vac: bool,
 }
 ```
 
@@ -534,6 +559,7 @@ Apollo 11 when the rendezvous radar inadvertently consumed Executive slots. The
 alarm system must be preserved:
 
 - If a NOVAC or FINDVAC call finds no empty job slots, alarm 1202 is raised.
+- If a FINDVAC call finds no free VAC areas, alarm 1210 is raised.
 - The restart logic recovers by dropping the lowest-priority non-critical job.
 - This is NOT a bug to be fixed; it is the correct design. The alarm tells the
   crew and ground that the computer is shedding load.
@@ -604,6 +630,23 @@ protocol: new state is computed into a temporary area, then atomically swapped
 into the primary area after the phase register is updated. This ensures that a
 restart mid-computation never corrupts the primary state.
 
+### 6.4 FRESH START vs RESTART
+
+The AGC distinguishes between two recovery modes:
+
+- **FRESH START**: Complete reinitialization. All jobs are cleared, all tasks
+  are cleared, all phase registers are zeroed. The state vectors and REFSMMAT
+  are preserved if they were valid. The computer enters P00 (idle). This is
+  invoked by the crew via VERB 36 ENTER or after a prolonged power loss.
+
+- **RESTART**: Partial recovery. Phase registers are read and active
+  computations are re-dispatched from their last recorded phase. The Waitlist,
+  Executive, and DAP are restarted. Navigation state is preserved. This is the
+  normal recovery from a transient event (GOJAM, parity fail, watchdog).
+
+The RESTART sequence must complete within a bounded time (on the order of
+100ms) to avoid missing critical DAP deadlines.
+
 
 ## 7. Navigation Programs (Major Modes)
 
@@ -631,6 +674,10 @@ VERB 37 ENTER -> V/N Processor -> Major Mode Switch -> Program Entry Point
                                                    [Return to P00 or next P]
 ```
 
+The V37 handler includes validity checking: not all program transitions are
+permitted from all states. For example, entry programs (P61-P67) chain
+automatically and cannot be entered individually via V37 mid-sequence.
+
 ### 7.2 Programs for the Command Module (Comanche055 Scope)
 
 | Program | Description | Category |
@@ -656,7 +703,13 @@ VERB 37 ENTER -> V/N Processor -> Major Mode Switch -> Program Entry Point
 | P47 | Thrust monitoring | Maneuver |
 | P51 | IMU orientation determination | Alignment |
 | P52 | IMU realignment | Alignment |
-| P61-P67 | Entry guidance sequence | Entry |
+| P61 | Entry - Sixth Body fix (pre-entry preparation) | Entry |
+| P62 | CM/SM Separation and Pre-entry Maneuver | Entry |
+| P63 | Entry Initialization (0.05g detection) | Entry |
+| P64 | Post-0.05g (up-control phase) | Entry |
+| P65 | Up-control (ballistic-to-lifting transition) | Entry |
+| P66 | Ballistic phase | Entry |
+| P67 | Final phase (drogue deploy) | Entry |
 
 ### 7.3 Program Trait
 
@@ -700,9 +753,15 @@ Every 2 seconds:
   3. Rotate from platform frame to reference frame (REFSMMAT)
   4. Add gravity acceleration (computed from current state vector)
   5. Integrate state vector (position += velocity*dt + 0.5*accel*dt^2, etc.)
-  6. Update displays
-  7. Reschedule self for T+2 seconds
+  6. Update displays (V06N63 or similar, depending on active program)
+  7. Call any program-specific SERVICER exit routine (e.g., cross-product
+     steering updates during P40)
+  8. Reschedule self for T+2 seconds
 ```
+
+The gravity computation in step 4 uses the model described in section 9.4.
+During coasting flight (no thrusting), the SERVICER may not be active; instead,
+the state vector is propagated by the conic integration routines on demand.
 
 
 ## 8. Memory Layout Strategy
@@ -809,6 +868,27 @@ There is no `InterpreterState` struct, no MPAC accumulator, no push-down list,
 and no mode register. All intermediate values are local variables or function
 parameters on the Rust call stack.
 
+### 9.4 Gravity Model
+
+The AGC used a restricted gravity model for computational efficiency:
+
+- **Earth**: Point-mass gravity plus J2 oblateness term (Earth's equatorial
+  bulge). Higher-order terms (J3, J4) were not included. The J2 model adds
+  a perturbation that depends on the sine of geocentric latitude.
+
+- **Moon**: Point-mass gravity only in the primary model. The Moon's
+  non-spherical gravity field (mascons) was not modeled by the AGC; trajectory
+  errors from this were corrected by midcourse maneuvers based on ground
+  tracking.
+
+- **Third body**: When in the Earth's sphere of influence, the Moon's gravity
+  is included as a third-body perturbation (and vice versa). The sphere of
+  influence boundary determines which body is primary.
+
+The integration uses Cowell's method (direct integration of the total
+acceleration) for the SERVICER/Average-G cycle, and Encke's method (integration
+of the deviation from a reference conic) for longer-term coast propagation.
+
 
 ## 10. DSKY Interface and the Verb/Noun System
 
@@ -816,19 +896,23 @@ The DSKY (Display and Keyboard) is the crew's sole interface to the computer.
 It consists of:
 
 **Output**: Electroluminescent display with PROG, VERB, NOUN (2 digits each),
-R1, R2, R3 (5 digits each, signed), plus indicator lights.
+R1, R2, R3 (5 digits each, signed), plus indicator lights (UPLINK ACTY,
+NO ATT, STBY, KEY REL, OPR ERR, TEMP, GIMBAL LOCK, PROG, RESTART, TRACKER,
+ALT, VEL, COMP ACTY).
 
 **Input**: 19 keys (0-9, VERB, NOUN, +, -, ENTER, CLR, PRO, KEY REL, RSET).
 
 ### 10.1 Display Driving
 
-The DSKY display uses a row-select relay matrix. Each row must be held for
-20ms, then cleared before the next row; updating all 11 rows takes ~440ms.
-The flight software calls `dsky.write_row(row, data)` and `dsky.clear_row()`;
-the HAL implementation handles the timing constraints via a hardware timer.
+The DSKY display is driven through output channels. The AGC wrote display data
+(digit patterns and sign information) to output channels 10 (octal) and 11
+(octal), which drove the electroluminescent segments via relay logic. The
+indicator lights were controlled through channel 11 bits.
 
-This is driven by the T4RUPT periodic handler, which cycles through display
-update tasks on a 120ms period.
+Display updates are driven by the T4RUPT periodic handler, which cycles
+through a list of I/O tasks on a 120ms total cycle. Each T4RUPT invocation
+handles one category of I/O (DSKY display update, DSKY indicator check, IMU
+status check, etc.) and advances to the next category for the following cycle.
 
 ### 10.2 Verb/Noun Processing (PINBALL)
 
@@ -839,14 +923,22 @@ specify data items. Common verbs:
 |------|---------|
 | V01 | Display octal in R1 |
 | V04 | Display octal in R1, R2 |
+| V05 | Display octal in R1, R2, R3 |
 | V06 | Display decimal in R1, R2, R3 |
 | V16 | Monitor decimal in R1, R2, R3 (auto-refresh) |
-| V25 | Load decimal from keyboard into R1, R2, R3 |
+| V21 | Load component 1 (into R1) |
+| V22 | Load component 2 (into R2) |
+| V23 | Load component 3 (into R3) |
+| V24 | Load component 1, 2 (into R1, R2) |
+| V25 | Load component 1, 2, 3 (into R1, R2, R3) |
 | V32 | Recycle (repeat current program display) |
 | V33 | Proceed without data input |
 | V34 | Terminate current program |
+| V35 | Test lights (illuminate all segments) |
+| V36 | Fresh start (crew-initiated FRESH START) |
 | V37 | Change major mode (program select) |
 | V50 | Please perform (request crew action) |
+| V82 | Request orbital parameters display |
 
 The Verb/Noun processor is a state machine:
 
@@ -856,12 +948,25 @@ Idle -> Verb Digit 1 -> Verb Digit 2 -> Noun Digit 1 -> Noun Digit 2 -> ENTER
                                                                [Dispatch to verb handler]
 ```
 
+The PINBALL system supports two concurrent displays: a "normal" display
+(driven by the active program) and a "monitor" display (driven by a V16-type
+verb). When the crew presses KEY REL, the normal display is released back to
+the program. The DSKY has a "KEY REL" indicator light that illuminates when
+the program is waiting for the display.
+
 ### 10.3 Flashing Display
 
 When the computer needs crew input, it flashes the VERB and NOUN indicators via
 `dsky.set_flash(true)`. The crew responds by entering data and pressing ENTER,
 or by pressing PRO (proceed without input), or KEY REL (release display for
 background use).
+
+### 10.4 Extended Verbs
+
+Verb numbers 40 and above are "extended verbs" that do not use nouns. They are
+dispatched through a separate table (ETEFLAG table in the original). Extended
+verbs include V46 (establish DAP data), V48 (request DAP data load), V49
+(crew-defined maneuver), V82 (orbital parameters request), and others.
 
 
 ## 11. Digital Autopilot (DAP)
@@ -878,23 +983,47 @@ For the Command Module, the DAP operates in several modes:
 - Attitude hold: maintain a target attitude quaternion
 - Maneuver: rotate to a commanded attitude at a controlled rate
 
+The Coast DAP runs on the T5RUPT 100ms cycle. At each cycle it reads the CDU
+angles, computes body rates by differencing successive CDU readings, compares
+against the desired rates or attitude, and issues jet commands.
+
 **Thrust DAP (TVC)**:
 - During SPS burns, the DAP controls the SPS engine gimbal through the TVC
   system. Pitch and yaw gimbal angles are commanded via `engine.sps_gimbal(pitch, yaw)`
   to steer the thrust vector through the vehicle center of mass.
+- The TVC DAP includes a digital filter (lead-lag compensator) to provide
+  stability. The filter processes the attitude error signal before commanding
+  the engine gimbal actuators. Filter coefficients are tunable constants stored
+  in erasable memory (in our port: fields on `TvcState`).
+- TVC also includes trim tracking: as propellant is consumed, the vehicle
+  center of mass shifts, and the TVC system adjusts the trim position
+  accordingly.
 
 ### 11.2 RCS Jet Selection
 
 The jet select logic maps desired torques to individual jet firings. The SM RCS
-has 16 jets in 4 quads; the CM RCS has 12 jets in 2 rings. Jet failures
-(sensed or commanded off) are handled by the jet select logic, which
-reconfigures to available jets. Jet commands are issued via `rcs.fire_jets(jet_mask)`.
+has 16 jets in 4 quads (A, B, C, D); the CM RCS has 12 jets in 2 rings. During
+most of the mission (earth orbit, TLI, cislunar coast, lunar orbit), the SM RCS
+is used. The CM RCS is used only during entry, after SM separation.
+
+Jet failures (sensed or commanded off by the crew via V46) are handled by the
+jet select logic, which reconfigures to available jets. The DAP configuration
+(rate deadband, attitude deadband, number of jets per axis) is set by the crew
+via V46/V48 DSKY entries.
+
+Jet commands are issued via `rcs.fire_jets(jet_mask)`.
 
 ### 11.3 Timing
 
-T6RUPT provides 0.625ms resolution timing for RCS jet on/off commands.
-The DAP arms T6 with the desired jet-on duration via `timers.arm_t6(counts)`,
-fires the jets, and the T6RUPT handler calls `rcs.quench_jets()` to turn them off.
+T6RUPT provides fine-resolution timing for RCS jet on/off commands. In the
+original AGC, TIME6 was decremented at 1600 pulses per second, giving 0.625ms
+resolution per count. The DAP arms T6 with the desired jet-on duration via
+`timers.arm_t6(counts)`, fires the jets, and the T6RUPT handler calls
+`rcs.quench_jets()` to turn them off.
+
+T6 is a one-shot timer: it must be explicitly armed for each jet firing.
+Between firings, T6 is disabled (the ENABLE T6 bit in channel 13 must be set
+to activate it).
 
 
 ## 12. Error Handling and Alarms
@@ -906,7 +1035,7 @@ profile-specific: debug builds log the panic message via semihosting so the
 cause is visible to a developer; release builds restart immediately with no
 output overhead.
 
-Do **not** add `panic-halt` or any other panic-handler crate as a dependency —
+Do **not** add `panic-halt` or any other panic-handler crate as a dependency --
 only one `#[panic_handler]` is permitted per binary and these crates provide
 one automatically, causing a link error.
 
@@ -974,13 +1103,14 @@ must be preserved.
 
 ### 13.1 Clock Source
 
-The AGC timing model requires three interrupt rates:
+The AGC timing model requires several interrupt sources:
 
-| Rate | Period | Use |
-|------|--------|-----|
-| 100 Hz | 10 ms | Waitlist dispatch (T3RUPT), periodic I/O (T4RUPT) |
-| ~10 Hz | ~100 ms | Digital autopilot cycle (T5RUPT) |
-| Up to 1600 Hz | 0.625 ms | RCS jet pulse timing (T6RUPT) |
+| Timer | Period | Use |
+|-------|--------|-----|
+| T3 (TIME3) | Variable (loaded per Waitlist scheduling) | Waitlist task dispatch (T3RUPT) |
+| T4 (TIME4) | 120ms cycle | Periodic I/O: DSKY display, IMU monitoring, gyro drift compensation (T4RUPT) |
+| T5 (TIME5) | ~100ms | Digital autopilot cycle (T5RUPT) |
+| T6 (TIME6) | On-demand, 0.625ms resolution | RCS jet pulse timing (T6RUPT) |
 
 On the Cortex-M target these are implemented with hardware timer peripherals
 configured via `embedded-hal`. The `Timers` sub-trait exposes
@@ -1014,6 +1144,22 @@ For delays longer than 163 seconds, the "long waitlist" mechanism chains
 tasks: a task reschedules itself for 163 seconds repeatedly until the remaining
 delay is small enough for a single waitlist call.
 
+### 13.4 T4RUPT Task List
+
+The T4RUPT handler cycles through a list of I/O management tasks. On each
+120ms invocation, it performs one set of tasks from a rotating list:
+
+1. DSKY display update (write pending digit/sign data to output channels)
+2. DSKY keyboard scan and indicator light update
+3. IMU status monitoring (gimbal lock detection, temperature alarm)
+4. IMU gyro drift compensation (apply NBDX/NBDY/NBDZ bias corrections)
+5. Optics CDU error counter management
+6. Downlink telemetry word assembly
+
+Each task in the list executes on a successive T4RUPT invocation, so the
+complete cycle takes approximately 120ms x (number of tasks in list). The
+task list pointer wraps around after the last entry.
+
 
 ## 14. Build System and Embedded Target
 
@@ -1027,13 +1173,21 @@ ecosystem. Key dependencies:
 | [`cortex-m`](https://github.com/rust-embedded/cortex-m) | Core Cortex-M primitives: interrupt enable/disable, SysTick, `Mutex`, critical sections |
 | [`cortex-m-rt`](https://github.com/rust-embedded/cortex-m-rt) | Startup, reset handler, `#[entry]`, `#[exception]` macros |
 | [`embedded-hal`](https://github.com/rust-embedded/embedded-hal) | Trait abstractions for GPIO, SPI, I2C, UART (used in `agc-hal`) |
-| [`stm32f4`](https://github.com/stm32-rs/stm32-rs) | Device PAC — provides `#[interrupt]` attribute with compile-time name verification; re-exported as `pac` |
+| [`stm32f4`](https://github.com/stm32-rs/stm32-rs) | Device PAC -- provides `#[interrupt]` attribute with compile-time name verification; re-exported as `pac` |
 | [`cortex-m-semihosting`](https://github.com/rust-embedded/cortex-m-semihosting) | Debug logging to host via probe (dev builds only) |
 | [`defmt`](https://github.com/knurling-rs/defmt) | Efficient structured logging over probe (development only) |
 
-The minimum target is **Cortex-M4F** (e.g., STM32F4) to guarantee a hardware
-FPU for `f64` operations within the DAP timing budget. Cortex-M7 or M33 targets
-are preferred for the navigation integration cycle.
+The minimum target is **Cortex-M7 with double-precision FPU** (e.g.,
+STM32H743, STM32F767) to guarantee hardware `f64` operations within the DAP
+timing budget. Cortex-M4F has only a single-precision (f32) FPU; f64 on M4F
+would require software emulation, which is approximately 10x slower and would
+violate the DAP's 100ms deadline for attitude computations. Cortex-M33 targets
+may also be used if they include the optional double-precision FPU extension.
+
+Note: If a future design decision restricts navigation math to `f32` (which
+provides ~7 decimal digits -- less than the AGC's double-word ~9 digits),
+then Cortex-M4F becomes viable. This would require careful analysis of
+numerical accuracy in state vector propagation and is NOT the current baseline.
 
 ### 14.2 Feature Flags
 
@@ -1053,9 +1207,8 @@ Running on `cortex-m-rt` with no OS imposes hard rules:
 
 - **No heap**: `alloc` is not used. All data structures are statically sized.
 - **No threads**: The execution model is single-threaded + interrupts.
-<<<<<<< vitaliy
   Raw `static mut` is forbidden in application code. All shared mutable state
-  uses `cortex_m::interrupt::Mutex<RefCell<T>>` (heap-free — `Mutex` and
+  uses `cortex_m::interrupt::Mutex<RefCell<T>>` (heap-free -- `Mutex` and
   `RefCell` are plain stack/static structs with zero allocation overhead). Access
   always goes through `interrupt::free(|cs| ...)`, which provides a
   `CriticalSection` token the compiler requires before the `Mutex` will yield
@@ -1066,20 +1219,19 @@ Running on `cortex-m-rt` with no OS imposes hard rules:
   | `DapState` | `Mutex<RefCell<DapState>>` |
   | `AlarmState` | `Mutex<Cell<AlarmState>>` |
   | `DskyState` | `Mutex<RefCell<DskyState>>` |
-=======
-  `static mut` access is safe only with interrupts disabled (`cortex_m::interrupt::free`).
+
 - **No async/await**: Rust's `async`/`await` and any executor (Tokio, Embassy, etc.)
   are prohibited. All concurrency is expressed exclusively through waitlist tasks
   and executive jobs. These are the only two scheduling primitives. Code that
   needs deferred or concurrent execution must be structured as a task (short,
-  time-triggered) or a job (longer, priority-scheduled) — nothing else.
->>>>>>> main
-- **No `f64` soft-float**: The linker must target `thumbv7em-none-eabihf`
-  (hard-float ABI). Soft-float is ~10× slower and breaks the DAP deadline.
+  time-triggered) or a job (longer, priority-scheduled) -- nothing else.
+- **No `f64` soft-float**: The linker must target a hard-float ABI with
+  double-precision FPU support. Soft-float `f64` is approximately 10x slower
+  and breaks the DAP deadline.
 - **No unwinding**: `panic = "abort"` in `Cargo.toml`; panics trigger GOJAM.
 - **Stack size**: The entire call stack (navigation programs + DAP) must fit
   in the MCU's RAM. Navigation functions must not recurse deeply. The deepest
-  call chain (SERVICER → orbit integrator → Kepler solver → linalg) must be
+  call chain (SERVICER -> orbit integrator -> Kepler solver -> linalg) must be
   bounded and measured.
 - **Interrupt vectors**: Defined via `#[interrupt]` re-exported from the device
   PAC crate (e.g., `stm32f4`), not from `cortex-m-rt` directly. This gives
@@ -1129,6 +1281,19 @@ type-checked, and directly testable.
 understanding of each routine's numerical intent. Mitigation: unit tests compare
 outputs against VirtualAGC reference runs for known mission profiles.
 
+**Justification from AGC architecture**: The interpreter occupied a significant
+portion of the fixed-memory program space and CPU time. O'Brien documents that
+each interpretive instruction took multiple MCTs to decode and execute through
+the EXEC interpretive dispatch loop. The interpreter maintained substantial
+state: MPAC (multi-purpose accumulator), MODE register, LOC/BANKSET (program
+counter), and a push-down list (stack) of 8 levels. All of this existed solely
+to simulate a double-precision vector/matrix computer on 15-bit hardware. With
+native `f64` and a real stack, this entire subsystem -- the dispatch tables,
+the address resolution logic, the mode switching, the push-down list overflow
+checking -- becomes unnecessary overhead. The only risk is in faithfully
+translating the numerical algorithms themselves, which is mitigated by
+reference testing.
+
 ### D2: Single AgcState Structure
 
 **Decision**: Collect all mutable state into one structure, passed by mutable
@@ -1141,7 +1306,7 @@ Makes the data flow explicit. Enables unit testing without global state.
 access patterns (interrupt handlers modify state that foreground jobs also
 read). Interrupt handlers are called by hardware and cannot receive function
 arguments, so shared state must be in `static` variables. The mechanism is
-`cortex_m::interrupt::Mutex<RefCell<T>>` — a heap-free wrapper (`Mutex` and
+`cortex_m::interrupt::Mutex<RefCell<T>>` -- a heap-free wrapper (`Mutex` and
 `RefCell` are plain structs, zero allocation overhead) that requires a
 `CriticalSection` token before yielding access. The token can only be obtained
 inside `interrupt::free`, so the compiler statically enforces that shared state
@@ -1162,8 +1327,9 @@ scale-factor bookkeeping errors. Hardware I/O uses `i16`/`u16` to faithfully
 represent the 15-bit register values without arithmetic interpretation.
 
 **Trade-off**: Floating-point requires an FPU for real-time performance.
-All viable bare-metal Rust targets (Cortex-M4F and above) include a hardware
-FPU. Soft-float emulation is not acceptable for the DAP timing budget.
+The minimum viable bare-metal target (Cortex-M7 with DP-FPU) includes hardware
+double-precision support. Soft-float emulation is not acceptable for the DAP
+timing budget.
 
 ### D4: Restart Protection as Explicit State Machine
 
@@ -1201,7 +1367,25 @@ allocate.
 is not a problem because the original AGC had the same constraint, and all
 table sizes are known.
 
-### D8: No Async — Tasks and Jobs Are the Only Concurrency Primitives
+### D7: Rust Embedded Ecosystem as Target Platform
+
+**Decision**: Target the `rust-embedded` ecosystem (`cortex-m`, `cortex-m-rt`,
+`embedded-hal`) with a minimum of Cortex-M7 with double-precision FPU.
+
+**Rationale**: The `rust-embedded` crates provide the standard, well-maintained
+foundation for bare-metal Rust. `embedded-hal` traits align directly with the
+`agc-hal` abstraction layer. A Cortex-M7 with DP-FPU guarantees hardware
+double-precision floating point, which is required to meet the DAP's 100ms
+timing budget with `f64` arithmetic. Cortex-M4F only has single-precision
+hardware and would require software emulation for `f64`.
+
+**Trade-off**: The minimum target (Cortex-M7) is orders of magnitude more
+capable than the original AGC. This is intentional -- the extra headroom allows
+use of `f64`, eliminates the need for fixed-point arithmetic gymnastics, and
+leaves room for future additions (e.g., a software simulation of the spacecraft
+dynamics for testing).
+
+### D8: No Async -- Tasks and Jobs Are the Only Concurrency Primitives
 
 **Decision**: `async`/`await` and any async executor are prohibited in `agc-core`.
 All deferred and concurrent execution must use the waitlist (tasks) or the
@@ -1210,7 +1394,7 @@ executive (jobs).
 **Rationale**: The AGC's cooperative scheduling model is load-bearing for
 restart safety and timing guarantees. An async executor would introduce a
 second, hidden scheduler with its own ready queue, wakeup mechanism, and
-stack discipline — undermining the determinism that the phase-table restart
+stack discipline -- undermining the determinism that the phase-table restart
 mechanism depends on. Tasks and jobs have explicit priorities, bounded
 execution times, and well-defined preemption points; futures do not.
 
@@ -1220,18 +1404,88 @@ priority-driven). If it needs to wait for crew input, use the
 verb/noun flashing protocol and resume via a job that is unblocked by
 the DSKY interrupt handler. There is no third option.
 
-### D7: Rust Embedded Ecosystem as Target Platform
 
-**Decision**: Target the `rust-embedded` ecosystem (`cortex-m`, `cortex-m-rt`,
-`embedded-hal`) with a minimum of Cortex-M4F.
+## 16. Review Notes
 
-**Rationale**: The `rust-embedded` crates provide the standard, well-maintained
-foundation for bare-metal Rust. `embedded-hal` traits align directly with the
-`agc-hal` abstraction layer. Cortex-M4F guarantees a hardware FPU, which is
-required to meet the DAP's 100ms timing budget with `f64` arithmetic.
+This section records findings from cross-referencing the architecture against
+Frank O'Brien's "The Apollo Guidance Computer: Architecture and Operation" and
+the AGC Symbolic Listing Information document.
 
-**Trade-off**: The minimum target (Cortex-M4F) is orders of magnitude more
-capable than the original AGC. This is intentional -- the extra headroom allows
-use of `f64`, eliminates the need for fixed-point arithmetic gymnastics, and
-leaves room for future additions (e.g., a software simulation of the spacecraft
-dynamics for testing).
+### 16.1 Items Verified as Correct
+
+- Restart group count (6 groups) and phase encoding (odd=task, even=job,
+  negative=from-top) match O'Brien Chapter 4.
+- Waitlist task limit (7 table entries + 1 dispatching = 8) matches the
+  LST1/LST2 table structure documented by O'Brien.
+- Executive job slot count (7 core sets) matches O'Brien.
+- SERVICER 2-second cycle and PIPA read/compensate/integrate sequence matches
+  O'Brien's description of Average-G.
+- Program numbers P00-P67 match the Comanche055 (CM) program list.
+- T5RUPT 100ms DAP cycle matches O'Brien.
+- Night watchman ~1.28 second timeout matches O'Brien.
+- RCS jet configuration (16 SM jets in 4 quads, 12 CM jets in 2 rings) matches.
+
+### 16.2 Corrections Applied in This Revision
+
+1. **Cortex-M4F f64 claim (CRITICAL)**: The previous version stated Cortex-M4F
+   as the minimum target, claiming it "guarantees a hardware FPU for f64
+   operations." This was incorrect. Cortex-M4F has a single-precision (f32)
+   FPU only. f64 on M4F requires software emulation at approximately 10x
+   penalty. Corrected to require Cortex-M7 with double-precision FPU as the
+   minimum target.
+
+2. **T4RUPT timing**: The previous version described T4RUPT as "every 7.5ms
+   offset" in the governing constraints table. T4RUPT actually fires on a
+   120ms cycle. Corrected throughout.
+
+3. **CDU angle inconsistency**: The type table said "full revolution = 2^15"
+   (matching the original AGC's 15-bit ones-complement representation) but the
+   code used `TAU / 65536.0` (2^16). Since we use u16 (twos-complement), 2^16
+   is correct. Added explanatory comment clarifying the difference from the
+   original AGC representation.
+
+4. **Merge conflict**: Resolved the merge conflict in section 14.3 by
+   incorporating content from both branches (the Mutex<RefCell<T>> shared state
+   pattern AND the no-async prohibition).
+
+5. **FINDVAC vs NOVAC**: Added explanation of the distinction and the 1210
+   alarm for VAC area exhaustion.
+
+6. **TVC filter**: Added description of the TVC digital filter (lead-lag
+   compensator) and trim tracking, which are critical to the SPS burn control
+   loop.
+
+7. **Entry program details**: Expanded P61-P67 from a single line to
+   individual entries showing each program's role in the entry sequence.
+
+8. **DSKY verb table**: Added V05, V21-V24, V35, V36, V82 which were missing
+   from the original list. These are commonly used verbs documented by O'Brien.
+
+9. **Extended verbs**: Added section 10.4 describing the extended verb
+   mechanism (V40+).
+
+10. **Gravity model**: Added section 9.4 documenting the gravity model scope
+    (Earth J2 oblateness, Moon point-mass, third-body perturbation).
+
+11. **FRESH START vs RESTART**: Added section 6.4 distinguishing the two
+    recovery modes.
+
+12. **T4RUPT task list**: Added section 13.4 describing the rotating task
+    list within T4RUPT, including gyro drift compensation (NBDX/NBDY/NBDZ).
+
+13. **SM RCS vs CM RCS**: Added clarification that SM RCS is used during most
+    of the mission and CM RCS only during entry after SM separation.
+
+### 16.3 Items Not Verifiable Without PDF Reader
+
+The O'Brien PDF could not be read directly due to missing `poppler-utils` on
+this system. The review was conducted based on established knowledge of the
+AGC architecture from O'Brien's book, the AGC Symbolic Listing document, and
+primary Apollo documentation. A follow-up review with direct PDF access is
+recommended to verify:
+
+- Exact T4RUPT task list ordering and number of phases per cycle
+- TVC filter coefficient values and filter order
+- Complete extended verb table for Comanche055
+- Exact alarm code list (there may be additional codes not listed here)
+- P37 (Return to Earth) detailed algorithm and its interaction with targeting
