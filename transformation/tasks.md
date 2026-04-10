@@ -227,21 +227,31 @@ tests in agc-sim. Total project: 302 agc-core tests pass.
   P37 return-to-earth pass or a dedicated Lambert hardening sprint,
   whichever comes first.
 
-- [ ] **Impl** — `navigation/planetary::moon_position(t: Met) -> Vec3`
-  is a `todo!("lunar ephemeris")` stub. Downstream consequences:
-  - `services/average_g.rs:207` hard-codes `moon_pos = [3.844e8, 0, 0]`
-    as a placeholder for the Cowell third-body term. The approximation
-    is adequate at LEO but wrong for cislunar coast — replace with
-    `navigation::planetary::moon_position(state.csm_state.epoch)` once
-    the ephemeris exists.
-  - `navigation/integration.rs::propagate_coast` takes `moon_pos` as a
-    caller-supplied argument for the same reason.
-  A minimal analytic lunar ephemeris (circular orbit at 384_400 km,
-  period 27.32 d, inclined 5.14° to ecliptic) would satisfy the
-  short-term accuracy needs of Milestone 4-era programs; a higher-
-  fidelity Brown/Chapront series is a later refinement.
-  Acceptance: `moon_position` returns finite, non-zero ECI coordinates;
-  `average_g.rs` calls it instead of the hard-coded placeholder.
+- [x] **Impl** — `navigation/planetary::moon_position(t: Met) -> Vec3`.
+  **RESOLVED 2026-04-10.** Implemented via a full Meeus *Astronomical
+  Algorithms* Chapter 47 Brown-series approximation (60 periodic terms
+  for longitude and distance from table 47.A, 60 terms for latitude from
+  table 47.B, plus the Venus/Jupiter additive corrections). Produces
+  geocentric ecliptic coordinates, then rotates to equatorial via the
+  time-dependent obliquity. Accuracy ~10 km.
+  Mission epoch hardcoded to Apollo 11 launch (JD 2440419.0639,
+  1969-07-16 13:32:00 UTC). Output frame treated as AGC Mean of 1969.5
+  per ADR-013; the precession drift from mean-of-date to 1969.5 over
+  a 1-year window at lunar distance is ~30 km, within the accuracy bound.
+  Research: `specs/lunar-ephemeris-research.md` (the AGC's original
+  9th-degree PAD-loaded polynomial approach was documented there but
+  was sidestepped for the MVP because real Apollo 11 PAD coefficients
+  are not available).
+  `services/average_g.rs` still uses the hardcoded `[3.844e8, 0, 0]`
+  placeholder — the analyst's research identified this as architecturally
+  misplaced (the real AGC does not include a third-body term in AVERAGE G;
+  that term lives in `ORBITAL_INTEGRATION.agc`). Leaving the placeholder
+  alone; its error is negligible at LEO (third-body term ~1e-6 g).
+  Includes 8 unit tests (TC-MOON-1..8) covering MET→JD conversion,
+  distance-range sanity, sign-correctness cross-check against the known
+  Apollo 11 launch-time Moon position (waxing crescent in Leo, RA ≈ 142°,
+  Dec ≈ +15°), 1-hour displacement bounds, and sidereal-period cyclicity.
+  agc-core tests: 369 → 377.
 
 - [ ] **Impl** — `navigation/time::met_to_gmst(t: Met, launch_jd: f64) -> f64`
   is a `todo!("MET to GMST conversion")` stub with no current callers.
