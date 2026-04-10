@@ -97,6 +97,17 @@ impl Default for VnPhase {
     }
 }
 
+/// A pending V50 "please perform" request raised by a program and
+/// waiting for the crew to press PROCEED.
+#[derive(Clone, Copy, Debug)]
+pub struct Pending50 {
+    /// Noun identifying the action the crew is being asked to perform.
+    pub noun: u8,
+    /// Callback invoked when the crew presses PRO. Runs the
+    /// program-specific acknowledgement logic (e.g. arm SPS engine).
+    pub on_proceed: fn(&mut crate::AgcState),
+}
+
 /// Crew interface Verb/Noun input state.
 #[derive(Clone, Copy, Debug)]
 pub struct VnState {
@@ -104,6 +115,9 @@ pub struct VnState {
     /// TIG stashed by V25 N33 while waiting for the delta-V components.
     /// Consumed by V25 N81 to invoke `p30_load_dv_lvlh`.
     pub pending_tig: Option<Met>,
+    /// A pending V50 "please perform" request, set by a program and
+    /// cleared when the crew presses PRO.
+    pub pending_v50: Option<Pending50>,
 }
 
 impl VnState {
@@ -112,6 +126,7 @@ impl VnState {
         Self {
             phase: VnPhase::Idle,
             pending_tig: None,
+            pending_v50: None,
         }
     }
 }
@@ -120,6 +135,23 @@ impl Default for VnState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Raise a V50 "please perform" request.
+///
+/// Called by a program that needs crew acknowledgement before
+/// proceeding. Sets the DSKY to `V50 Nxx` flashing and stashes the
+/// callback. When the crew presses PRO the callback runs and the
+/// request is cleared.
+pub fn request_v50(
+    state: &mut crate::AgcState,
+    noun: u8,
+    on_proceed: fn(&mut crate::AgcState),
+) {
+    state.dsky.verb = 50;
+    state.dsky.noun = noun;
+    state.dsky.flashing = true;
+    state.vn.pending_v50 = Some(Pending50 { noun, on_proceed });
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -140,6 +172,16 @@ pub fn feed_key(state: &mut crate::AgcState, key: Key) {
     }
     if key == Key::Clr {
         state.vn.phase = Idle;
+        return;
+    }
+    // PRO — acknowledge a pending V50 "please perform" request.
+    // If no V50 is pending, PRO is a no-op (the real AGC silently
+    // ignored PRO outside of a V50 context).
+    if key == Key::Pro {
+        if let Some(pending) = state.vn.pending_v50.take() {
+            (pending.on_proceed)(state);
+            state.dsky.flashing = false;
+        }
         return;
     }
     // VERB always restarts the entry — matches AGC behaviour.
@@ -646,6 +688,66 @@ mod tests {
 
         assert_eq!(state.vn.phase, VnPhase::OprErr);
         assert!(state.dsky.opr_err);
+    }
+
+    // ── Phase 4: V50 / PRO acknowledgement ────────────────────────────────────
+
+    /// TC-V50-1: request_v50 sets DSKY to flashing V50 Nxx and stashes pending.
+    #[test]
+    fn tc_v50_1_request_sets_dsky() {
+        fn noop(_: &mut AgcState) {}
+        let mut state = AgcState::new();
+
+        request_v50(&mut state, 99, noop);
+
+        assert_eq!(state.dsky.verb, 50);
+        assert_eq!(state.dsky.noun, 99);
+        assert!(state.dsky.flashing);
+        assert!(state.vn.pending_v50.is_some());
+    }
+
+    /// TC-V50-2: PRO key with pending V50 invokes callback and clears.
+    #[test]
+    fn tc_v50_2_pro_invokes_callback() {
+        fn arm(state: &mut AgcState) {
+            state.engine_thrusting = true;
+        }
+        let mut state = AgcState::new();
+        request_v50(&mut state, 99, arm);
+
+        feed_key(&mut state, Key::Pro);
+
+        assert!(state.engine_thrusting, "callback ran");
+        assert!(state.vn.pending_v50.is_none());
+        assert!(!state.dsky.flashing);
+    }
+
+    /// TC-V50-3: PRO key with no pending V50 is a no-op.
+    #[test]
+    fn tc_v50_3_pro_without_pending_noop() {
+        let mut state = AgcState::new();
+        state.vn.pending_v50 = None;
+
+        feed_key(&mut state, Key::Pro);
+
+        assert_eq!(state.vn.phase, VnPhase::Idle, "Pro must not raise OPR ERR");
+        assert!(!state.dsky.opr_err);
+    }
+
+    /// TC-V50-4: PRO during EnteringVerb is still honoured for a pending V50.
+    #[test]
+    fn tc_v50_4_pro_during_entry() {
+        fn mark_done(state: &mut AgcState) {
+            state.burn.cutoff_time_met = true; // arbitrary observable
+        }
+        let mut state = AgcState::new();
+        request_v50(&mut state, 33, mark_done);
+
+        feed(&mut state, &[Key::Verb, d(3)]);
+        feed_key(&mut state, Key::Pro);
+
+        assert!(state.burn.cutoff_time_met);
+        assert!(state.vn.pending_v50.is_none());
     }
 
     // ── Phase 2: Data entry verbs ─────────────────────────────────────────────

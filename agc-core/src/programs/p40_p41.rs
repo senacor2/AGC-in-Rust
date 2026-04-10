@@ -10,11 +10,12 @@
 //!
 //! AGC source: Comanche055/P40-P47.agc, Comanche055/POWERED_FLIGHT_SUBROUTINES.agc
 
-use crate::control::{dap::dap_init, DapMode};
+use crate::control::{dap::dap_init, tvc::tvc_init, DapMode};
 use crate::executive::job::JobPriority;
 use crate::guidance::maneuver::{burn_init, burn_servicer_exit};
 use crate::math::linalg::norm;
 use crate::services::average_g::start_servicer;
+use crate::services::v_n::request_v50;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -45,6 +46,9 @@ const ALARM_P41_WRONG_REGIME: u16 = 228; // burn too large for RCS
 /// DSKY verb/noun for the burn status display (V06N40).
 const VERB_DISPLAY: u8 = 6;
 const NOUN_BURN_STATUS: u8 = 40;
+
+/// V50 noun for "please enable SPS engine" crew acknowledgement.
+const NOUN_ENGINE_ARM: u8 = 99;
 
 // ── Entry points ──────────────────────────────────────────────────────────────
 
@@ -140,13 +144,32 @@ pub fn p40_init(state: &mut crate::AgcState) -> JobPriority {
     engage_burn(state);
 
     // DAP into Maneuver mode (attitude slew toward burn_attitude, then
-    // hold). The ISR shim drives the transition to Tvc mode at ignition.
+    // hold). When the crew presses PRO in response to the V50 N99
+    // request below, the `p40_arm_engine` callback advances the DAP
+    // to Tvc mode and sets engine_thrusting.
     dap_init(state, DapMode::Maneuver);
 
     state.major_mode = P40_MAJOR_MODE;
     set_burn_display(state, P40_MAJOR_MODE);
 
+    // Request crew acknowledgement before engine ignition.
+    request_v50(state, NOUN_ENGINE_ARM, p40_arm_engine);
+
     PRIORITY
+}
+
+/// Callback invoked when the crew presses PRO in response to the
+/// P40 V50 N99 engine-arm request.
+///
+/// Transitions the DAP to Tvc mode (reinitialising the lead-lag
+/// filter at the current trim) and sets `engine_thrusting = true`.
+/// The ISR shim will observe the flag on its next iteration and
+/// assert the SPS-enable discrete.
+pub fn p40_arm_engine(state: &mut crate::AgcState) {
+    state.dap_state.mode = DapMode::Tvc;
+    let trim = (state.tvc_state.trim_pitch, state.tvc_state.trim_yaw);
+    tvc_init(&mut state.tvc_state, &mut state.tvc_filter, trim);
+    state.engine_thrusting = true;
 }
 
 // ── P41 ───────────────────────────────────────────────────────────────────────
@@ -262,7 +285,14 @@ mod tests {
         assert_eq!(state.alarm.code, 0, "no alarm on happy path");
         assert_eq!(state.major_mode, P40_MAJOR_MODE);
         assert_eq!(state.dsky.prog, P40_MAJOR_MODE);
-        assert_eq!(state.dsky.noun, NOUN_BURN_STATUS);
+
+        // After init_p40, the DSKY shows the flashing V50 N99 engine-arm
+        // request rather than the burn-status display. (set_burn_display
+        // runs first, then request_v50 overrides verb/noun/flashing.)
+        assert_eq!(state.dsky.verb, 50);
+        assert_eq!(state.dsky.noun, NOUN_ENGINE_ARM);
+        assert!(state.dsky.flashing);
+        assert!(state.vn.pending_v50.is_some());
 
         // Burn engaged
         assert!(state.burn.burn_active);
@@ -278,8 +308,34 @@ mod tests {
         // DAP in Maneuver mode
         assert_eq!(state.dap_state.mode, DapMode::Maneuver);
 
-        // Engine NOT yet thrusting (ignition deferred to ISR shim)
+        // Engine NOT yet thrusting (awaits PRO key)
         assert!(!state.engine_thrusting);
+    }
+
+    /// TC-P40-6: PRO key in response to V50 N99 arms the SPS engine and
+    /// transitions the DAP to Tvc mode.
+    #[test]
+    fn tc_p40_6_pro_arms_engine() {
+        use crate::services::v_n::{feed_key, Key};
+
+        let mut state = AgcState::new();
+        state.time = Met(0);
+        state.pending_maneuver = Some(make_maneuver([50.0, 0.0, 0.0], Met(360_000)));
+
+        init_p40(&mut state);
+
+        // Pre-condition: pending V50, Maneuver mode, no engine.
+        assert!(state.vn.pending_v50.is_some());
+        assert_eq!(state.dap_state.mode, DapMode::Maneuver);
+        assert!(!state.engine_thrusting);
+
+        feed_key(&mut state, Key::Pro);
+
+        // Post-condition: V50 cleared, Tvc mode, engine thrusting.
+        assert!(state.vn.pending_v50.is_none());
+        assert!(!state.dsky.flashing, "flashing clears on PRO");
+        assert_eq!(state.dap_state.mode, DapMode::Tvc);
+        assert!(state.engine_thrusting);
     }
 
     // ── P41 ───────────────────────────────────────────────────────────────────
