@@ -263,17 +263,69 @@ tests in agc-sim. Total project: 302 agc-core tests pass.
   Acceptance: `propagate_coast` switches to `kepler_step` for `dt > 600 s`
   in the pure-two-body case; all existing integration tests still pass.
 
-- [ ] **Data** — Populate `CISLUNAR_STAR_TABLE` in `programs/p23.rs` and
-  the general `navigation/star_catalog.rs` with real J2000 star directions
-  from `Comanche055/STAR_TABLES.agc`. Currently all 8 entries have
-  `direction: [0.0; 3]`. P23 tests use hard-coded star directions so the
-  zero table does not block tests, but it blocks any real-mission use of
-  the catalogue (sextant mark handler must look up star `i`'s inertial
-  direction from the table). `navigation/star_catalog.rs` is also an
-  empty orphan module — either populate it and have P23 import from
-  there, or delete it and keep the table inside `p23.rs`.
-  Acceptance: at least 8 stars with non-zero unit-vector directions,
-  unit-length within 1e-9, sourced from `STAR_TABLES.agc`.
+- [ ] **Data + Impl** — Populate `navigation/star_catalog.rs` with the
+  full 37-entry AGC navigation star catalogue, sourced verbatim from
+  `Comanche055/STAR_TABLES.agc`. Currently both `CISLUNAR_STAR_TABLE` in
+  `programs/p23.rs` (8 entries) and `navigation/star_catalog.rs` (empty
+  orphan) carry zero directions. Full analysis of the AGC's star-table
+  usage is in `specs/star-catalog-research.md`.
+  - **Scope**: all 37 stars, not 8. The full 37 are needed by PICAPAR's
+    pair-selection algorithm in P51/P52 (a truncated table would break
+    the pair search). P23 can then look up any star 1..=37 that the
+    crew enters.
+  - **Consumers** (per research §3): P23 cislunar nav, P51/P52 IMU
+    alignment, R51 fine-align, R56/PICAPAR auto-star-select, the
+    PLANET optics-mark entry point.
+  - **Recommended layout** (per research §7.2):
+    `pub const STAR_CATALOG: [StarEntry; 37]` in `navigation/star_catalog.rs`;
+    `pub fn star_direction(number: u8) -> Option<[f64; 3]>` helper;
+    `CISLUNAR_STAR_TABLE` in `p23.rs` removed in favour of the shared
+    module.
+  - **Index arithmetic gotcha**: the AGC table is stored descending
+    (star 37 first, star 1 last) with the `CATLOG` label at the END.
+    Rust lookup is `STAR_CATALOG[37 - star_number]` (0-based), NOT
+    `STAR_CATALOG[star_number - 1]`. The research doc extracts the
+    37 direction vectors in star-number order so the Rust array can
+    be written as `STAR_CATALOG[star_number - 1]` instead — the
+    developer agent must pick one convention and document it.
+  - **Struct shape**: `{ number: u8, name: &'static str, direction: [f64; 3] }`.
+    The `name` field is for documentation only — the AGC has no star
+    names. Verify against a published Apollo navigation star list
+    (e.g. NASA Mission Planning documents or GSOP §5.6) before
+    committing.
+  - **Planet mode**: `star_direction(n)` returns `None` for `n == 0`
+    and `n > 37`. Callers (P23 in particular) handle the `n == 0`
+    planet case by reading a separately-stored Sun/planet vector
+    (`STARSAV3` in the AGC; in Rust this lives in AgcState or is
+    computed from an ephemeris — not from the star catalogue).
+  - **Acceptance**: all 37 entries have unit-length direction vectors
+    (within 1e-9 of norm 1.0), `navigation/star_catalog.rs` is no
+    longer orphaned (P23 imports from it), and a unit test verifies
+    every entry's magnitude.
+  - **Blocked by**: reference-frame decision (see next item).
+
+- [ ] **Architecture** — Resolve the navigation reference-frame
+  discrepancy between the Rust specs and the AGC source. The existing
+  specs (`specs/p23-spec.md` §3.2, `specs/p51_p52-spec.md` §1) state the
+  reference frame is **J2000 mean equatorial**. The AGC's `STAR_TABLES.agc`
+  direction vectors are stored in **Earth mean equatorial of ~1969.5**
+  (the Apollo-era mission epoch). The precession between these two
+  frames is ~0.42° along the ecliptic — far above the AGC's own
+  targeting accuracy threshold.
+  - **Option A (recommended for MVP)**: declare the port's reference
+    frame to be "AGC mean of 1969.5" matching the original hardware.
+    No rotation needed; star vectors, REFSMMAT operations, and sextant
+    predictions all use the same frame natively. Downside: does not
+    match contemporary ephemeris data which is generally J2000.
+  - **Option B**: declare the port's reference frame to be J2000 and
+    apply an IAU 1976 precession rotation (~0.42°) to each star vector
+    at compile time. Star catalogue code must track the rotation; a
+    bug in the rotation would silently misalign everything.
+  - **Acceptance**: update `specs/state-vector-spec.md` §4.1 (`Frame`)
+    with an explicit frame-epoch declaration; update both `p23-spec.md`
+    and `p51_p52-spec.md` to state the same frame; document the choice
+    in an ADR.
+  - **Blocks**: the star catalogue population above.
 
 ## Completed
 
