@@ -1,0 +1,74 @@
+[
+  {
+    "name": "equatorial_leo_circular",
+    "description": "Chaser on a 300 km circular equatorial orbit along +X with +Y prograde velocity. The RSW/LVLH frame should be R=+x, S=+y, W=+z. This is the simplest possible case and the baseline for all other LVLH targeting tests.",
+    "position_m": [6671000.0, 0.0, 0.0],
+    "velocity_m_s": [0.0, 7726.0, 0.0],
+    "test_dv_lvlh_m_s": [0.0, 100.0, 0.0],
+    "body": "earth",
+    "notes": "A 100 m/s S-axis (in-track) burn in LVLH should map to [0, 100, 0] in inertial. RSW matrix columns are [[1,0,0],[0,1,0],[0,0,1]] = identity."
+  },
+  {
+    "name": "polar_leo_ascending_node",
+    "description": "Polar LEO, ascending at the equator on +X axis. Velocity is +Z (straight north). The RSW frame should have R=+x, S=+z, W=-y (so that W×R = S and the right-hand rule holds).",
+    "position_m": [6671000.0, 0.0, 0.0],
+    "velocity_m_s": [0.0, 0.0, 7726.0],
+    "test_dv_lvlh_m_s": [0.0, 100.0, 0.0],
+    "body": "earth",
+    "notes": "A +100 m/s S-axis burn should accelerate the polar-orbiting spacecraft northward (+Z inertial). Tests that the S-axis is correctly derived as W×R, not as the raw velocity vector."
+  },
+  {
+    "name": "inclined_51deg_ascending_node",
+    "description": "51.6° ISS-like inclined circular LEO at the ascending node. Position on +X axis; velocity has +Y and +Z components equal to v_circ·cos(i) and v_circ·sin(i).",
+    "position_m": [6671000.0, 0.0, 0.0],
+    "velocity_m_s": [0.0, 4806.0, 6062.0],
+    "test_dv_lvlh_m_s": [0.0, 100.0, 0.0],
+    "body": "earth",
+    "notes": "S-axis should align with the chaser's velocity direction (so a +100 m/s S-axis burn produces an inertial delta-V proportional to the velocity unit vector). Tests the general inclined geometry."
+  },
+  {
+    "name": "apollo_28deg_inclination_ascending_node",
+    "description": "Apollo-like 28.5° inclination at the ascending node.",
+    "position_m": [6671000.0, 0.0, 0.0],
+    "velocity_m_s": [0.0, 6789.0, 3689.0],
+    "test_dv_lvlh_m_s": [50.0, 100.0, 20.0],
+    "body": "earth",
+    "notes": "Non-trivial ΔV with all three LVLH components. Tests the full rotation, not just diagonal cases."
+  },
+  {
+    "name": "gto_periapsis",
+    "description": "Chaser at periapsis of a GTO ellipse (200 km perigee, 35786 km apogee). r = 6578 km, v_peri ≈ 10239 m/s (vis-viva). At periapsis the velocity is exactly perpendicular to the position.",
+    "position_m": [6578000.0, 0.0, 0.0],
+    "velocity_m_s": [0.0, 10239.0, 0.0],
+    "test_dv_lvlh_m_s": [0.0, 0.0, 50.0],
+    "body": "earth",
+    "notes": "Periapsis GTO geometry is still 'circular-like' for the LVLH frame (r⊥v), so the RSW frame is the axis-aligned identity. Tests that ellipticity doesn't break the frame construction."
+  },
+  {
+    "name": "gto_apoapsis",
+    "description": "Chaser at apoapsis of the same GTO ellipse. r = 42164 km, v_apo ≈ 1597 m/s.",
+    "position_m": [42164000.0, 0.0, 0.0],
+    "velocity_m_s": [0.0, 1597.0, 0.0],
+    "test_dv_lvlh_m_s": [10.0, -50.0, 0.0],
+    "body": "earth",
+    "notes": "GTO apoapsis geometry. Tests the RSW frame at a larger radius with slower velocity — same physics as GEO but with the real Δv of a typical circularization burn."
+  },
+  {
+    "name": "llo_circular",
+    "description": "100 km circular Low Lunar Orbit around the Moon (MCI frame). r = 1837.4 km, v_circ ≈ 1634 m/s.",
+    "position_m": [1837400.0, 0.0, 0.0],
+    "velocity_m_s": [0.0, 1634.0, 0.0],
+    "test_dv_lvlh_m_s": [0.0, -100.0, 0.0],
+    "body": "moon",
+    "notes": "Lunar-orbit case. A −100 m/s S-axis retrograde burn represents a deorbit or landing approach. Tests the targeting primitives work in MCI."
+  },
+  {
+    "name": "translunar_coast_halfway",
+    "description": "Midway through a lunar transfer coast (hypothetical state). r ≈ 192000 km from Earth center, velocity slowing due to gravity loss.",
+    "position_m": [150000000.0, 120000000.0, 0.0],
+    "velocity_m_s": [500.0, 700.0, 0.0],
+    "test_dv_lvlh_m_s": [0.0, 15.0, 0.0],
+    "body": "earth",
+    "notes": "Non-axis-aligned position and velocity. Tests the LVLH construction on an arbitrary inertial pair where neither vector is aligned with a coordinate axis. A small midcourse correction of 15 m/s in-track is representative of cislunar MCC burns."
+  }
+]

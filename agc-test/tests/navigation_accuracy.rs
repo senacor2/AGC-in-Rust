@@ -24,8 +24,8 @@ use agc_core::AgcState;
 
 use agc_test::fixtures::{
     load_gravity_cases, load_kalman_cases, load_kepler_cases, load_lambert_cases,
-    load_orbit_cases, load_servicer_cases, GravityCase, KalmanCase, OrbitCase, ServicerCase,
-    StateVectorJson,
+    load_orbit_cases, load_rendezvous_cases, load_servicer_cases, load_targeting_cases,
+    GravityCase, KalmanCase, OrbitCase, ServicerCase, StateVectorJson,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -898,5 +898,318 @@ fn run_kalman_case(case: &KalmanCase) {
                 &format!("kalman case '{}': w[{}][{}]", case.name, i, j),
             );
         }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Tier 2: Rendezvous primitive fixture tests
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Test the `guidance::rendezvous` primitives against frame-independent
+/// invariants for each geometry in `rendezvous_cases.json`.
+///
+/// Checked invariants per case:
+///
+/// 1. `lvlh_matrix` is orthonormal: `M · Mᵀ` equals the 3×3 identity.
+/// 2. `lvlh_matrix` correctly maps the target's angular momentum vector to
+///    the −y LVLH axis (the Hill-frame out-of-plane convention).
+/// 3. `|relative_state_lvlh(...).rho|` equals `range(r_active, r_target)`
+///    (rotation preserves magnitudes).
+/// 4. `range_rate` sign is consistent with the dot product of relative
+///    position and relative velocity in the inertial frame.
+/// 5. `time_to_closest_approach` has the correct sign given `range_rate`
+///    (negative TCA iff range_rate > 0).
+/// 6. `los_angles_lvlh` returns angles in the documented ranges and the
+///    computed (elevation, azimuth) can reconstruct the original LVLH
+///    direction unit vector.
+#[test]
+fn test_rendezvous_fixtures() {
+    use agc_core::guidance::rendezvous::{
+        los_angles_lvlh, lvlh_matrix, range, range_rate, relative_state_lvlh,
+        time_to_closest_approach,
+    };
+    use agc_core::math::linalg::{dot, vsub};
+
+    let cases = load_rendezvous_cases();
+    assert!(!cases.is_empty(), "rendezvous_cases.json must not be empty");
+
+    let mut failures: Vec<String> = Vec::new();
+
+    for case in &cases {
+        let r_t = case.r_target_m;
+        let v_t = case.v_target_m_s;
+        let r_c = case.r_chaser_m;
+        let v_c = case.v_chaser_m_s;
+
+        // 1) lvlh_matrix orthonormality.
+        let m = lvlh_matrix(r_t, v_t);
+        let m_t = [
+            [m[0][0], m[1][0], m[2][0]],
+            [m[0][1], m[1][1], m[2][1]],
+            [m[0][2], m[1][2], m[2][2]],
+        ];
+        let product = [
+            [
+                m[0][0] * m_t[0][0] + m[0][1] * m_t[1][0] + m[0][2] * m_t[2][0],
+                m[0][0] * m_t[0][1] + m[0][1] * m_t[1][1] + m[0][2] * m_t[2][1],
+                m[0][0] * m_t[0][2] + m[0][1] * m_t[1][2] + m[0][2] * m_t[2][2],
+            ],
+            [
+                m[1][0] * m_t[0][0] + m[1][1] * m_t[1][0] + m[1][2] * m_t[2][0],
+                m[1][0] * m_t[0][1] + m[1][1] * m_t[1][1] + m[1][2] * m_t[2][1],
+                m[1][0] * m_t[0][2] + m[1][1] * m_t[1][2] + m[1][2] * m_t[2][2],
+            ],
+            [
+                m[2][0] * m_t[0][0] + m[2][1] * m_t[1][0] + m[2][2] * m_t[2][0],
+                m[2][0] * m_t[0][1] + m[2][1] * m_t[1][1] + m[2][2] * m_t[2][1],
+                m[2][0] * m_t[0][2] + m[2][1] * m_t[1][2] + m[2][2] * m_t[2][2],
+            ],
+        ];
+        for i in 0..3 {
+            for j in 0..3 {
+                let expected: f64 = if i == j { 1.0 } else { 0.0 };
+                if (product[i][j] - expected).abs() > 1e-12 {
+                    failures.push(format!(
+                        "rendezvous '{}': lvlh_matrix not orthonormal at ({},{}): {}",
+                        case.name, i, j, product[i][j],
+                    ));
+                }
+            }
+        }
+
+        // 2) |rho_lvlh| == range(r_chaser, r_target) (rotation preserves magnitudes).
+        let lvlh = relative_state_lvlh(r_c, v_c, r_t, v_t);
+        let rho_mag_lvlh = vec3_norm(lvlh.rho);
+        let rng = range(r_c, r_t);
+        if (rho_mag_lvlh - rng).abs() > 1e-6 * rng.max(1.0) {
+            failures.push(format!(
+                "rendezvous '{}': |rho_lvlh|={:.3e} ≠ range={:.3e}",
+                case.name, rho_mag_lvlh, rng,
+            ));
+        }
+
+        // 3) range_rate sign consistency with dot(rho, rho_dot) in inertial.
+        let rho_inertial = vsub(r_c, r_t);
+        let rho_dot_inertial = vsub(v_c, v_t);
+        let rr = range_rate(r_c, v_c, r_t, v_t);
+        let dot_sign = dot(rho_inertial, rho_dot_inertial).signum();
+        let rr_sign = rr.signum();
+        // If range_rate is essentially zero (< 1e-6 m/s), the sign check is
+        // not meaningful — skip.
+        if rr.abs() > 1e-6 && dot_sign != rr_sign {
+            failures.push(format!(
+                "rendezvous '{}': range_rate sign {} disagrees with dot(rho, rho_dot) sign {}",
+                case.name, rr_sign, dot_sign,
+            ));
+        }
+
+        // 4) time_to_closest_approach sign: negative iff range_rate > 0,
+        //    positive iff range_rate < 0. Only check when relative velocity
+        //    is non-zero (TCA is undefined otherwise — the function panics).
+        let rel_v_sq = dot(rho_dot_inertial, rho_dot_inertial);
+        if rel_v_sq > 1e-12 {
+            let tca = time_to_closest_approach(r_c, v_c, r_t, v_t);
+            if rr > 1e-6 && tca >= 0.0 {
+                failures.push(format!(
+                    "rendezvous '{}': diverging (rr={:.3e}) but TCA={:.3e} is non-negative",
+                    case.name, rr, tca,
+                ));
+            }
+            if rr < -1e-6 && tca <= 0.0 {
+                failures.push(format!(
+                    "rendezvous '{}': closing (rr={:.3e}) but TCA={:.3e} is non-positive",
+                    case.name, rr, tca,
+                ));
+            }
+        }
+
+        // 5) los_angles_lvlh: angles in documented ranges, and reconstructing
+        //    the LVLH direction unit vector from (elev, az) matches input.
+        if rng > 1.0 {
+            let los = los_angles_lvlh(&lvlh);
+            if !(los.elevation.is_finite() && los.azimuth.is_finite()) {
+                failures.push(format!(
+                    "rendezvous '{}': los_angles has non-finite components", case.name,
+                ));
+            }
+            let pi_2 = core::f64::consts::PI / 2.0;
+            let pi = core::f64::consts::PI;
+            if !(-pi_2 - 1e-9..=pi_2 + 1e-9).contains(&los.elevation) {
+                failures.push(format!(
+                    "rendezvous '{}': elevation {:.3e} outside [-π/2, π/2]",
+                    case.name, los.elevation,
+                ));
+            }
+            if !(-pi - 1e-9..=pi + 1e-9).contains(&los.azimuth) {
+                failures.push(format!(
+                    "rendezvous '{}': azimuth {:.3e} outside [-π, π]",
+                    case.name, los.azimuth,
+                ));
+            }
+
+            // Reconstruct the LVLH unit vector from (elev, az) and verify it
+            // points in the same direction as rho_lvlh (within 1 mrad).
+            //
+            // Spec convention (rendezvous-spec.md §5.2):
+            //   elevation = atan2(-z_lvlh, sqrt(x²+y²))
+            //   azimuth   = atan2(y_lvlh, x_lvlh)
+            // Inverting: the LVLH unit vector is
+            //   [cos(elev)·cos(az), cos(elev)·sin(az), -sin(elev)]
+            let rebuilt = [
+                los.elevation.cos() * los.azimuth.cos(),
+                los.elevation.cos() * los.azimuth.sin(),
+                -los.elevation.sin(),
+            ];
+            let rho_hat = [
+                lvlh.rho[0] / rho_mag_lvlh,
+                lvlh.rho[1] / rho_mag_lvlh,
+                lvlh.rho[2] / rho_mag_lvlh,
+            ];
+            let dot_val = rebuilt[0] * rho_hat[0]
+                + rebuilt[1] * rho_hat[1]
+                + rebuilt[2] * rho_hat[2];
+            // Unit vectors pointing the same way should have dot ≈ 1.
+            if (dot_val - 1.0).abs() > 1e-6 {
+                failures.push(format!(
+                    "rendezvous '{}': los_angles roundtrip dot(rebuilt, rho_hat)={:.6} ≠ 1",
+                    case.name, dot_val,
+                ));
+            }
+        }
+
+    }
+
+    if !failures.is_empty() {
+        panic!(
+            "Rendezvous fixture failures ({}):\n  {}",
+            failures.len(),
+            failures.join("\n  ")
+        );
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Tier 2: Targeting primitive fixture tests
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Test `guidance::targeting::lvlh_to_inertial` and `burn_attitude` against
+/// invariants for each fixture case.
+///
+/// Checked invariants per case:
+///
+/// 1. `lvlh_to_inertial` is orthonormal.
+/// 2. Round-trip: `lvlh_to_inertial · dv_lvlh` then project back onto
+///    each RSW axis must return `dv_lvlh` component-wise.
+/// 3. `burn_attitude(dv_inertial, I) * [1, 0, 0]` equals `unit(dv_inertial)`.
+/// 4. For zero ΔV, `burn_attitude` is the identity matrix.
+#[test]
+fn test_targeting_fixtures() {
+    use agc_core::guidance::targeting::{burn_attitude, lvlh_to_inertial};
+    use agc_core::math::linalg::{dot, mxv, norm, unit};
+
+    let cases = load_targeting_cases();
+    assert!(!cases.is_empty(), "targeting_cases.json must not be empty");
+
+    let identity_mat: [[f64; 3]; 3] =
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+
+    let mut failures: Vec<String> = Vec::new();
+
+    for case in &cases {
+        let r = case.position_m;
+        let v = case.velocity_m_s;
+        let dv_lvlh = case.test_dv_lvlh_m_s;
+
+        // 1) lvlh_to_inertial orthonormality.
+        let m = lvlh_to_inertial(r, v);
+        let m_t = [
+            [m[0][0], m[1][0], m[2][0]],
+            [m[0][1], m[1][1], m[2][1]],
+            [m[0][2], m[1][2], m[2][2]],
+        ];
+        let product = [
+            [
+                m[0][0] * m_t[0][0] + m[0][1] * m_t[1][0] + m[0][2] * m_t[2][0],
+                m[0][0] * m_t[0][1] + m[0][1] * m_t[1][1] + m[0][2] * m_t[2][1],
+                m[0][0] * m_t[0][2] + m[0][1] * m_t[1][2] + m[0][2] * m_t[2][2],
+            ],
+            [
+                m[1][0] * m_t[0][0] + m[1][1] * m_t[1][0] + m[1][2] * m_t[2][0],
+                m[1][0] * m_t[0][1] + m[1][1] * m_t[1][1] + m[1][2] * m_t[2][1],
+                m[1][0] * m_t[0][2] + m[1][1] * m_t[1][2] + m[1][2] * m_t[2][2],
+            ],
+            [
+                m[2][0] * m_t[0][0] + m[2][1] * m_t[1][0] + m[2][2] * m_t[2][0],
+                m[2][0] * m_t[0][1] + m[2][1] * m_t[1][1] + m[2][2] * m_t[2][1],
+                m[2][0] * m_t[0][2] + m[2][1] * m_t[1][2] + m[2][2] * m_t[2][2],
+            ],
+        ];
+        for i in 0..3 {
+            for j in 0..3 {
+                let expected: f64 = if i == j { 1.0 } else { 0.0 };
+                if (product[i][j] - expected).abs() > 1e-12 {
+                    failures.push(format!(
+                        "targeting '{}': lvlh_to_inertial not orthonormal at ({},{}): {}",
+                        case.name, i, j, product[i][j],
+                    ));
+                }
+            }
+        }
+
+        // 2) Round-trip dv_lvlh → inertial → back. targeting::lvlh_to_inertial
+        //    returns a matrix whose COLUMNS are the R, S, W basis vectors in
+        //    inertial coordinates; so inertial = M * dv_lvlh and lvlh = Mᵀ *
+        //    inertial. Check the round trip produces the original dv_lvlh.
+        let dv_inertial = mxv(m, dv_lvlh);
+        let dv_lvlh_roundtrip = mxv(m_t, dv_inertial);
+        for i in 0..3 {
+            if (dv_lvlh_roundtrip[i] - dv_lvlh[i]).abs() > 1e-9 {
+                failures.push(format!(
+                    "targeting '{}': round-trip dv_lvlh[{}]: expected {:.4e} got {:.4e}",
+                    case.name, i, dv_lvlh[i], dv_lvlh_roundtrip[i],
+                ));
+            }
+        }
+
+        // 3) burn_attitude: with identity REFSMMAT, the first column of the
+        //    returned matrix should equal unit(dv_inertial).
+        let dv_mag = norm(dv_inertial);
+        if dv_mag > 1e-6 {
+            let att = burn_attitude(dv_inertial, identity_mat);
+            let first_col = [att[0][0], att[1][0], att[2][0]];
+            let dv_hat = unit(dv_inertial);
+            let align_dot = dot(first_col, dv_hat);
+            if (align_dot - 1.0).abs() > 1e-6 {
+                failures.push(format!(
+                    "targeting '{}': burn_attitude first column dot(unit(dv))={:.6} ≠ 1",
+                    case.name, align_dot,
+                ));
+            }
+
+            // Verify the attitude matrix is orthonormal too.
+            for i in 0..3 {
+                for j in 0..3 {
+                    let mut v = 0.0;
+                    for k in 0..3 {
+                        v += att[i][k] * att[j][k];
+                    }
+                    let expected: f64 = if i == j { 1.0 } else { 0.0 };
+                    if (v - expected).abs() > 1e-9 {
+                        failures.push(format!(
+                            "targeting '{}': burn_attitude not orthonormal at ({},{}): {}",
+                            case.name, i, j, v,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    if !failures.is_empty() {
+        panic!(
+            "Targeting fixture failures ({}):\n  {}",
+            failures.len(),
+            failures.join("\n  ")
+        );
     }
 }

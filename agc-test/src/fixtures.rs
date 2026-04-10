@@ -318,6 +318,75 @@ pub fn load_kalman_cases() -> Vec<KalmanCase> {
         .expect("Failed to parse kalman_cases.json — check fixture syntax")
 }
 
+// ── RendezvousCase ────────────────────────────────────────────────────────────
+
+/// One rendezvous-primitive geometry from `rendezvous_cases.json`.
+///
+/// The test harness uses only the inputs; expected values are verified as
+/// invariants (norm preservation, sign consistency, range/LVLH consistency)
+/// rather than per-component hand derivations.
+#[derive(Debug, Deserialize)]
+pub struct RendezvousCase {
+    /// Human-readable identifier.
+    pub name: String,
+    /// Scenario description and notes.
+    pub description: String,
+    /// Target inertial position (m).
+    pub r_target_m: Vec3Json,
+    /// Target inertial velocity (m/s).
+    pub v_target_m_s: Vec3Json,
+    /// Chaser inertial position (m).
+    pub r_chaser_m: Vec3Json,
+    /// Chaser inertial velocity (m/s).
+    pub v_chaser_m_s: Vec3Json,
+    /// `"earth"` or `"moon"` — selects which gravitational parameter to use
+    /// for auxiliary sanity checks (not consumed by the rendezvous primitives).
+    pub body: String,
+    /// Human-readable notes on what the case specifically tests.
+    pub notes: String,
+}
+
+/// Deserialize all rendezvous primitive test cases from `agc-test/fixtures/rendezvous_cases.json`.
+pub fn load_rendezvous_cases() -> Vec<RendezvousCase> {
+    let json = include_str!("../fixtures/rendezvous_cases.json");
+    serde_json::from_str(json)
+        .expect("Failed to parse rendezvous_cases.json — check fixture syntax")
+}
+
+// ── TargetingCase ─────────────────────────────────────────────────────────────
+
+/// One targeting-primitive geometry from `targeting_cases.json`.
+///
+/// Each case provides an inertial (position, velocity) pair and a test delta-V
+/// in the LVLH frame. The test harness verifies frame orthonormality,
+/// LVLH → inertial → LVLH round-trip identity, and `burn_attitude`
+/// invariants — all frame-independent properties.
+#[derive(Debug, Deserialize)]
+pub struct TargetingCase {
+    /// Human-readable identifier.
+    pub name: String,
+    /// Scenario description.
+    pub description: String,
+    /// Chaser inertial position (m).
+    pub position_m: Vec3Json,
+    /// Chaser inertial velocity (m/s).
+    pub velocity_m_s: Vec3Json,
+    /// Test delta-V expressed in the LVLH frame (m/s) — used for the
+    /// round-trip and burn_attitude checks.
+    pub test_dv_lvlh_m_s: Vec3Json,
+    /// `"earth"` or `"moon"` — informational, not consumed by primitives.
+    pub body: String,
+    /// Human-readable notes on what the case specifically tests.
+    pub notes: String,
+}
+
+/// Deserialize all targeting primitive test cases from `agc-test/fixtures/targeting_cases.json`.
+pub fn load_targeting_cases() -> Vec<TargetingCase> {
+    let json = include_str!("../fixtures/targeting_cases.json");
+    serde_json::from_str(json)
+        .expect("Failed to parse targeting_cases.json — check fixture syntax")
+}
+
 // ── Smoke tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -420,6 +489,48 @@ mod tests {
                 "expected_outcome must be Accepted, Rejected, or AcceptedWOverflow; got: {}",
                 c.expected_outcome
             );
+        }
+    }
+
+    /// Verify that rendezvous_cases.json parses without error and contains
+    /// at least one case with the expected field structure.
+    #[test]
+    fn load_rendezvous_cases_parses() {
+        let cases = load_rendezvous_cases();
+        assert!(!cases.is_empty(), "rendezvous_cases.json must not be empty");
+        for c in &cases {
+            assert!(!c.name.is_empty(), "Every rendezvous case must have a name");
+            assert!(
+                c.body == "earth" || c.body == "moon",
+                "body must be earth or moon; got: {}",
+                c.body
+            );
+            // Target position must be non-zero (required by lvlh_matrix).
+            let r_mag = (c.r_target_m[0].powi(2)
+                + c.r_target_m[1].powi(2)
+                + c.r_target_m[2].powi(2)).sqrt();
+            assert!(r_mag > 1.0e6, "target r magnitude must be physically sane (> 1000 km)");
+        }
+    }
+
+    /// Verify that targeting_cases.json parses without error and contains
+    /// at least one case with the expected field structure.
+    #[test]
+    fn load_targeting_cases_parses() {
+        let cases = load_targeting_cases();
+        assert!(!cases.is_empty(), "targeting_cases.json must not be empty");
+        for c in &cases {
+            assert!(!c.name.is_empty(), "Every targeting case must have a name");
+            assert!(
+                c.body == "earth" || c.body == "moon",
+                "body must be earth or moon; got: {}",
+                c.body
+            );
+            // Position must be non-zero (lvlh_to_inertial requires it).
+            let r_mag = (c.position_m[0].powi(2)
+                + c.position_m[1].powi(2)
+                + c.position_m[2].powi(2)).sqrt();
+            assert!(r_mag > 0.0, "position must be non-zero");
         }
     }
 }

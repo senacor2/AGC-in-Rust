@@ -1,0 +1,102 @@
+[
+  {
+    "name": "trailing_10km_along_track_circular_leo",
+    "description": "Target on a 300 km circular LEO on the +X axis with prograde velocity +Y. Chaser is 10 km behind (−Y direction, same orbit) with the same velocity. Tests the classical trailing-chaser geometry that is the starting point of almost every rendezvous.",
+    "r_target_m": [6671000.0, 0.0, 0.0],
+    "v_target_m_s": [0.0, 7726.0, 0.0],
+    "r_chaser_m":  [6671000.0, -10000.0, 0.0],
+    "v_chaser_m_s":[0.0, 7726.0, 0.0],
+    "body": "earth",
+    "notes": "Initial range ≈ 10 km, range_rate ≈ 0 (same velocity; angular motion shifts radial component slightly). Line-of-sight is purely along −y (retrograde direction) in LVLH."
+  },
+  {
+    "name": "leading_10km_along_track_circular_leo",
+    "description": "Mirror of the trailing case: chaser is 10 km ahead of target. Tests that the LVLH frame doesn't flip sign and that range_rate invariants hold symmetrically.",
+    "r_target_m": [6671000.0, 0.0, 0.0],
+    "v_target_m_s": [0.0, 7726.0, 0.0],
+    "r_chaser_m":  [6671000.0, 10000.0, 0.0],
+    "v_chaser_m_s":[0.0, 7726.0, 0.0],
+    "body": "earth",
+    "notes": "range == 10 km, range_rate ≈ 0."
+  },
+  {
+    "name": "chaser_1km_radially_above",
+    "description": "Chaser on the +X axis but 1 km farther from Earth than the target at the same epoch; zero relative velocity. Tests the radial-offset geometry and the LVLH z-axis sign (z points toward Earth = target-to-center).",
+    "r_target_m": [6671000.0, 0.0, 0.0],
+    "v_target_m_s": [0.0, 7726.0, 0.0],
+    "r_chaser_m":  [6672000.0, 0.0, 0.0],
+    "v_chaser_m_s":[0.0, 7726.0, 0.0],
+    "body": "earth",
+    "notes": "|range| == 1000 m; the LVLH rho should have a non-trivial z component (negative because chaser is above = away from Earth in the Hill convention)."
+  },
+  {
+    "name": "chaser_1km_radially_below",
+    "description": "Chaser 1 km closer to Earth than target. Mirror of the 'radially above' case for symmetry testing.",
+    "r_target_m": [6671000.0, 0.0, 0.0],
+    "v_target_m_s": [0.0, 7726.0, 0.0],
+    "r_chaser_m":  [6670000.0, 0.0, 0.0],
+    "v_chaser_m_s":[0.0, 7726.0, 0.0],
+    "body": "earth",
+    "notes": "|range| == 1000 m; LVLH rho z component positive (chaser below target in Hill convention)."
+  },
+  {
+    "name": "chaser_500m_cross_track_offset",
+    "description": "Chaser shifted 500 m in the +Z inertial direction (out of the target's orbital plane). Zero relative velocity. Tests the out-of-plane LVLH y-axis.",
+    "r_target_m": [6671000.0, 0.0, 0.0],
+    "v_target_m_s": [0.0, 7726.0, 0.0],
+    "r_chaser_m":  [6671000.0, 0.0, 500.0],
+    "v_chaser_m_s":[0.0, 7726.0, 0.0],
+    "body": "earth",
+    "notes": "|range| == 500 m; the LVLH y-component (out-of-plane) should dominate."
+  },
+  {
+    "name": "closing_chaser_trailing_with_faster_velocity",
+    "description": "Trailing chaser (−10 km Y) with an extra +1 m/s in-track velocity, closing on the target. Expected range_rate < 0 (closing). time_to_closest_approach > 0 (future intercept).",
+    "r_target_m": [6671000.0, 0.0, 0.0],
+    "v_target_m_s": [0.0, 7726.0, 0.0],
+    "r_chaser_m":  [6671000.0, -10000.0, 0.0],
+    "v_chaser_m_s":[0.0, 7727.0, 0.0],
+    "body": "earth",
+    "notes": "Relative velocity in-track ≈ +1 m/s along +Y (toward the leading target). range_rate should be ~ −1 m/s (closing at 1 m/s). TCA ≈ 10000 s = 10_000 s."
+  },
+  {
+    "name": "diverging_chaser_leading_with_faster_velocity",
+    "description": "Leading chaser (+10 km Y) with an extra +1 m/s in-track velocity, diverging from target. Expected range_rate > 0 (separating). TCA < 0 (closest approach was in the past).",
+    "r_target_m": [6671000.0, 0.0, 0.0],
+    "v_target_m_s": [0.0, 7726.0, 0.0],
+    "r_chaser_m":  [6671000.0, 10000.0, 0.0],
+    "v_chaser_m_s":[0.0, 7727.0, 0.0],
+    "body": "earth",
+    "notes": "Relative velocity +1 m/s along +Y, separation +10 km along +Y, so range_rate ~ +1 m/s (diverging), TCA ~ −10000 s (closest approach in past)."
+  },
+  {
+    "name": "llo_chaser_trailing_2km",
+    "description": "LLO (100 km above Moon surface) circular orbit. Target at r = 1_837_400 m, v_circ ≈ 1634 m/s. Chaser 2 km behind in the −Y direction.",
+    "r_target_m": [1837400.0, 0.0, 0.0],
+    "v_target_m_s": [0.0, 1634.0, 0.0],
+    "r_chaser_m":  [1837400.0, -2000.0, 0.0],
+    "v_chaser_m_s":[0.0, 1634.0, 0.0],
+    "body": "moon",
+    "notes": "range == 2 km. Tests that the primitives work in a lunar frame (MCI). All the invariants are frame-independent so this should behave identically to the equivalent LEO case."
+  },
+  {
+    "name": "gto_apoapsis_chaser_radial",
+    "description": "Target at apoapsis of a GTO ellipse (r_apo ≈ 42164 km), chaser 10 km radially above. Tests the primitives on a non-circular target orbit.",
+    "r_target_m": [42164000.0, 0.0, 0.0],
+    "v_target_m_s": [0.0, 1585.0, 0.0],
+    "r_chaser_m":  [42174000.0, 0.0, 0.0],
+    "v_chaser_m_s":[0.0, 1585.0, 0.0],
+    "body": "earth",
+    "notes": "range == 10 km along +x. Target velocity ≈ GEO circular at 42164 km ≈ 3075 m/s, but we use a slower value 1585 m/s to represent apoapsis of a GTO ellipse (2×semi-major less than GEO). The LVLH frame should still be well-defined since v is non-zero and perpendicular to r."
+  },
+  {
+    "name": "inclined_orbit_chaser_inplane_trailing",
+    "description": "Target on a 51.6° inclined circular LEO (ISS-like) at the ascending node. Chaser 5 km behind in-track, still in the orbital plane.",
+    "r_target_m": [6671000.0, 0.0, 0.0],
+    "v_target_m_s": [0.0, 4806.0, 6062.0],
+    "r_chaser_m":  [6671000.0, -3114.0, -3927.0],
+    "v_chaser_m_s":[0.0, 4806.0, 6062.0],
+    "body": "earth",
+    "notes": "Target velocity = v_circ·(cos(i), sin(i)) projected onto (+y, +z) = 7726·(0.6223, 0.7828) ≈ (4806, 6062). Chaser 5 km behind along the in-track direction = 5000·(−sin(i), −cos(i)) ≈ (−3114, −3927) (approximately, neglecting small-angle effects). Tests the inclined-orbit geometry where the LVLH y-axis is no longer aligned with ECI +Z."
+  }
+]
