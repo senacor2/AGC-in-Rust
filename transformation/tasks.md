@@ -99,12 +99,50 @@ Unlocks the interactive paths that were deferred throughout M4: P30's
 V25 N33/N81 data-load state machine, P51/P52's MARK button loop,
 P40's crew go/no-go gates.
 
-- [ ] **Spec + Impl** — `services/v_n.rs` (Verb/Noun state machine)
-- [ ] **Spec + Impl** — `services/display.rs` (PINBALL display driver)
-- [ ] V37 program-select handler wired into the V/N processor
-- [ ] V25 data-load state machine (used by P30, P37, P51/P52 MARK loop)
-- [ ] V50 crew go/no-go acknowledgement (used by P40 pre-ignition)
-- [ ] `agc-sim` terminal DSKY simulator
+- [x] **Spec + Impl** — `services/v_n.rs` (Verb/Noun state machine)
+- [x] **Spec + Impl** — `services/pinball.rs` (PINBALL display formatter)
+- [x] V37 program-select handler wired into the V/N processor
+- [x] V25 data-load state machine (used by P30, P37, P51/P52 MARK loop)
+- [x] V50 crew go/no-go acknowledgement (used by P40 pre-ignition)
+- [x] `agc-sim` terminal DSKY simulator
+
+**Completed 2026-04-10.** Delivered in five phases:
+
+- **Phase 1** (commit `275adf9`) — V/N processor core in `services/v_n.rs`:
+  `Key` enum, `VnPhase` state machine (Idle/EnteringVerb/EnteringNoun/
+  OprErr), `feed_key()`, and V37 dispatch through the `PROGRAM_TABLE`.
+  Covers V06 (display decimal), V16 (monitor), V34 (terminate to P00),
+  V35 (lamp test), and V37 (program select).
+
+- **Phase 2** (commit `c1c9529`) — data-entry verbs V21/V22/V23/V25 with a
+  5-digit signed accumulator per register and commit handlers for N33
+  (TIG → `vn.pending_tig`) and N81 (LVLH ΔV → `p30_load_dv_lvlh`). P30
+  is now fully interactive: `V25 N33 E <tig> E V25 N81 E <Δvx> E <Δvy> E <Δvz> E`.
+
+- **Phase 3** (commit `4bdfc7f`) — PINBALL display formatter in
+  `services/pinball.rs`: pure-computation f32 → signed 5-digit `Register`,
+  `TwoDigit` PROG/VERB/NOUN fields, 7-segment bit table, and
+  `decode_dsky(&DskyState) → DskyFrame` for the bare-metal T4RUPT shim to
+  push to the HAL. 13 test cases.
+
+- **Phase 4** (commit `67f869f`) — V50 "please perform" crew
+  acknowledgement. Programs call `request_v50(state, noun, on_proceed)`;
+  PRO key consumes the pending callback. P40 now sets DAP to Maneuver
+  mode on init and arms the SPS (DAP → Tvc, `engine_thrusting = true`)
+  only after the crew presses PRO in response to V50 N99.
+
+- **Phase 5** (commit `537fd19`) — terminal DSKY simulator in `agc-sim`:
+  `dsky_sim` binary renders a Block 2 DSKY panel faithful to Figure 39
+  of O'Brien (2×7 indicator-lamp grid, PROG/VERB/NOUN + R1/R2/R3 display
+  panel, 7-column keyboard). Uses `crossterm` raw mode + ANSI; 20 Hz
+  redraw with real-time MET and 1 Hz VERB/NOUN flashing. Added
+  `tracker` lamp to `DskyState`/`Lamps`. Also fixed a display-mirroring
+  gap in `feed_key` (keystrokes were only written to `state.dsky` on
+  dispatch, invisible during entry) via a new `sync_display` helper
+  plus four regression tests (tc_vn_dm_1..4).
+
+**Test coverage**: 30 v_n tests, 13 pinball tests, 6 key-mapping/render
+tests in agc-sim. Total project: 302 agc-core tests pass.
 
 ### Technical Debt
 
