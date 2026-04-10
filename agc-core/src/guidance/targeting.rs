@@ -55,13 +55,26 @@ pub enum TargetingMode {
     #[default]
     ExternalDeltaV,
 
-    /// P31/P34 — Lambert rendezvous targeting.
+    /// P33/P34 — Lambert rendezvous targeting.
     ///
     /// Delta-V was computed by the Lambert solver to intercept the target
-    /// state vector. Used by P31 (height adjust), P32 (coelliptic), P33
-    /// (CDH), and P34 (TPI — transfer phase initiation).
+    /// state vector. Used by P33 (TPI) and P34 (TPM — Terminal Phase
+    /// Midcourse). P31 and P32 use closed-form coelliptic targeting, not
+    /// Lambert.
     /// DSKY: V06N33 (TIG), V06N84 (delta-V in LVLH for display).
     Lambert,
+
+    /// P31 — Coelliptic Sequence Initiation (CSI) burn.
+    /// Delta-V is the in-track impulse computed by P31's closed-form
+    /// coelliptic targeting (not Lambert).
+    /// DSKY: V06N33 (TIG), V06N84 (delta-V in LVLH).
+    CsiBurn,
+
+    /// P32 — Constant Delta-Height (CDH) burn.
+    /// Delta-V achieves the coelliptic condition (constant altitude
+    /// separation) at the CDH apsidal line.
+    /// DSKY: V06N33 (TIG), V06N84 (delta-V in LVLH).
+    CdhBurn,
 
     /// P37 — Return to Earth (Trans-Earth Injection).
     ///
