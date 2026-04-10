@@ -147,27 +147,26 @@ pub fn lambert(r1: Vec3, r2: Vec3, tof: f64, mu: f64, prograde: bool) -> (Vec3, 
     let t1 = (2.0 / 3.0) * (1.0 - lambda * lambda * lambda);
 
     let x0 = if t_nd >= t00 {
-        // Slow solution: x < 0.  For large T >> T₀₀ the linear mapping
-        // (t00/t_nd - 1) places x₀ very close to -1 where the
-        // Lancaster-Blanchard formula is poorly conditioned.  Use a dampened
-        // mapping that keeps x₀ ≥ -0.5, then let Halley converge from there.
-        let ratio = t00 / t_nd;
-        let x_raw = if ratio < 0.1 {
-            // T_nd is 10× T₀₀ or more — use a moderately negative starting point.
-            -0.5
-        } else {
-            (ratio - 1.0).clamp(-0.5, 0.0)
-        };
-        x_raw
+        // Slow solution (Izzo 2015 Regime 1): x ∈ (−1, 0].
+        // Izzo Eq. 23 initial guess: linear mapping from T/T₀₀ onto (−1, 0].
+        t00 / t_nd - 1.0
     } else if t_nd >= t1 {
-        // Between parabolic and minimum-energy: x ∈ (0, 1).
-        // Power-law initial guess then one Newton step.
+        // Izzo Regime 2: Between parabolic (T₀₀) and minimum-energy (T₁).
+        // Power-law initial guess followed by one Newton correction step.
+        // Guard against the Newton step overshooting to ≤ 0, which would
+        // send the iteration into the wrong branch (Regime 1 slow-arc root).
         let x_hat = libm::pow(t1 / t_nd, 2.0 / 3.0);
         let x_hat = x_hat.clamp(X_EPS, 1.0 - X_EPS);
         let (t_hat, dt_hat, _) = tof_and_derivs(x_hat, lambda);
         let err = t_hat - t_nd;
         if dt_hat.abs() > 1.0e-20 {
-            (x_hat - err / dt_hat).clamp(-1.0 + X_EPS, 1.0 - X_EPS)
+            let x_newton = x_hat - err / dt_hat;
+            // If Newton overshoots into the slow-arc regime, fall back to x_hat.
+            if x_newton > 0.0 {
+                x_newton.clamp(X_EPS, 1.0 - X_EPS)
+            } else {
+                x_hat
+            }
         } else {
             x_hat
         }
@@ -392,7 +391,7 @@ mod tests {
     // borderline but not quite converging in this near-Hohmann regime.
     // Needs further algorithm work.
     #[test]
-    #[ignore = "Lambert near-Hohmann: residual ~1.2e-5, borderline convergence"]
+    #[ignore = "Lambert near-Hohmann: residual 1.2e-5, Halley stalls — T'' bug?"]
     fn tc_lam_1_hohmann_400_to_1200km() {
         let r1_mag = 6_778_000.0_f64; // 6378 + 400 km
         let r2_mag = 7_578_000.0_f64; // 6378 + 1200 km
@@ -466,7 +465,7 @@ mod tests {
     // suggests a factor-of-2 error in the T(x,λ) formula or velocity
     // reconstruction near the minimum-energy regime (x ≈ 1).
     #[test]
-    #[ignore = "Lambert near-minimum-energy: converges to wrong x, velocity off by √2"]
+    #[ignore = "Lambert converges to wrong Halley root (0.36 vs correct 0.6447) — T' or T'' bug"]
     fn tc_lam_2_leo_circular_arc_5min() {
         let r_mag = 6_778_000.0_f64;
         let r1: Vec3 = [r_mag, 0.0, 0.0];
@@ -524,7 +523,7 @@ mod tests {
     // Izzo (2015) Eq. 23-24 initial guess formula for the slow-arc regime.
     // Need to retrieve exact formula from the paper.
     #[test]
-    #[ignore = "Lambert initial guess wrong for T_nd >> T_00 (TLI regime)"]
+    #[ignore = "Lambert TLI regime diverges (residual 3.6) — deep Halley bug"]
     fn tc_lam_3_tli_like() {
         let r1: Vec3 = [6_563_000.0, 0.0, 0.0];
         let r2: Vec3 = [-1.50e8, 3.5e7, 0.0];
@@ -572,8 +571,8 @@ mod tests {
     // Bug 2 (signed λ³ in T₁) fixes. The dnu > π regime requires further
     // analysis. Possibly the T(x,λ) formula has additional sign issues for
     // negative λ, or the initial guess is placing x in the wrong branch.
-    #[ignore = "Lambert retrograde (λ<0) divergence: needs further analysis"]
     #[test]
+    #[ignore = "Lambert retrograde (λ<0) diverges (residual 3.0) — deeper bug"]
     fn tc_lam_5_retrograde_long_way() {
         let r1: Vec3 = [6_778_000.0, 0.0, 0.0];
         let r2: Vec3 = [0.0, 7_578_000.0, 0.0];
