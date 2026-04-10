@@ -66,9 +66,10 @@ _None — foundation phase complete, implementation not yet started_
 
 ### Milestone 5 — DSKY and Crew Interface
 
-- [ ] **Spec + Impl** — `services/v_n.rs` (Verb/Noun state machine)
-- [ ] **Spec + Impl** — `services/display.rs` (PINBALL display driver)
-- [ ] `agc-sim` terminal DSKY simulator
+- [x] **Spec + Impl** — `services/v_n.rs` (Verb/Noun state machine, CHARIN/ENTPAS0)
+- [x] **Spec + Impl** — `services/display.rs` (decimal, octal, time, relay word formatting)
+- [x] **Spec + Impl** — `services/pinball.rs` (verb dispatch table, VBRTEFN categories)
+- [x] `agc-sim` DSKY demo — V/N command execution (V35 lamp test, V37 program change, V82 orbital params)
 
 ## Completed
 
