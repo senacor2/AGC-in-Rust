@@ -305,6 +305,47 @@ tests in agc-sim. Total project: 302 agc-core tests pass.
   declared "mean-of-1969 inertial frame" and needed no change.
   **Unblocks**: the star catalogue population work above.
 
+- [ ] **Bug** — `agc-sim dsky_sim` DSKY display panel: the bottom border
+  is drawn on the same row as R3's digit content. **Observed symptom**:
+  the third data register's value (R3) has a horizontal line drawn
+  across the digits — the `└─────┘` bottom-border row and the R3
+  content row collide.
+  - **Root cause**: in `agc-sim/src/dsky_ui.rs::draw_display_panel`
+    (around lines 145–180), the display panel is sized 16 rows tall
+    (`oy..=oy+15`). The cell separators and register content rows are:
+    - row 11 → `├───┤` (separator between R1 and R2)
+    - row 12 → R2 content
+    - row 13 → (filler)
+    - row 14 → `├───┤` (separator between R2 and R3)
+    - **row 15 → both `└─────┘` bottom border AND `draw_register(...,
+      oy + 15, "R3", ...)`** — collision.
+    There is also some duplicated paint-then-repaint logic at lines
+    103 and 150–155 (drawing the bottom border, then a cell interior,
+    then the bottom border again) that looks like an early workaround
+    for this exact layout problem — it should be removed as part of
+    the fix.
+  - **Fix sketch**: make the display panel 17 or 18 rows tall so R3
+    has its own content row distinct from the bottom border. Suggested
+    layout:
+    - row 0: `┌──────┐` top border
+    - rows 1–7: PROG / COMP ACTY / VERB / NOUN block (as today)
+    - row 8: `├──────┤` separator above R1
+    - row 9: R1 content
+    - row 10: `├──────┤` separator
+    - row 11: R2 content
+    - row 12: `├──────┤` separator
+    - row 13: R3 content
+    - row 14: `└──────┘` bottom border
+    Update `draw_register` call sites to match the new row indices
+    (`oy + 9`, `oy + 11`, `oy + 13`) and update `WIDTH` / `HEIGHT`
+    constants if needed.
+  - **Acceptance**: running `cargo run -p agc-sim --bin dsky_sim` and
+    observing the display panel shows three data register rows, each
+    in its own cell with clean `├──┤` separators above and below, and
+    a continuous `└──┘` bottom border that does not intersect any
+    digit. Visual check only — this is a layout bug, not a data bug.
+  - **Blocked by**: nothing. Contained entirely to `agc-sim/src/dsky_ui.rs`.
+
 - [ ] **Bug** — V06/V16 monitor verbs never populate the data display
   registers. **Observed symptom**: in the `agc-sim dsky_sim` binary,
   keying `V16 N65 E` (monitor time) shows `00 00 00000` in R1 instead
