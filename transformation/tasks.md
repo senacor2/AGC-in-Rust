@@ -305,6 +305,74 @@ tests in agc-sim. Total project: 302 agc-core tests pass.
   declared "mean-of-1969 inertial frame" and needed no change.
   **Unblocks**: the star catalogue population work above.
 
+- [ ] **Impl** — Cortex-M firmware boot sequence (`#[entry]` and GOPROG).
+  The project currently ships as a `no_std` library (`agc-core`) and a
+  host-side simulator (`agc-sim`), but there is no runnable binary that
+  boots on actual Cortex-M hardware. The equivalent of the AGC's GOPROG
+  startup path needs to be implemented as a new firmware crate so the
+  software can be flashed and run on the target MCU.
+  - **What the real AGC did** (for reference — O'Brien Ch. 4):
+    - Hardware reset or power-on → CPU jumps to the fixed restart vector
+    - GOPROG entry decides fresh-start vs. restart based on the restart
+      cause register
+    - Fresh start: FRESH START routine clears erasable memory, initialises
+      the Executive and Waitlist, runs IMU/DSKY hardware self-test, sets
+      major mode 0 (P00 CMC idle)
+    - Restart: restart-protected programs resume from their last phase
+      checkpoint via the PHASCHNG mechanism
+    - Main loop: Executive dispatches scheduled jobs and Waitlist tasks
+      until power-down
+  - **What the Rust port needs**:
+    - New binary crate `agc-firmware` (or `agc-bin`) under the workspace,
+      targeting e.g. `thumbv7em-none-eabihf` (Cortex-M4F)
+    - `#[entry]` function using `cortex-m-rt`
+    - Hardware-specific HAL implementation (replaces the `SimHardware`
+      used in `agc-sim`) — likely via the `stm32f4xx-hal` crate or similar
+      PAC-based HAL for the chosen MCU, wiring up: UART for DSKY output,
+      GPIO for keyboard input, SPI/I2C for any real or mock IMU, timers
+      for T3/T4/T5/T6 interrupts
+    - Static `AgcState` allocation — either `static mut STATE: MaybeUninit<AgcState>`
+      with explicit init, or a `const` constructor if all fields stay
+      const-initialisable
+    - Fresh-start vs. restart decision: read the reset cause (RCC_CSR
+      on STM32) and call `services::fresh_start::fresh_start_common`
+      or a future restart-recovery path accordingly
+    - Boot sequence: after fresh-start, install T3/T4/T5/T6 ISR handlers
+      (which call the existing Rust functions from `services::t4rupt`,
+      `executive::waitlist::dispatch`, etc.), then fall through to an
+      infinite `wfi` loop (hardware interrupts drive all subsequent
+      activity)
+    - Linker script (`memory.x`) defining FLASH and RAM regions
+    - Panic handler for release builds (likely `panic-reset` or
+      `panic-semihosting` per ADR-009)
+  - **Downstream consequences**: none block this item; all the
+    infrastructure it needs already exists (HAL trait, AgcState, Executive,
+    Waitlist, Pinball display formatter, V/N processor). This is
+    integration work, not new primitive development.
+  - **Suggested module layout**:
+    ```
+    agc-firmware/
+      Cargo.toml           # no_std bin, depends on agc-core + PAC + cortex-m-rt
+      memory.x             # target-specific linker script
+      build.rs             # copies memory.x to OUT_DIR
+      src/
+        main.rs            # #[entry] fn main() -> ! { ... }
+        hal_impl.rs        # concrete AgcHardware implementation
+        isr.rs             # #[interrupt] fn TIM3() / TIM4() etc.
+        panic.rs           # panic handler (release-build reset, dev semihosting)
+    ```
+  - **Blocks**: nothing in the Rust port. (ADR-011 "Specific MCU target"
+    is still Proposed — that decision gates this work indirectly but
+    a default choice of STM32F405 would be a reasonable starting point
+    consistent with `docs/optimization.md` §2.)
+  - **Acceptance**: the binary builds for `thumbv7em-none-eabihf`,
+    flashes via `probe-rs` onto a development board, and at power-on
+    runs through the FRESH START path, initialises the DSKY to the
+    blank "00 00 00000" state, and dispatches the P00 idle program.
+    A T3 interrupt at 1 Hz firing correctly (visible as a blinking
+    status LED or a UART heartbeat) confirms the Executive/Waitlist
+    plumbing is live on real hardware.
+
 ## Completed
 
 - [x] Architecture — `docs/architecture.md`
