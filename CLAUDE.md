@@ -25,6 +25,7 @@ Each agent reads outputs from the prior stage. The analyst's functional specs ar
 - `/Users/Juergen.Schiewe/Documents/Digital Editions/The Apollo Guidance Computer.pdf` — Frank O'Brien: *The Apollo Guidance Computer - Architecture and Operation*. Comprehensive reference on AGC hardware, software architecture, and mission operations. Use for understanding the Executive, Waitlist, interpreter, navigation algorithms, and DSKY interface in depth.
 - [Apollo-11 source on GitHub](https://github.com/chrislgarry/Apollo-11) — digitized AGC assembler source (Comanche055 = Command Module)
 - [AGC Assembly Language Manual](https://www.ibiblio.org/apollo/assembly_language_manual.html) — machine, interpreter, and pseudocode instruction descriptions
+- [Izzo 2015 "Revisiting Lambert's problem"](https://www.esa.int/gsp/ACT/doc/MAD/pub/ACT-RPR-MAD-2014-RevisitingLambertProblem.pdf) — the Lambert solver algorithm used in `math/lambert.rs`. Key equations: Eq. 18 (T formula), Eq. 19 (T₀₀ with signed λ), Eq. 21 (T₁), Eq. 22 (derivatives), Eq. 30 (initial guess piecewise formulas for slow/normal/fast regimes). Retrievable via WebFetch; extract text with `pdftotext` (from `brew install poppler`).
 
 ## Build & Test
 

@@ -13,4 +13,5 @@ The goal is to transform the AGC code into idiomatic, readable and maintainable 
 * [Programmer's Manual - Block 2 AGC Assembly Language](https://www.ibiblio.org/apollo/assembly_language_manual.html) from the VirtualAGC project including machine, interpreter and pseudocode instruction descriptions.
 * [Apollo Guidance Program Symbolic Listing Information for Block 2](https://www.ibiblio.org/apollo/Documents/SymbolicListingInformation.pdf) a formal description of the AGC machine.
 * [User's Guide to The General Assembler Program (GAP)](https://www.ibiblio.org/apollo/Documents/Users_Guide_GAP_text.pdf)
+* [Izzo, D. (2015) "Revisiting Lambert's problem"](https://www.esa.int/gsp/ACT/doc/MAD/pub/ACT-RPR-MAD-2014-RevisitingLambertProblem.pdf) *Celestial Mechanics and Dynamical Astronomy*, 121(1), 1–15. The Lambert solver used in `math/lambert.rs` is based on this paper (Eqs. 18–30).
 * [Rust Embedded](https://github.com/rust-embedded) the description of the target environment.
