@@ -10,7 +10,7 @@
 **AGC source files** (GitHub: `chrislgarry/Apollo-11`, Comanche055 directory):
 - `Comanche055/P20-P25.agc` — P23 entry sequence, mark incorporation entry points
 - `Comanche055/MEASUREMENT_INCORPORATION.agc` — scalar Kalman update (shared with P20/P22)
-- `Comanche055/STAR_TABLES.agc` — navigational star catalogue (37 stars, J2000 frame)
+- `Comanche055/STAR_TABLES.agc` — navigational star catalogue (37 stars, AGC Mean of 1969.5 frame; see ADR-013)
 - `Comanche055/ERASABLE_ASSIGNMENTS.agc` — `MARKCOUNT`, `REJECTCNT`, `LASTMARK`,
   `WM` (W-matrix), `RCSM`/`VCSM` (CSM nav state save area), body-selection flag
 **O'Brien reference**: Frank O'Brien, *The Apollo Guidance Computer — Architecture and
@@ -137,9 +137,12 @@ sufficient.
 ```rust
 /// A navigational star entry for P23 cislunar sightings.
 ///
-/// Direction vectors are unit vectors in the Earth mean equatorial J2000 frame
-/// (identical to the ECI frame used by the AGC navigation software).
-/// The same vectors apply in the MCI frame because MCI axes are parallel to ECI.
+/// Direction vectors are unit vectors in the AGC **Mean of 1969.5** equatorial
+/// frame — matching the frame baked into `Comanche055/STAR_TABLES.agc` verbatim
+/// (see `specs/star-catalog-research.md` and ADR-013). This is identical to
+/// the ECI frame used by the rest of the port's navigation code; no precession
+/// rotation is applied. The same vectors apply in the MCI frame because MCI
+/// axes are parallel to ECI at the frame epoch.
 ///
 /// Source: Comanche055/STAR_TABLES.agc entries for stars with |declination| > 30°
 /// (high-latitude stars provide the best geometric diversity for cislunar nav).
@@ -150,7 +153,7 @@ pub struct CislunarStar {
     pub number: u8,
     /// Common name for documentation purposes.
     pub name: &'static str,
-    /// Unit vector toward the star in J2000 equatorial frame.
+    /// Unit vector toward the star in the AGC Mean-of-1969.5 equatorial frame.
     pub direction: Vec3,
 }
 

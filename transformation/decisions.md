@@ -113,6 +113,26 @@ This file is the index and status tracker.
 
 ---
 
+## ADR-013: Navigation Reference Frame — AGC Mean of 1969.5
+
+**Date**: 2026-04-10 | **Status**: Accepted
+
+**Decision**: The port's `Frame::EarthInertial` and `Frame::MoonInertial` use the **AGC Mean of 1969.5 equatorial frame** natively — identical to the frame embedded in `Comanche055/STAR_TABLES.agc` and the Apollo-era ephemeris tables. No precession rotation is applied to star-catalogue or ephemeris data at load time.
+
+**Rationale**: The primary validation strategy for the port is side-by-side comparison against a simulated AGC (e.g. VirtualAGC or the yaAGC emulator). Frame-matching the original hardware eliminates an entire class of "off by 0.4°" discrepancies that would otherwise appear in REFSMMAT operations, sextant mark predictions, and rendezvous targeting. The alternative — declare J2000 and precess all AGC data via IAU 1976 at compile time — introduces a rotation that must itself be independently verified and adds a silent-failure mode if the rotation matrix is wrong. Matching 1969.5 is simpler, auditable, and matches the source.
+
+**Trade-off**: Output state vectors cannot be directly compared against contemporary J2000 ephemeris data (e.g. JPL Horizons, modern TLEs). Any such comparison must apply an explicit IAU 1976 precession to convert between frames. This is acceptable because the primary validation target is the AGC itself, not modern data.
+
+**Affected files**:
+- `specs/state-vector-spec.md` §2.2 — already declares "mean-of-1969 inertial frame"; no change needed.
+- `specs/p23-spec.md` §1 and §3.2 — updated to reference ADR-013 and replace "J2000" wording.
+- `specs/star-catalog-research.md` §6 — identifies the 1969.5 frame as the source-of-truth.
+- `navigation/star_catalog.rs` (when populated) — will store the 37 star vectors verbatim from `STAR_TABLES.agc` with no rotation.
+
+**Resolves**: the "navigation reference-frame discrepancy" tech-debt item in `transformation/tasks.md` (previously blocked the star catalogue population work).
+
+---
+
 ## Open / Proposed ADRs
 
 | ID | Topic | Status |

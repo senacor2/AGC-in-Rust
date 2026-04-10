@@ -302,30 +302,23 @@ tests in agc-sim. Total project: 302 agc-core tests pass.
     (within 1e-9 of norm 1.0), `navigation/star_catalog.rs` is no
     longer orphaned (P23 imports from it), and a unit test verifies
     every entry's magnitude.
-  - **Blocked by**: reference-frame decision (see next item).
+  - **Frame**: AGC Mean of 1969.5, verbatim from `STAR_TABLES.agc`. No
+    precession applied. See ADR-013.
 
-- [ ] **Architecture** — Resolve the navigation reference-frame
-  discrepancy between the Rust specs and the AGC source. The existing
-  specs (`specs/p23-spec.md` §3.2, `specs/p51_p52-spec.md` §1) state the
-  reference frame is **J2000 mean equatorial**. The AGC's `STAR_TABLES.agc`
-  direction vectors are stored in **Earth mean equatorial of ~1969.5**
-  (the Apollo-era mission epoch). The precession between these two
-  frames is ~0.42° along the ecliptic — far above the AGC's own
-  targeting accuracy threshold.
-  - **Option A (recommended for MVP)**: declare the port's reference
-    frame to be "AGC mean of 1969.5" matching the original hardware.
-    No rotation needed; star vectors, REFSMMAT operations, and sextant
-    predictions all use the same frame natively. Downside: does not
-    match contemporary ephemeris data which is generally J2000.
-  - **Option B**: declare the port's reference frame to be J2000 and
-    apply an IAU 1976 precession rotation (~0.42°) to each star vector
-    at compile time. Star catalogue code must track the rotation; a
-    bug in the rotation would silently misalign everything.
-  - **Acceptance**: update `specs/state-vector-spec.md` §4.1 (`Frame`)
-    with an explicit frame-epoch declaration; update both `p23-spec.md`
-    and `p51_p52-spec.md` to state the same frame; document the choice
-    in an ADR.
-  - **Blocks**: the star catalogue population above.
+- [x] **Architecture** — Navigation reference-frame decision. **RESOLVED
+  2026-04-10** as ADR-013 (`transformation/decisions.md`): the port's
+  `Frame::EarthInertial` and `Frame::MoonInertial` use the AGC Mean of
+  1969.5 equatorial frame natively, matching `STAR_TABLES.agc` and the
+  AGC's ephemeris tables. No precession rotation is applied. Rationale:
+  primary validation is against a simulated AGC; frame-matching the
+  original eliminates an entire class of 0.4° discrepancies. Output
+  state vectors cannot be directly compared to contemporary J2000 data
+  (JPL Horizons, modern TLEs) without an explicit IAU 1976 rotation,
+  which is acceptable because the validation target is the AGC itself.
+  Spec updates: `p23-spec.md` §1 and §3.2 now reference ADR-013 and use
+  "AGC Mean-of-1969.5" wording; `state-vector-spec.md` §2.2 already
+  declared "mean-of-1969 inertial frame" and needed no change.
+  **Unblocks**: the star catalogue population work above.
 
 ## Completed
 
