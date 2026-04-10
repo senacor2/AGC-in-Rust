@@ -5,4 +5,4 @@ pub mod rcs_logic;
 pub mod tvc;
 
 pub use dap::{DapMode, DapState};
-pub use tvc::TvcState;
+pub use tvc::{TvcFilter, TvcState};

@@ -23,11 +23,14 @@ pub mod services;
 pub mod tables;
 pub mod types;
 
-use control::{DapState, TvcState};
+use control::{DapState, TvcFilter, TvcState};
+use control::imu_control::{GyroCompensation, ImuAlignmentState};
+use control::rcs_logic::RcsConfig;
 use executive::{Executive, RestartProtection, Waitlist};
+use guidance::maneuver::BurnState;
 use navigation::StateVector;
 use services::{AlarmState, DskyState, average_g::PipaCalibration};
-use types::{Mat3x3, Met};
+use types::{CduAngle, Mat3x3, Met};
 
 /// Central mutable state of the guidance computer.
 ///
@@ -58,6 +61,81 @@ pub struct AgcState {
     pub dap_state: DapState,
     pub tvc_state: TvcState,
 
+    /// TVC digital lead-lag filter state (pitch and yaw axes).
+    ///
+    /// Initialised to nominal Comanche055 coefficients with zeroed memories
+    /// by `tvc_init` (called from P40 before ignition). Updated each T5RUPT
+    /// cycle by `tvc_step`.
+    pub tvc_filter: TvcFilter,
+
+    /// SPS burn execution state.
+    ///
+    /// Populated by `burn_init` when P40 enters the burn phase. Persists
+    /// across Waitlist task boundaries for restart protection (Group 3).
+    pub burn: BurnState,
+
+    // ── IMU ──────────────────────────────────────────────────────────────────
+    /// Current IMU platform alignment state.
+    ///
+    /// Tracks the Caged → CoarseAligned → FineAligned lifecycle.
+    /// Read by the SERVICER to gate PIPA integration.
+    pub imu_alignment_state: ImuAlignmentState,
+
+    /// Gyro drift compensation constants (NBDX, NBDY, NBDZ).
+    ///
+    /// Applied by the T4RUPT handler each 120 ms to null platform drift.
+    /// Updated by Mission Control uplink or P52 alignment.
+    pub gyro_comp: GyroCompensation,
+
+    /// Mission elapsed time of the last gyro drift compensation torque.
+    ///
+    /// Used by the T4RUPT handler to compute the elapsed interval since the
+    /// previous compensation and scale the torque command accordingly.
+    pub last_drift_comp_time: Met,
+
+    // ── RCS ───────────────────────────────────────────────────────────────────
+    /// RCS jet selection configuration (deadbands, pulse limits, jet counts).
+    ///
+    /// Loaded from crew V46 entries; defaults to `RcsConfig::NOMINAL` at
+    /// FRESH START.
+    pub rcs_config: RcsConfig,
+
+    // ── Strategy-D staging fields ─────────────────────────────────────────────
+    /// CDU angles staged by the T4/T5 ISR shim before dispatching DAP tasks.
+    ///
+    /// The ISR shim reads the three CDU channels (CDUX, CDUY, CDUZ) from
+    /// hardware and writes them here. `dap_step` reads from this field rather
+    /// than calling `hw.imu().read_cdu()` directly, keeping the Waitlist task
+    /// signature `fn(&mut AgcState)`.
+    pub current_cdu: [CduAngle; 3],
+
+    /// RCS jet command staged by `dap_step` for the T5RUPT ISR shim.
+    ///
+    /// `dap_step` writes the `u16` jet bitmask from `rcs_logic::select_jets_sm`.
+    /// After `dap_step` returns, the ISR shim reads this field and calls
+    /// `fire_pulse(hw, jets, counts)`. Reset to `0` at the start of each cycle.
+    /// Upper byte = jets_b (channel 06 / ROLLJETS), lower byte = jets_a (05 / PYJETS).
+    pub rcs_commanded_jets: u16,
+
+    /// RCS pulse duration staged by `dap_step` for the T5RUPT ISR shim.
+    ///
+    /// Units: T6 counts (1 count = 0.625 ms). `0` means no pulse this cycle.
+    /// Written alongside `rcs_commanded_jets`.
+    pub rcs_commanded_pulse_cs: u16,
+
+    /// SPS gimbal command staged by `tvc_step` for the T5RUPT ISR shim.
+    ///
+    /// `(pitch_counts, yaw_counts)` in CDU error-counter units
+    /// (3200 counts = 1 full revolution, ~0.001963 rad/count).
+    /// The ISR shim passes these to `hw.engine().sps_gimbal(pitch, yaw)`.
+    pub sps_gimbal_cmd: (i16, i16),
+
+    /// Engine thrusting discrete staged by `dap_step` / P40 for the ISR shim.
+    ///
+    /// `true` while the SPS engine is commanded on. The ISR shim reads this
+    /// to decide whether to issue gimbal commands or quench all jets.
+    pub engine_thrusting: bool,
+
     // ── Crew interface ───────────────────────────────────────────────────────
     pub dsky: DskyState,
 
@@ -83,7 +161,7 @@ pub struct AgcState {
 
     /// Optional program-specific callback invoked at the end of each SERVICER cycle.
     ///
-    /// P40 SPS burns set this to `guidance::tvc::cross_product_steering_update`.
+    /// P40 SPS burns set this to `guidance::maneuver::burn_servicer_exit`.
     /// P00 and programs that do not need a SERVICER exit leave this as `None`.
     pub servicer_exit: Option<fn(&mut AgcState)>,
 }
@@ -104,15 +182,43 @@ impl AgcState {
                 mode: control::DapMode::Off,
                 attitude_error: [0.0; 3],
                 rate_estimate: [0.0; 3],
+                prev_cdu: [CduAngle(0); 3],
                 deadband: 0.0,
+                rate_deadband: 0.0,
                 rcs_jet_flags: 0,
+                failed_jets: 0,
+                num_jets: 2,
+                commanded_attitude: [0.0; 3],
+                maneuver_rate: [0.0; 3],
+                restart_phase: 0,
             },
             tvc_state: TvcState {
                 gimbal_pitch: 0.0,
                 gimbal_yaw: 0.0,
-                trim_pitch: 0,
-                trim_yaw: 0,
+                trim_pitch: 0.0,
+                trim_yaw: 0.0,
             },
+            tvc_filter: TvcFilter::new_nominal(),
+            burn: BurnState {
+                target_dv_inertial: [0.0; 3],
+                accumulated_dv_inertial: [0.0; 3],
+                tig: Met(0),
+                burn_active: false,
+                cutoff_time_met: false,
+            },
+            imu_alignment_state: ImuAlignmentState::Caged,
+            gyro_comp: GyroCompensation {
+                nbdx: 0.0,
+                nbdy: 0.0,
+                nbdz: 0.0,
+            },
+            last_drift_comp_time: Met(0),
+            rcs_config: RcsConfig::NOMINAL,
+            current_cdu: [CduAngle(0); 3],
+            rcs_commanded_jets: 0,
+            rcs_commanded_pulse_cs: 0,
+            sps_gimbal_cmd: (0, 0),
+            engine_thrusting: false,
             dsky: DskyState {
                 prog: 0,
                 verb: 0,
