@@ -79,12 +79,17 @@
 
 ### Technical Debt
 
-- [ ] **Debug** — `math/lambert.rs` Izzo convergence bugs. 4 tests currently `#[ignore]`:
-  - `tc_lam_1_leo_to_meo_90deg` — residual ~6e-7 (close but not converging to 1e-12)
-  - `tc_lam_2_leo_rendezvous` — velocity magnitude wrong (1329 m/s vs expected 7668 m/s)
-  - `tc_lam_3_tli_like` — Halley iteration diverges (residual 3.6) on long TOF
-  - `tc_lam_5_retrograde_long_way` — retrograde (λ<0) branch diverges (residual 3.0)
-  - Likely causes: initial guess formula, TOF derivative expression near boundaries, or sign convention in the λ<0 branch. Needs dedicated debugging session.
+- [~] **Debug** — `math/lambert.rs` Izzo convergence bugs. Status: analyst review complete (see `specs/lambert-spec.md` Appendix A), 3 partial fixes applied, 4 tests remain `#[ignore]`. Breakdown:
+  - **Applied fixes**:
+    - Bug 1: `h_hat` sign for retrograde transfers — correct per Izzo formula
+    - Bug 2: `T₁ = (2/3)(1-λ³)` now uses signed λ³ — correct regime boundary for retrograde
+    - Bug 3: Initial guess for T >> T₀₀ clamped to x₀ ≥ -0.5 (stopgap, not full Izzo Eq. 23-24)
+  - **Remaining open tests** (each with a specific diagnosis):
+    - `tc_lam_1_leo_to_meo_90deg` — **test geometry ill-posed**: `tof = T/4` does NOT correspond to 90° true anomaly arc on an elliptic orbit. The iteration converges but to a physically-inconsistent answer for this setup. Fix: replace with a proper Hohmann test (180° transfer at half-period of transfer ellipse).
+    - `tc_lam_2_leo_rendezvous` — **test geometry pathological**: 5 minutes TOF for a 0.3° arc at LEO forces a degenerate transfer. The "expected |v1| ≈ 7668 m/s" assertion is wrong. Fix: replace with a realistic rendezvous setup (phasing burn, hours of TOF).
+    - `tc_lam_3_tli_like` — **initial guess still insufficient** for long TOF (TLI, T_nd >> T_00). Stopgap clamp to x₀=-0.5 did not help. Fix: implement Izzo (2015) Eq. 23-24 exactly — requires retrieving the formula from the paper or the pykep source code.
+    - `tc_lam_5_retrograde_long_way` — **retrograde branch still diverges** (residual 3.0) despite Bug 1+2. Further investigation needed: possibly the T(x,λ) formula has additional sign dependencies on λ sign, or the initial guess lands in a bad regime.
+  - **Working baseline**: TC-LAM-4 (lunar orbit), TC-LAM-6 (anti-parallel panic), TC-LAM-7 (zero separation panic) all pass — 3/7 tests covering the panic paths and one nominal short-arc case.
 
 ## Completed
 

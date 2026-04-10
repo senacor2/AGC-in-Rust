@@ -140,12 +140,25 @@ pub fn lambert(r1: Vec3, r2: Vec3, tof: f64, mu: f64, prograde: bool) -> (Vec3, 
     // T at x = 0 (parabolic): T00 = acos(|λ|) + |λ|*sqrt(1 − λ²).
     let lambda_abs = lambda.abs();
     let t00 = libm::acos(lambda_abs) + lambda_abs * libm::sqrt(1.0 - lambda_abs * lambda_abs);
-    // T at x = 1 (minimum energy): T1 = (2/3)*(1 − λ³).
-    let t1 = (2.0 / 3.0) * (1.0 - lambda_abs * lambda_abs * lambda_abs);
+    // T at x = 1 (minimum energy): T1 = (2/3)*(1 − λ³) using signed λ.
+    // For prograde (λ > 0): T1 < 2/3.
+    // For retrograde (λ < 0): T1 = (2/3)*(1 + |λ|³) > 2/3, correctly
+    // placing the regime boundary for the long-way arc.
+    let t1 = (2.0 / 3.0) * (1.0 - lambda * lambda * lambda);
 
     let x0 = if t_nd >= t00 {
-        // Slow solution: x < 0.  Map linearly from [t00, ∞) onto (−1, 0].
-        (t00 / t_nd - 1.0).clamp(-1.0 + X_EPS, 0.0)
+        // Slow solution: x < 0.  For large T >> T₀₀ the linear mapping
+        // (t00/t_nd - 1) places x₀ very close to -1 where the
+        // Lancaster-Blanchard formula is poorly conditioned.  Use a dampened
+        // mapping that keeps x₀ ≥ -0.5, then let Halley converge from there.
+        let ratio = t00 / t_nd;
+        let x_raw = if ratio < 0.1 {
+            // T_nd is 10× T₀₀ or more — use a moderately negative starting point.
+            -0.5
+        } else {
+            (ratio - 1.0).clamp(-0.5, 0.0)
+        };
+        x_raw
     } else if t_nd >= t1 {
         // Between parabolic and minimum-energy: x ∈ (0, 1).
         // Power-law initial guess then one Newton step.
@@ -210,7 +223,16 @@ pub fn lambert(r1: Vec3, r2: Vec3, tof: f64, mu: f64, prograde: bool) -> (Vec3, 
     let vt2 = gamma * sigma * (y + lambda * x) / r2_mag;
 
     // Transfer-plane frame unit vectors.
-    let h_hat = unit(cross(r1, r2)); // angular momentum direction
+    // For retrograde transfers (prograde = false), the orbit-plane normal
+    // points opposite to the prograde case, so we flip h_hat.  This ensures
+    // t1_hat/t2_hat point in the correct tangential direction and Vt1/Vt2
+    // are reconstructed with the right sign (h_z < 0 for retrograde).
+    let h_hat_raw = unit(cross(r1, r2));
+    let h_hat = if prograde {
+        h_hat_raw
+    } else {
+        vscale(h_hat_raw, -1.0)
+    };
     let t1_hat = unit(cross(h_hat, r1_hat)); // tangential at r1
     let t2_hat = unit(cross(h_hat, r2_hat)); // tangential at r2
 
@@ -362,9 +384,13 @@ mod tests {
     //
     // r1 at 400 km altitude on +X, r2 at 1200 km altitude on +Y.
     // Transfer ellipse a = (6778 + 7578)/2 km; tof = quarter period.
-    // TODO: Izzo formulation convergence — debug initial guess or TOF expression.
+    // TODO: Test geometry is ill-posed — tof=T/4 does NOT correspond to 90°
+    // true anomaly on an elliptic transfer orbit. Bugs 1-3 from the analyst
+    // review were applied and the iteration now converges, but the resulting
+    // velocity is inconsistent with the assumed geometry. Test needs a
+    // physically consistent Hohmann setup (180° transfer at half-period).
     #[test]
-    #[ignore = "Lambert Izzo convergence: needs debug"]
+    #[ignore = "Lambert test geometry ill-posed: tof=T/4 ≠ 90° arc"]
     fn tc_lam_1_leo_to_meo_90deg() {
         let r1: Vec3 = [6_778_000.0, 0.0, 0.0];
         let r2: Vec3 = [0.0, 7_578_000.0, 0.0];
@@ -392,9 +418,13 @@ mod tests {
     }
 
     // ── TC-LAM-2: LEO rendezvous, 5-minute short transfer ────────────────────
-    // TODO: velocity reconstruction gives wrong magnitude — debug terminal velocity formula.
+    // TODO: Test geometry is pathological. 5 minutes TOF for a 0.3° arc at
+    // LEO means the chaser must travel MUCH farther than the arc distance,
+    // forcing a degenerate highly-eccentric transfer. The "expected |v1| ≈
+    // circular velocity" assertion is wrong for this geometry. Test needs
+    // realistic rendezvous setup (phasing burn, hours of TOF).
     #[test]
-    #[ignore = "Lambert Izzo velocity reconstruction: needs debug"]
+    #[ignore = "Lambert test geometry pathological: 5min for 0.3° arc"]
     fn tc_lam_2_leo_rendezvous() {
         let r1: Vec3 = [6_778_000.0, 0.0, 0.0];
         let theta = 0.3_f64.to_radians();
@@ -424,9 +454,12 @@ mod tests {
     }
 
     // ── TC-LAM-3: Trans-lunar injection (TLI-like, 3-day transfer) ───────────
-    // TODO: Halley iteration diverges for large-TOF low-energy transfers.
+    // TODO: Halley iteration diverges (residual 3.6) for long TOF (T_nd >> T_00).
+    // Bug 3 stopgap (clamp x₀ to -0.5) did not help. The proper fix requires
+    // Izzo (2015) Eq. 23-24 initial guess formula for the slow-arc regime.
+    // Need to retrieve exact formula from the paper.
     #[test]
-    #[ignore = "Lambert Izzo divergence on long TOF: needs debug"]
+    #[ignore = "Lambert initial guess wrong for T_nd >> T_00 (TLI regime)"]
     fn tc_lam_3_tli_like() {
         let r1: Vec3 = [6_563_000.0, 0.0, 0.0];
         let r2: Vec3 = [-1.50e8, 3.5e7, 0.0];
@@ -470,9 +503,12 @@ mod tests {
     }
 
     // ── TC-LAM-5: Retrograde (long-way) transfer ─────────────────────────────
-    // TODO: retrograde (λ < 0) branch diverges — debug negative λ case.
+    // TODO: Halley still diverges (residual 3.0) after Bug 1 (h_hat sign) and
+    // Bug 2 (signed λ³ in T₁) fixes. The dnu > π regime requires further
+    // analysis. Possibly the T(x,λ) formula has additional sign issues for
+    // negative λ, or the initial guess is placing x in the wrong branch.
+    #[ignore = "Lambert retrograde (λ<0) divergence: needs further analysis"]
     #[test]
-    #[ignore = "Lambert Izzo retrograde branch: needs debug"]
     fn tc_lam_5_retrograde_long_way() {
         let r1: Vec3 = [6_778_000.0, 0.0, 0.0];
         let r2: Vec3 = [0.0, 7_578_000.0, 0.0];
