@@ -28,6 +28,7 @@ use control::imu_control::{GyroCompensation, ImuAlignmentState};
 use control::rcs_logic::RcsConfig;
 use executive::{Executive, RestartProtection, Waitlist};
 use guidance::maneuver::BurnState;
+use guidance::targeting::Maneuver;
 use navigation::StateVector;
 use services::{AlarmState, DskyState, average_g::PipaCalibration};
 use types::{CduAngle, Mat3x3, Met};
@@ -73,6 +74,16 @@ pub struct AgcState {
     /// Populated by `burn_init` when P40 enters the burn phase. Persists
     /// across Waitlist task boundaries for restart protection (Group 3).
     pub burn: BurnState,
+
+    /// Maneuver computed by the most recently run targeting program (P30,
+    /// P31, P34, or P37). Consumed by P40/P41 on entry, after transferring
+    /// the maneuver into `BurnState` via `burn_init`.
+    ///
+    /// Set to `Some(maneuver)` by `p30_load_dv_lvlh` (and analogous functions
+    /// in P31/P34/P37). Set to `None` by P40/P41 on entry.
+    ///
+    /// AGC correspondence: `DELVEET1/2/3` + `TIG` in E3 erasable.
+    pub pending_maneuver: Option<Maneuver>,
 
     // ── IMU ──────────────────────────────────────────────────────────────────
     /// Current IMU platform alignment state.
@@ -206,6 +217,7 @@ impl AgcState {
                 burn_active: false,
                 cutoff_time_met: false,
             },
+            pending_maneuver: None,
             imu_alignment_state: ImuAlignmentState::Caged,
             gyro_comp: GyroCompensation {
                 nbdx: 0.0,
