@@ -30,6 +30,7 @@ use executive::{Executive, RestartProtection, Waitlist};
 use guidance::maneuver::BurnState;
 use guidance::targeting::Maneuver;
 use navigation::StateVector;
+use programs::p20::RendezvousNavState;
 use programs::p61_p67::EntryState;
 use services::{AlarmState, DskyState, average_g::PipaCalibration, v_n::VnState};
 use types::{CduAngle, Mat3x3, Met};
@@ -183,6 +184,13 @@ pub struct AgcState {
     /// a P40/P41 burn to advance `BurnState.accumulated_dv_inertial`.
     pub servicer_last_dv_inertial: types::Vec3,
 
+    // ── Rendezvous navigation (P20) ──────────────────────────────────────────
+    /// State maintained by the P20 rendezvous navigation program.
+    ///
+    /// Populated by `programs::p20::p20_init` on entry to P20.
+    /// Reset to `Default::default()` on FRESH START.
+    pub rendezvous_nav: RendezvousNavState,
+
     // ── Entry guidance ───────────────────────────────────────────────────────
     /// Atmospheric entry state machine and stub guidance fields.
     ///
@@ -281,6 +289,21 @@ impl AgcState {
             pipa_counts: [0i16; 3],
             servicer_exit: None,
             servicer_last_dv_inertial: [0.0; 3],
+            rendezvous_nav: RendezvousNavState {
+                target_pos:              [0.0; 3],
+                target_vel:              [0.0; 3],
+                target_epoch:            0.0,
+                w_matrix:                [[0.0; 6]; 6],
+                last_mark_time:          0.0,
+                mark_count:              0,
+                reject_count:            0,
+                consecutive_reject_count: 0,
+                lvlh_state: crate::guidance::rendezvous::LvlhState {
+                    rho:     [0.0; 3],
+                    rho_dot: [0.0; 3],
+                },
+                tracking_active:         false,
+            },
             entry: EntryState::new(),
             vn: VnState::new(),
         }

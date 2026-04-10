@@ -71,6 +71,9 @@ pub fn fresh_start(state: &mut AgcState) {
 
     // Flags — all cleared.
     state.flagwords = [0u16; 12];
+
+    // Rendezvous navigation state — reset.
+    state.rendezvous_nav = Default::default();
 }
 
 /// Restart group dispatch entry: a function pointer + default priority/delay.

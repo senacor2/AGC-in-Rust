@@ -43,6 +43,7 @@ use crate::types::{Mat3x3, Vec3};
 /// y = out-of-plane (opposite angular momentum), z = radial-inward (toward body).
 ///
 /// Spec: rendezvous-spec.md §5.1
+#[derive(Clone, Copy, Debug)]
 pub struct LvlhState {
     /// Relative position vector in the LVLH frame (m).
     /// rho_lvlh = M_I2L * (r_active - r_target)

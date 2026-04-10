@@ -3,6 +3,7 @@ pub mod p01_p02;
 pub mod p06;
 pub mod p11;
 pub mod p15;
+pub mod p20;
 pub mod p20_p22;
 pub mod p23;
 pub mod p30;
@@ -48,7 +49,7 @@ pub static PROGRAM_TABLE: [Option<ProgramInit>; 100] = {
     t[6]  = Some(p06::init);
     t[11] = Some(p11::init);
     t[15] = Some(p15::init);
-    t[20] = Some(p20_p22::init_p20);
+    t[20] = Some(p20::init_p20);
     t[21] = Some(p20_p22::init_p21);
     t[22] = Some(p20_p22::init_p22);
     t[23] = Some(p23::init);
