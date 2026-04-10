@@ -1189,6 +1189,87 @@ provides ~7 decimal digits -- less than the AGC's double-word ~9 digits),
 then Cortex-M4F becomes viable. This would require careful analysis of
 numerical accuracy in state vector propagation and is NOT the current baseline.
 
+#### Processor Choice Justification
+
+The target choice is driven by the binding constraint of the Digital Autopilot:
+the DAP must complete a full attitude/velocity computation cycle in less than
+100 ms, and its math is `f64`-heavy (see §9.4 Gravity Model and §3.1 Numeric
+Types). The following comparison against the original AGC and a common
+low-cost alternative (ESP8266) shows why Cortex-M7 is the only viable choice.
+
+**Raw clock and instruction rate**
+
+| Processor                   | Master Clock       | Effective Instruction Rate  |
+|-----------------------------|--------------------|-----------------------------|
+| AGC (Block 2)               | 2.048 MHz          | ~85,000 basic instr/sec (MCT = 11.72 μs) |
+| ESP8266 (Tensilica L106)    | 80 MHz (up to 160) | ~80–160 MIPS                |
+| Cortex-M7 (STM32H743)       | 480 MHz            | ~960 MIPS (dual-issue)      |
+
+- ESP8266 vs AGC: ~80× faster clock (160× overclocked)
+- Cortex-M7 @ 480 MHz vs AGC: ~470× faster clock, ~11,000× faster effective
+- Cortex-M7 vs ESP8266: ~3–6× clock, ~6–12× MIPS
+
+**Architecture features relevant to the AGC port**
+
+| Feature                 | AGC             | ESP8266          | Cortex-M7              |
+|-------------------------|-----------------|------------------|------------------------|
+| Word size               | 15-bit 1's comp | 32-bit RISC      | 32-bit ARM             |
+| Hardware multiply       | Yes (46.9 μs)   | Yes (1 cycle)    | Yes (1 cycle)          |
+| Hardware divide         | Yes (82.0 μs)   | No (software)    | Yes (2–12 cycles)      |
+| **FPU f32**             | None            | None (soft-float)| **Hardware (1–4 cyc)** |
+| **FPU f64**             | None            | None (soft-float)| **Hardware (5–20 cyc)**|
+| Deterministic timing    | Yes             | No (cache + WiFi)| Yes (ITCM/DTCM)        |
+| RAM                     | 2 KB            | ~80 KB           | 1 MB SRAM typical      |
+| Flash                   | 36 KB (rope)    | 1–4 MB           | 2 MB typical           |
+
+**Relative performance against the AGC baseline**
+
+| Metric              | AGC              | ESP8266 (160 MHz)   | Cortex-M7 (480 MHz) |
+|---------------------|------------------|---------------------|---------------------|
+| Raw clock           | 1×               | 78×                 | 234×                |
+| Integer MIPS        | 1×               | ~1,900×             | ~11,000×            |
+| **f64 throughput**  | **1× (fixed-pt)**| **~2× (soft-float)**| **~5,000× (HW FPU)**|
+| DAP timing margin   | ~0× (tight)      | Negative (misses)   | ~100×               |
+
+#### ESP8266 Rejection (recorded so the question does not recur)
+
+The ESP8266's 80–160 MHz clock and ~80 KB RAM superficially look like a
+significant upgrade from the AGC. At the raw-integer level it is ~1,900× faster
+than the AGC. For our workload it is not viable:
+
+1. **No FPU**: The ESP8266 performs `f32` and `f64` operations entirely in
+   software. A soft-float `f64` multiply on the Tensilica L106 takes
+   ~50–100 clock cycles, giving a net `f64` throughput of only ~2× the
+   original AGC (which used 15-bit fixed-point). The DAP, SERVICER, and
+   gravity computations would either miss their 100 ms deadline under
+   adversarial conditions or force the project to abandon `f64` for the
+   navigation math — re-introducing the scale-factor bookkeeping we
+   explicitly designed out (ADR D3).
+
+2. **Non-deterministic timing**: The ESP8266 has an instruction cache and
+   shares the CPU with the WiFi stack via higher-priority interrupts. Both
+   introduce latency jitter that is hostile to hard real-time scheduling.
+   The AGC's cooperative Executive + Waitlist assumes deterministic interrupt
+   latency; reproducing that on an ESP8266 would require disabling the WiFi
+   stack, losing the main reason someone would pick this part.
+
+3. **Marginal RAM**: The full `AgcState` struct plus stacks plus fixture data
+   plus the ESP-IDF system overhead (~40 KB) approaches the 80 KB RAM limit.
+   There is no comfortable margin for adding program-specific workspace.
+
+4. **No ecosystem fit**: The project targets the
+   [Rust Embedded](https://github.com/rust-embedded) ecosystem (§14.1). The
+   ESP8266 is not a Cortex-M and the `cortex-m` / `cortex-m-rt` crates do not
+   apply. An alternative Rust toolchain exists (`esp-rs`), but does not share
+   the `#[interrupt]`, NVIC, or `embedded-hal` v1 conventions the rest of the
+   architecture is built on.
+
+**Conclusion**: Cortex-M7 with double-precision FPU gives ~5,000× the f64
+throughput of the original AGC and ~100× DAP timing margin. The ESP32-S3 is
+a possible secondary target because it has a hardware FPU; but the ESP8266,
+specifically, is rejected and should not be revisited without first
+re-opening ADR D3 (native `f64` vs fixed-point arithmetic).
+
 ### 14.2 Feature Flags
 
 ```toml
