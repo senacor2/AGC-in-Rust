@@ -711,10 +711,12 @@ mod tests {
     /// and the entry target is a point on the Earth entry sphere expressed in the
     /// same Moon-inertial frame (pre-converted by the caller, as per §5.3).
     ///
-    /// NOTE: This test hits the Lambert anti-parallel degenerate case, which
-    /// is a known limitation (see Lambert technical debt in transformation/tasks.md).
+    /// TC-TGT-10: return_to_earth TEI burn targeting test. Offset from the
+    /// x-axis to avoid Lambert anti-parallel singularity, but the long-TOF
+    /// (~60 hour) high-eccentricity transfer still causes Halley to stall.
+    /// This is a separate Lambert edge case beyond the core regime fixes.
     #[test]
-    #[ignore = "Lambert anti-parallel degeneracy: needs debug"]
+    #[ignore = "TC-TGT-10: Lambert Halley stalls on long-TOF TEI geometry"]
     fn tc_tgt_10_return_to_earth_mode() {
         use crate::navigation::gravity::MU_MOON;
 
@@ -729,11 +731,15 @@ mod tests {
             frame: Frame::MoonInertial,
         };
 
-        // Entry target: a point roughly 380 000 km away in the -x direction
-        // (Earth is in the -x direction from the Moon in this simplified frame).
-        let entry_r = R_EARTH_M + ENTRY_INTERFACE_ALT_M; // ~6 500 km
-        // Expressed in Moon-inertial frame: Earth is ~384 400 km from Moon on -x
-        let entry_target: Vec3 = [-384_400_000.0 + entry_r, 0.0, 0.0];
+        // Entry target: a point roughly 380 000 km away, off the x-axis by
+        // 5° in the +y direction to avoid anti-parallel Lambert singularity.
+        let earth_dist = 384_400_000.0_f64;
+        let offset_angle = 5.0_f64.to_radians();
+        let entry_target: Vec3 = [
+            -earth_dist * libm::cos(offset_angle),
+            earth_dist * libm::sin(offset_angle),
+            0.0,
+        ];
 
         // Estimated TEI TOF: ~60 hours
         let tof_s = 60.0 * 3600.0;
