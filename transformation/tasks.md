@@ -227,6 +227,54 @@ tests in agc-sim. Total project: 302 agc-core tests pass.
   P37 return-to-earth pass or a dedicated Lambert hardening sprint,
   whichever comes first.
 
+- [ ] **Impl** — `navigation/planetary::moon_position(t: Met) -> Vec3`
+  is a `todo!("lunar ephemeris")` stub. Downstream consequences:
+  - `services/average_g.rs:207` hard-codes `moon_pos = [3.844e8, 0, 0]`
+    as a placeholder for the Cowell third-body term. The approximation
+    is adequate at LEO but wrong for cislunar coast — replace with
+    `navigation::planetary::moon_position(state.csm_state.epoch)` once
+    the ephemeris exists.
+  - `navigation/integration.rs::propagate_coast` takes `moon_pos` as a
+    caller-supplied argument for the same reason.
+  A minimal analytic lunar ephemeris (circular orbit at 384_400 km,
+  period 27.32 d, inclined 5.14° to ecliptic) would satisfy the
+  short-term accuracy needs of Milestone 4-era programs; a higher-
+  fidelity Brown/Chapront series is a later refinement.
+  Acceptance: `moon_position` returns finite, non-zero ECI coordinates;
+  `average_g.rs` calls it instead of the hard-coded placeholder.
+
+- [ ] **Impl** — `navigation/time::met_to_gmst(t: Met, launch_jd: f64) -> f64`
+  is a `todo!("MET to GMST conversion")` stub with no current callers.
+  Needed to convert Mission Elapsed Time to Greenwich Mean Sidereal Time
+  for Earth-fixed frame conversions in P21/P22 — currently P21 uses a
+  simplified linear `gha_epoch_rad + OMEGA_EARTH * t` model which is
+  accurate to within ~1 km ground position over a typical mission.
+  The real AGC used a Julian-date based GMST formula (IAU 1980).
+  Acceptance: a higher-fidelity GMST reduces P21 ground-track error
+  relative to STK reference by ≥ 10×. Blocked by: need a reference
+  ground-track dataset to compare against.
+
+- [ ] **Perf** — Replace `navigation/integration::propagate_coast` Cowell
+  RK4 sub-stepping with `math::kepler::kepler_step` + small perturbation
+  correction once the perturbation model (J2, Moon, drag) is factored
+  out into its own function. Current implementation at `integration.rs:148`
+  is correct but slow for long coasts; kepler_step is ~100× faster for
+  a pure-Kepler step. The RK4 path stays for perturbed propagation.
+  Acceptance: `propagate_coast` switches to `kepler_step` for `dt > 600 s`
+  in the pure-two-body case; all existing integration tests still pass.
+
+- [ ] **Data** — Populate `CISLUNAR_STAR_TABLE` in `programs/p23.rs` and
+  the general `navigation/star_catalog.rs` with real J2000 star directions
+  from `Comanche055/STAR_TABLES.agc`. Currently all 8 entries have
+  `direction: [0.0; 3]`. P23 tests use hard-coded star directions so the
+  zero table does not block tests, but it blocks any real-mission use of
+  the catalogue (sextant mark handler must look up star `i`'s inertial
+  direction from the table). `navigation/star_catalog.rs` is also an
+  empty orphan module — either populate it and have P23 import from
+  there, or delete it and keep the table inside `p23.rs`.
+  Acceptance: at least 8 stars with non-zero unit-vector directions,
+  unit-length within 1e-9, sourced from `STAR_TABLES.agc`.
+
 ## Completed
 
 - [x] Architecture — `docs/architecture.md`
