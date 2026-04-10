@@ -154,6 +154,25 @@ tests in agc-sim. Total project: 302 agc-core tests pass.
   - **Test geometry repairs**: TC-LAM-1 now uses a proper 179° Hohmann at `tof=T/2`; TC-LAM-2 uses a 19.44° arc matching the LEO period at `tof=300 s`; TC-LAM-3 asserts TLI elliptic bounds instead of hyperbolic escape.
   - **Known remaining edge case**: TC-TGT-10 / TC-P37-{1,2,4} (~60 h TEI from LLO to Earth entry sphere) still stall at residual ≈1.45 — this is a long-TOF high-eccentricity regime that is outside Milestone 4 scope. Not required for Milestone 5 rendezvous targeting (P33/P34 use short-TOF TPI/TPM). Revisit when P37 return-to-earth targeting is exercised in a dedicated pass.
 
+- [ ] **Debug** — Lambert long-TOF TEI regime (TC-TGT-10 / TC-P37-{1,2,4}).
+  Four tests are currently `#[ignore]`'d because the Izzo Halley iteration
+  stalls at residual ≈1.45 on the ~60 h trans-Earth injection geometry
+  (LLO → Earth entry sphere, `r₁ ≈ 1.84 Mm`, `r₂ ≈ 384 Mm`, `tof ≈ 60 h`).
+  The solver's T(x,λ), derivatives, and initial-guess formulas are
+  correct per Izzo 2015 for the short-TOF regimes already validated by
+  TC-LAM-1..5, so the fix is likely one of:
+  - Multi-revolution branch selection (the paper's §4 M > 0 path) if the
+    geometry in fact requires M=1.
+  - A dedicated long-TOF / high-eccentricity initial guess — the current
+    slow-regime `(T₀/T)^(2/3) − 1` may undershoot badly when `T ≫ T₀₀`.
+  - Halley-step damping or a bracketed Brent fallback when the residual
+    refuses to shrink for several iterations.
+  Acceptance: un-ignore TC-TGT-10, TC-P37-1, TC-P37-2, TC-P37-4; full
+  suite reports 0 ignored Lambert-related tests. Owner: unassigned.
+  Blocked by: nothing (Lambert core is green). Target milestone: the
+  P37 return-to-earth pass or a dedicated Lambert hardening sprint,
+  whichever comes first.
+
 ## Completed
 
 - [x] Architecture — `docs/architecture.md`
