@@ -49,6 +49,7 @@ pub struct Lamps {
     pub temp: bool,
     pub prog_alarm: bool,
     pub comp_acty: bool,
+    pub tracker: bool,
 }
 
 /// A fully decoded DSKY frame ready for hardware write-out.
@@ -145,6 +146,7 @@ pub fn decode_dsky(state: &DskyState) -> DskyFrame {
             temp: state.temp,
             prog_alarm: state.prog_alarm,
             comp_acty: state.comp_acty,
+            tracker: state.tracker,
         },
         lamp_test: state.lamp_test_active,
         flashing: state.flashing,

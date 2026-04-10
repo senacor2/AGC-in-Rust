@@ -62,6 +62,7 @@ pub fn fresh_start(state: &mut AgcState) {
         temp: false,
         prog_alarm: false,
         comp_acty: false,
+        tracker: false,
         lamp_test_active: false,
     };
 

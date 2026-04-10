@@ -6,3 +6,8 @@ description = "Host-side simulator and HAL implementation for agc-core"
 
 [dependencies]
 agc-core = { path = "../agc-core" }
+crossterm = "0.27"
+
+[[bin]]
+name = "dsky_sim"
+path = "src/bin/dsky_sim.rs"

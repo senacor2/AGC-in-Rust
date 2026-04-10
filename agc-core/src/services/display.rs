@@ -27,6 +27,8 @@ pub struct DskyState {
     pub temp: bool,
     pub prog_alarm: bool,
     pub comp_acty: bool,
+    /// Star tracker lamp (IMU optical alignment activity).
+    pub tracker: bool,
     /// Set by V35 (lamp test). The T4RUPT display shim reads this and
     /// drives every indicator lamp on for one cycle, then clears it.
     pub lamp_test_active: bool,
