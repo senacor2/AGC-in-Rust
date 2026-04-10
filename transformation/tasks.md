@@ -60,21 +60,50 @@
 - [x] **Impl** — `guidance/maneuver.rs` (5 tests: burn execution, cross-product steering, cutoff)
 - [x] **Architect review** — `specs/milestone-3-architect-review.md` (10 critical issues, 6 ADs, all resolved)
 
-### Milestone 4 — Programs (P-codes)
+### Milestone 4 — Non-rendezvous Programs (P-codes)
 
-- [ ] P00 — CMC Idling
-- [ ] P11 — Earth orbit insertion
-- [ ] P40/P41 — SPS/RCS thrusting
-- [ ] P51/P52 — IMU alignment
-- [ ] P61–P67 — Entry guidance sequence
-- [ ] P30 — External Delta-V (needed for Lambert fixture tests)
-- [ ] P37 — Return to Earth
-- [ ] Remaining P-codes
+Scope: programs that can be implemented without the Verb/Noun processor
+(Milestone 6) and without the rendezvous guidance stack (Milestone 5).
+Phased by dependency depth: each phase reuses the primitives built in
+prior milestones.
 
-### Milestone 5 — DSKY and Crew Interface
+- [x] **Phase 1** — P00 (CMC Idle), P30 (External ΔV), P37 (Return to Earth)
+- [x] **Phase 2** — P51, P52 (IMU alignment — sequencing over TRIAD REFSMMAT)
+- [x] **Phase 3** — P40, P41 (SPS/RCS thrusting) + `burn_servicer_exit`
+- [x] **Phase 4** — P11 (Earth Orbit Insertion Monitor)
+- [x] **Phase 5** — P61–P67 (Entry guidance skeletons)
+- [x] **Phase 6** — Book-keeping programs: P01/P02 (pre-launch
+  initialisation), P06 (CMC power-down), P15 (TLI monitor), P47 (thrust
+  monitor). All are thin wrappers over existing services.
+
+### Milestone 5 — Rendezvous Programs
+
+Scope: the rendezvous targeting + monitoring program family. Held back
+from Milestone 4 because they need dedicated relative-motion primitives,
+closing-rate displays, and Lambert rendezvous targeting that are genuine
+new math — not just sequencing wrappers.
+
+- [ ] **Spec + Impl** — `guidance/rendezvous.rs` (relative state, closing rate)
+- [ ] P20 — Rendezvous navigation
+- [ ] P21 — Ground-track determination
+- [ ] P22 — Orbital navigation (landmark tracking)
+- [ ] P23 — Cislunar midcourse navigation (star/landmark sightings)
+- [ ] P31 — CSI (Coelliptic Sequence Initiation) targeting
+- [ ] P32 — CDH (Constant Delta-Height) targeting
+- [ ] P33 — TPI (Terminal Phase Initiation) targeting
+- [ ] P34 — TPM (Terminal Phase Midcourse) targeting
+
+### Milestone 6 — DSKY and Crew Interface
+
+Unlocks the interactive paths that were deferred throughout M4: P30's
+V25 N33/N81 data-load state machine, P51/P52's MARK button loop,
+P40's crew go/no-go gates.
 
 - [ ] **Spec + Impl** — `services/v_n.rs` (Verb/Noun state machine)
 - [ ] **Spec + Impl** — `services/display.rs` (PINBALL display driver)
+- [ ] V37 program-select handler wired into the V/N processor
+- [ ] V25 data-load state machine (used by P30, P37, P51/P52 MARK loop)
+- [ ] V50 crew go/no-go acknowledgement (used by P40 pre-ignition)
 - [ ] `agc-sim` terminal DSKY simulator
 
 ### Technical Debt
