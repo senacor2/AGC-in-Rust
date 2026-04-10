@@ -81,6 +81,9 @@ pub fn fresh_start(state: &mut AgcState) {
     // gha_epoch_rad is intentionally NOT reset here.
     // It is an uplink value set by Mission Control prior to orbital insertion
     // and must survive FRESH START (Override 2).
+
+    // TPI/TPM arrival epoch — reset on FRESH START (no active rendezvous).
+    state.tpi_arrival_epoch = None;
 }
 
 /// Restart group dispatch entry: a function pointer + default priority/delay.

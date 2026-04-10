@@ -55,12 +55,12 @@ pub enum TargetingMode {
     #[default]
     ExternalDeltaV,
 
-    /// P33/P34 — Lambert rendezvous targeting.
+    /// Reserved for future Lambert-based targeting programs that are not
+    /// TPI/TPM. No current program uses this variant.
     ///
-    /// Delta-V was computed by the Lambert solver to intercept the target
-    /// state vector. Used by P33 (TPI) and P34 (TPM — Terminal Phase
-    /// Midcourse). P31 and P32 use closed-form coelliptic targeting, not
-    /// Lambert.
+    /// Historically this variant was used by P33 (TPI) and P34 (TPM) before
+    /// they received dedicated `TpiBurn` and `TpmBurn` variants in Phase 6.
+    /// P31 and P32 use closed-form coelliptic targeting, not Lambert.
     /// DSKY: V06N33 (TIG), V06N84 (delta-V in LVLH for display).
     Lambert,
 
@@ -82,6 +82,21 @@ pub enum TargetingMode {
     /// interface at the nominal entry flight-path angle.
     /// DSKY: V06N33 (TIG), V06N86 (delta-V magnitude + entry angle).
     ReturnToEarth,
+
+    /// P33 — Terminal Phase Initiation (TPI) burn.
+    ///
+    /// Delta-V computed by Lambert solver targeting the LM's position at
+    /// TIG + dt_tpi. Transfer time nominally 10 minutes.
+    /// DSKY: V06 N37 (TIG), V06 N55 (elevation angle + transfer time),
+    ///       V06 N81 (LVLH ΔV components).
+    TpiBurn,
+
+    /// P34 — Terminal Phase Midcourse (TPM) correction burn.
+    ///
+    /// Delta-V computed by Lambert solver targeting the same arrival position
+    /// as the P33 TPI solution, with remaining time dt_midcourse.
+    /// DSKY: V06 N37 (TIG), V06 N81 (LVLH ΔV components).
+    TpmBurn,
 }
 
 // ── Maneuver ──────────────────────────────────────────────────────────────────

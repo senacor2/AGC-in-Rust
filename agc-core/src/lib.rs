@@ -220,6 +220,17 @@ pub struct AgcState {
     ///
     /// Updated by `services::v_n::feed_key` each keypress.
     pub vn: VnState,
+
+    // ── TPI/TPM rendezvous ───────────────────────────────────────────────────
+    /// Arrival epoch stored by P33 at TPI computation time.
+    ///
+    /// Seconds from mission epoch (same time base as `Met.to_seconds()`).
+    /// Set to `Some(epoch_s)` by `p33_init` on successful TPI computation.
+    /// Read by `p34_init`; if `None`, P34 raises alarm 01441.
+    /// Reset to `None` on FRESH START.
+    ///
+    /// AGC erasable: TTPI (computed TPI arrival time; scale B+17 centiseconds).
+    pub tpi_arrival_epoch: Option<f64>,
 }
 
 impl AgcState {
@@ -331,6 +342,7 @@ impl AgcState {
             gha_epoch_rad: 0.0,
             entry: EntryState::new(),
             vn: VnState::new(),
+            tpi_arrival_epoch: None,
         }
     }
 }
