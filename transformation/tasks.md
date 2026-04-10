@@ -83,15 +83,69 @@ from Milestone 4 because they need dedicated relative-motion primitives,
 closing-rate displays, and Lambert rendezvous targeting that are genuine
 new math — not just sequencing wrappers.
 
-- [ ] **Spec + Impl** — `guidance/rendezvous.rs` (relative state, closing rate)
-- [ ] P20 — Rendezvous navigation
-- [ ] P21 — Ground-track determination
-- [ ] P22 — Orbital navigation (landmark tracking)
-- [ ] P23 — Cislunar midcourse navigation (star/landmark sightings)
-- [ ] P31 — CSI (Coelliptic Sequence Initiation) targeting
-- [ ] P32 — CDH (Constant Delta-Height) targeting
-- [ ] P33 — TPI (Terminal Phase Initiation) targeting
-- [ ] P34 — TPM (Terminal Phase Midcourse) targeting
+- [x] **Spec + Impl** — `guidance/rendezvous.rs` (relative state, closing rate)
+- [x] P20 — Rendezvous navigation
+- [x] P21 — Ground-track determination
+- [x] P22 — Orbital navigation (landmark tracking)
+- [x] P23 — Cislunar midcourse navigation (star/landmark sightings)
+- [x] P31 — CSI (Coelliptic Sequence Initiation) targeting
+- [x] P32 — CDH (Constant Delta-Height) targeting
+- [x] P33 — TPI (Terminal Phase Initiation) targeting
+- [x] P34 — TPM (Terminal Phase Midcourse) targeting
+
+**Completed 2026-04-10.** Delivered in six phases:
+
+- **Phase 1** (commit `e4f7562`) — `guidance/rendezvous.rs` primitives:
+  `lvlh_matrix` (Hill-frame rotation, z toward body — distinct from the
+  RSW frame in `guidance/targeting.rs`), `relative_state_lvlh`, `range`,
+  `range_rate`, `los_angles_lvlh`, `time_to_closest_approach`. 12 tests.
+
+- **Phase 2** (commit `b0c3b5b`) — **P20 Rendezvous Navigation**:
+  `RendezvousNavState` added to `AgcState` with a full 6×6 W-matrix;
+  scalar Kalman measurement update for radar range/range-rate and
+  sextant LOS marks; 3-sigma reject gate with 5-consecutive-reject alarm;
+  process-noise growth and W-matrix rectification. Schedules itself via
+  the Waitlist (not `servicer_exit`) at a 2 s period. 8 tests.
+
+- **Phase 3** (commit `af1f78c`) — **P21 Ground-Track** + **P22 Orbital
+  Navigation**: P21 is a pure-computation ground-track solver
+  (`kepler_step` propagation + Earth rotation + lat/lon/alt extraction).
+  P22 mirrors P20's measurement structure but updates `csm_state` from
+  sextant landmark sightings, with a separate `CsmNavState` W-matrix.
+  Factored the P20 Kalman helper into `navigation/kalman.rs` so both
+  programs (and P23) share the same scalar update machinery. Added
+  `gha_epoch_rad: f64` top-level field to `AgcState`. 11 tests.
+
+- **Phase 4** (commit `32a8b43`) — **P23 Cislunar Midcourse Navigation**:
+  star-horizon and star-landmark angle measurement models with closed-form
+  sensitivity derivations (O'Brien Ch. 11). Shares `state.csm_nav` with
+  P22 since both update the same physical quantity. Detects body from
+  `Frame::EarthInertial` / `Frame::MoonInertial`. 8 tests.
+
+- **Phase 5** (commit `6bbe6c0`) — **P31 CSI** + **P32 CDH**: closed-form
+  coelliptic rendezvous targeting (no Lambert). P31 is a 1-D Newton
+  iteration over the in-track ΔV with CDH's W-axis residual as the cost
+  function; P32 is a closed-form coelliptic solver (Battin eq. 11-53).
+  Both emit `Maneuver` into `state.pending_maneuver` with new
+  `TargetingMode::CsiBurn` / `CdhBurn` variants. 10 tests.
+
+- **Phase 6** (commit `96d2ce5`) — **P33 TPI** + **P34 TPM**: Lambert-based
+  terminal-phase targeting. Shared `compute_lambert_intercept` helper
+  calls `math::lambert::lambert` as a black box, with `validate_lambert_inputs`
+  pre-check to catch degenerate geometry before the solver panics. P33
+  stores `state.tpi_arrival_epoch: Option<f64>` so P34 can retarget the
+  same arrival point with the remaining transfer time. New
+  `TargetingMode::TpiBurn` / `TpmBurn` variants. 12 tests.
+
+**New `AgcState` fields**: `rendezvous_nav`, `csm_nav`, `gha_epoch_rad`,
+`tpi_arrival_epoch`. **New shared infrastructure**: `guidance/rendezvous.rs`
+(Hill-frame primitives), `navigation/kalman.rs` (state-agnostic scalar
+Kalman update). **`TargetingMode` extended** with `CsiBurn`, `CdhBurn`,
+`TpiBurn`, `TpmBurn`.
+
+**Test coverage**: 302 → 363 agc-core tests (+61), 0 regressions, 0 new
+ignored. The 4 long-standing ignored tests (TC-TGT-10 + 3× TC-P37) remain
+tracked under Technical Debt.
 
 ### Milestone 6 — DSKY and Crew Interface
 
