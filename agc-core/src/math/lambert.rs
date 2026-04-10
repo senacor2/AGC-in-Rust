@@ -380,76 +380,141 @@ mod tests {
         );
     }
 
-    // ── TC-LAM-1: 90° LEO → MEO Hohmann-like transfer ────────────────────────
+    // ── TC-LAM-1: Near-Hohmann transfer 400km LEO → 1200km ───────────────────
     //
-    // r1 at 400 km altitude on +X, r2 at 1200 km altitude on +Y.
-    // Transfer ellipse a = (6778 + 7578)/2 km; tof = quarter period.
-    // TODO: Test geometry is ill-posed — tof=T/4 does NOT correspond to 90°
-    // true anomaly on an elliptic transfer orbit. Bugs 1-3 from the analyst
-    // review were applied and the iteration now converges, but the resulting
-    // velocity is inconsistent with the assumed geometry. Test needs a
-    // physically consistent Hohmann setup (180° transfer at half-period).
+    // Classical Hohmann transfer: 179° arc (slightly offset from exactly 180°
+    // to avoid Lambert's anti-parallel degeneracy). TOF = half transfer ellipse
+    // period. Analytical expected velocities from vis-viva.
+    //
+    // STATUS: Test geometry is now physically consistent (replaces the
+    // previous ill-posed tof=T/4 setup). The Lambert solver converges to
+    // residual ~1.2e-5 (just over the 1e-6 tolerance) — algorithm is
+    // borderline but not quite converging in this near-Hohmann regime.
+    // Needs further algorithm work.
     #[test]
-    #[ignore = "Lambert test geometry ill-posed: tof=T/4 ≠ 90° arc"]
-    fn tc_lam_1_leo_to_meo_90deg() {
-        let r1: Vec3 = [6_778_000.0, 0.0, 0.0];
-        let r2: Vec3 = [0.0, 7_578_000.0, 0.0];
-        let a_tr = (6_778_000.0_f64 + 7_578_000.0) / 2.0;
+    #[ignore = "Lambert near-Hohmann: residual ~1.2e-5, borderline convergence"]
+    fn tc_lam_1_hohmann_400_to_1200km() {
+        let r1_mag = 6_778_000.0_f64; // 6378 + 400 km
+        let r2_mag = 7_578_000.0_f64; // 6378 + 1200 km
+        let r1: Vec3 = [r1_mag, 0.0, 0.0];
+        // 179° instead of exactly 180° to avoid anti-parallel degeneracy.
+        let theta = 179.0_f64.to_radians();
+        let r2: Vec3 = [
+            r2_mag * libm::cos(theta),
+            r2_mag * libm::sin(theta),
+            0.0,
+        ];
+
+        let a_tr = (r1_mag + r2_mag) / 2.0;
         let t_period =
             2.0 * core::f64::consts::PI * libm::sqrt(a_tr * a_tr * a_tr / MU_EARTH);
-        let tof = t_period / 4.0;
+        let tof = t_period / 2.0; // half-period for Hohmann transfer
 
         let (v1, v2) = lambert(r1, r2, tof, MU_EARTH, true);
 
-        // v1 should be prograde-tangential at r1 on +X axis → large +Y component.
-        assert!(v1[1] > 7_000.0, "v1_y should be prograde: got {}", v1[1]);
-        assert!(v1[0].abs() < 500.0, "v1_x radial component too large: got {}", v1[0]);
+        // Analytical Hohmann departure/arrival speeds from vis-viva:
+        //   v² = μ·(2/r − 1/a)
+        let v1_expected = libm::sqrt(MU_EARTH * (2.0 / r1_mag - 1.0 / a_tr));
+        let v2_expected = libm::sqrt(MU_EARTH * (2.0 / r2_mag - 1.0 / a_tr));
 
-        // v2 should be tangential at r2 on +Y axis → large −X component.
-        assert!(v2[0] < -6_500.0, "v2_x should be −X prograde: got {}", v2[0]);
-        assert!(v2[1].abs() < 500.0, "v2_y should be near-zero: got {}", v2[1]);
+        let v1_mag = norm(v1);
+        let v2_mag = norm(v2);
+
+        // 0.5% relative tolerance
+        assert!(
+            (v1_mag - v1_expected).abs() / v1_expected < 5.0e-3,
+            "TC-LAM-1: |v1| = {} m/s, expected {} m/s (Hohmann departure)",
+            v1_mag,
+            v1_expected
+        );
+        assert!(
+            (v2_mag - v2_expected).abs() / v2_expected < 5.0e-3,
+            "TC-LAM-1: |v2| = {} m/s, expected {} m/s (Hohmann arrival)",
+            v2_mag,
+            v2_expected
+        );
+
+        // At periapsis the velocity is purely tangential → v1·r1 = 0
+        // and v1 should point in the +Y direction for prograde.
+        let v1_radial = dot(v1, r1) / r1_mag;
+        assert!(
+            v1_radial.abs() < 10.0,
+            "TC-LAM-1: radial velocity at periapsis should be ~0, got {}",
+            v1_radial
+        );
+        assert!(v1[1] > 0.0, "TC-LAM-1: v1_y should be +prograde, got {}", v1[1]);
 
         // Angular momentum z > 0 for prograde.
         let h = cross(r1, v1);
-        assert!(h[2] > 0.0, "h_z must be positive (prograde), got {}", h[2]);
+        assert!(h[2] > 0.0, "TC-LAM-1: h_z must be positive (prograde), got {}", h[2]);
 
         // Energy conservation I2.
         check_energy(r1, v1, r2, v2, MU_EARTH, "TC-LAM-1");
     }
 
-    // ── TC-LAM-2: LEO rendezvous, 5-minute short transfer ────────────────────
-    // TODO: Test geometry is pathological. 5 minutes TOF for a 0.3° arc at
-    // LEO means the chaser must travel MUCH farther than the arc distance,
-    // forcing a degenerate highly-eccentric transfer. The "expected |v1| ≈
-    // circular velocity" assertion is wrong for this geometry. Test needs
-    // realistic rendezvous setup (phasing burn, hours of TOF).
+    // ── TC-LAM-2: LEO circular arc, 5-minute transfer ────────────────────────
+    //
+    // Spacecraft on a 400 km circular LEO. In 5 minutes (300 s) at v_circ
+    // = 7668 m/s, the arc traversed is (300/T_period)·360° ≈ 19.44°.
+    // The Lambert solver should recover the circular velocity (this is a
+    // zero-delta-V baseline).
+    //
+    // STATUS: Test geometry is physically consistent (replaces the previous
+    // pathological 0.3° arc in 300s setup). The Lambert solver converges
+    // but to the WRONG x value — returns |v1| ≈ 5404 m/s instead of the
+    // expected 7668 m/s (circular velocity). The ratio 7668/5404 ≈ √2
+    // suggests a factor-of-2 error in the T(x,λ) formula or velocity
+    // reconstruction near the minimum-energy regime (x ≈ 1).
     #[test]
-    #[ignore = "Lambert test geometry pathological: 5min for 0.3° arc"]
-    fn tc_lam_2_leo_rendezvous() {
-        let r1: Vec3 = [6_778_000.0, 0.0, 0.0];
-        let theta = 0.3_f64.to_radians();
+    #[ignore = "Lambert near-minimum-energy: converges to wrong x, velocity off by √2"]
+    fn tc_lam_2_leo_circular_arc_5min() {
+        let r_mag = 6_778_000.0_f64;
+        let r1: Vec3 = [r_mag, 0.0, 0.0];
+
+        // Compute the arc angle from the circular orbit period.
+        let t_period = 2.0 * core::f64::consts::PI
+            * libm::sqrt(r_mag * r_mag * r_mag / MU_EARTH);
+        let tof = 300.0; // 5 minutes
+        let theta = 2.0 * core::f64::consts::PI * tof / t_period;
+
         let r2: Vec3 = [
-            6_778_000.0 * libm::cos(theta),
-            6_778_000.0 * libm::sin(theta),
+            r_mag * libm::cos(theta),
+            r_mag * libm::sin(theta),
             0.0,
         ];
-        let tof = 300.0; // 5 minutes
 
         let (v1, v2) = lambert(r1, r2, tof, MU_EARTH, true);
 
-        // v1 magnitude should be close to circular velocity.
+        // For this baseline, the Lambert solution should match circular velocity
+        // to within ~1%.
+        let v_circ = libm::sqrt(MU_EARTH / r_mag);
         let v1_mag = norm(v1);
-        let v_circ = libm::sqrt(MU_EARTH / 6_778_000.0);
+        let v2_mag = norm(v2);
+
         assert!(
-            v1_mag > v_circ * 0.98 && v1_mag < v_circ * 1.15,
-            "v1 magnitude {v1_mag:.1} should be near circular velocity {v_circ:.1}"
+            (v1_mag - v_circ).abs() / v_circ < 0.01,
+            "TC-LAM-2: |v1| = {} m/s, expected ≈ {} m/s (circular)",
+            v1_mag, v_circ
         );
+        assert!(
+            (v2_mag - v_circ).abs() / v_circ < 0.01,
+            "TC-LAM-2: |v2| = {} m/s, expected ≈ {} m/s (circular)",
+            v2_mag, v_circ
+        );
+
+        // v1 should be tangential (perpendicular to r1) → v1_x ≈ 0
+        assert!(
+            v1[0].abs() < 100.0,
+            "TC-LAM-2: v1 should be tangential at r1, got v1_x = {}",
+            v1[0]
+        );
+        assert!(v1[1] > 0.0, "TC-LAM-2: v1_y should be +prograde");
 
         // Prograde: h_z > 0.
         let h = cross(r1, v1);
-        assert!(h[2] > 0.0, "h_z must be positive (prograde)");
+        assert!(h[2] > 0.0, "TC-LAM-2: h_z must be positive (prograde)");
 
-        // Energy conservation I2.
+        // Energy conservation.
         check_energy(r1, v1, r2, v2, MU_EARTH, "TC-LAM-2");
     }
 
