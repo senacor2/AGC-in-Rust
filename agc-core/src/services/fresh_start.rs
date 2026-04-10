@@ -74,6 +74,13 @@ pub fn fresh_start(state: &mut AgcState) {
 
     // Rendezvous navigation state — reset.
     state.rendezvous_nav = Default::default();
+
+    // Landmark tracking navigation state — reset.
+    state.csm_nav = Default::default();
+
+    // gha_epoch_rad is intentionally NOT reset here.
+    // It is an uplink value set by Mission Control prior to orbital insertion
+    // and must survive FRESH START (Override 2).
 }
 
 /// Restart group dispatch entry: a function pointer + default priority/delay.

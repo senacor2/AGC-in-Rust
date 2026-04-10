@@ -31,6 +31,7 @@ use guidance::maneuver::BurnState;
 use guidance::targeting::Maneuver;
 use navigation::StateVector;
 use programs::p20::RendezvousNavState;
+use programs::p22::CsmNavState;
 use programs::p61_p67::EntryState;
 use services::{AlarmState, DskyState, average_g::PipaCalibration, v_n::VnState};
 use types::{CduAngle, Mat3x3, Met};
@@ -191,6 +192,21 @@ pub struct AgcState {
     /// Reset to `Default::default()` on FRESH START.
     pub rendezvous_nav: RendezvousNavState,
 
+    // ── Landmark tracking navigation (P22) ───────────────────────────────────
+    /// State maintained by the P22 orbital navigation program.
+    ///
+    /// Populated by `programs::p22::p22_init` on entry to P22.
+    /// Reset to `Default::default()` on FRESH START.
+    pub csm_nav: CsmNavState,
+
+    // ── Navigation epoch constants ────────────────────────────────────────────
+    /// Greenwich Hour Angle at the navigation epoch (GET = 0.0 s), in radians.
+    /// Positive eastward. Set by uplink prior to orbital insertion and treated
+    /// as a constant for the duration of a navigation session.
+    /// Corresponds to AGC erasable `GHABASE` (Comanche055 ERASABLE_ASSIGNMENTS.agc).
+    /// NOT reset by FRESH START (uplink value survives restarts).
+    pub gha_epoch_rad: f64,
+
     // ── Entry guidance ───────────────────────────────────────────────────────
     /// Atmospheric entry state machine and stub guidance fields.
     ///
@@ -304,6 +320,15 @@ impl AgcState {
                 },
                 tracking_active:         false,
             },
+            csm_nav: CsmNavState {
+                w_matrix:                  [[0.0; 6]; 6],
+                last_mark_time:            0.0,
+                mark_count:                0,
+                reject_count:              0,
+                consecutive_reject_count:  0,
+                tracking_active:           false,
+            },
+            gha_epoch_rad: 0.0,
             entry: EntryState::new(),
             vn: VnState::new(),
         }

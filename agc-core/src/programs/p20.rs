@@ -248,16 +248,9 @@ pub enum LosComponent {
 
 // ── Scalar update outcome ──────────────────────────────────────────────────────
 
-/// Outcome of a single scalar Kalman update attempt.
-///
-/// Used internally by `scalar_measurement_update` to communicate whether the
-/// mark was accepted by the 3-sigma gate or rejected.
-enum UpdateOutcome {
-    /// Mark passed the gate; state and W updated. Returns updated pos and vel.
-    Accepted,
-    /// Mark failed the 3-sigma gate; state and W not modified.
-    Rejected,
-}
+/// Re-export the shared UpdateOutcome so existing call sites in this module
+/// compile unchanged.
+use crate::navigation::kalman::UpdateOutcome;
 
 // ── Public entry point ─────────────────────────────────────────────────────────
 
@@ -506,6 +499,8 @@ pub fn p20_incorporate_radar_mark(state: &mut AgcState, mark: RadarMark) {
                 state.rendezvous_nav.consecutive_reject_count += 1;
                 check_consecutive_rejects(state);
             }
+            // AcceptedWOverflow is mapped to Accepted inside the P20 wrapper.
+            UpdateOutcome::AcceptedWOverflow => unreachable!(),
         }
     }
 
@@ -549,6 +544,8 @@ pub fn p20_incorporate_radar_mark(state: &mut AgcState, mark: RadarMark) {
                 state.rendezvous_nav.consecutive_reject_count += 1;
                 check_consecutive_rejects(state);
             }
+            // AcceptedWOverflow is mapped to Accepted inside the P20 wrapper.
+            UpdateOutcome::AcceptedWOverflow => unreachable!(),
         }
     }
 }
@@ -602,6 +599,8 @@ pub fn p20_incorporate_sextant_mark(state: &mut AgcState, mark: SextantMark) {
             state.rendezvous_nav.consecutive_reject_count += 1;
             check_consecutive_rejects(state);
         }
+        // AcceptedWOverflow is mapped to Accepted inside the P20 wrapper.
+        UpdateOutcome::AcceptedWOverflow => unreachable!(),
     }
 }
 
@@ -643,85 +642,53 @@ fn p20_rectify_w_matrix_internal(state: &mut AgcState) {
     }
 }
 
-/// Scalar Kalman measurement update.
+/// P20-local wrapper around the shared scalar Kalman measurement update.
 ///
-/// Implements steps 3–10 of §6 (innovation variance, gate, gain, state update,
-/// covariance downdate, positive-definite check). Called by both radar and
-/// sextant mark handlers; the caller supplies the sensitivity vector `b` and
-/// pre-computed residual.
+/// Unpacks the `RendezvousNavState` pos/vel into a flat 6-vector, delegates to
+/// `navigation::kalman::scalar_measurement_update`, then writes the result back.
+/// On W-matrix overflow, raises alarm 01421 and calls `p20_rectify_w_matrix`.
 ///
-/// # Arguments
-/// - `b`: 6-element measurement sensitivity (Jacobian) vector.
-/// - `residual`: scalar measurement residual z_observed − z_predicted.
-/// - `sigma_sq`: measurement noise variance for this mark type.
+/// This wrapper preserves the observable behaviour of the original function
+/// (including alarm and rectify on overflow) so that existing P20 tests and
+/// callers within this module need no changes.
 ///
-/// # Returns
-/// `UpdateOutcome::Accepted` if the mark passed the 3-sigma gate and state was
-/// updated; `UpdateOutcome::Rejected` otherwise.
-///
-/// Spec: p20-spec.md §6.5 – §6.10
+/// Spec: p20-spec.md §6.5–§6.10; Override 1 (shared kalman helper)
 fn scalar_measurement_update(
     state: &mut AgcState,
     b: [f64; 6],
     residual: f64,
     sigma_sq: f64,
 ) -> UpdateOutcome {
-    // Copy W to avoid holding an immutable borrow while we later mutate state.
-    let w: [[f64; 6]; 6] = state.rendezvous_nav.w_matrix;
+    let mut x = [
+        state.rendezvous_nav.target_pos[0],
+        state.rendezvous_nav.target_pos[1],
+        state.rendezvous_nav.target_pos[2],
+        state.rendezvous_nav.target_vel[0],
+        state.rendezvous_nav.target_vel[1],
+        state.rendezvous_nav.target_vel[2],
+    ];
 
-    // §6.5: Compute W * b  (6-element vector).
-    let mut wb = [0.0_f64; 6];
-    for i in 0..6 {
-        for j in 0..6 {
-            wb[i] += w[i][j] * b[j];
-        }
+    let outcome = crate::navigation::kalman::scalar_measurement_update(
+        &mut x,
+        &mut state.rendezvous_nav.w_matrix,
+        b,
+        residual,
+        sigma_sq,
+    );
+
+    if outcome == UpdateOutcome::Accepted || outcome == UpdateOutcome::AcceptedWOverflow {
+        state.rendezvous_nav.target_pos = [x[0], x[1], x[2]];
+        state.rendezvous_nav.target_vel = [x[3], x[4], x[5]];
     }
 
-    // §6.5: Innovation variance  S = b^T * W * b + sigma_sq.
-    let mut s = sigma_sq;
-    for i in 0..6 {
-        s += b[i] * wb[i];
+    if outcome == UpdateOutcome::AcceptedWOverflow {
+        state.alarm.code = ALARM_W_OVERFLOW;
+        state.alarm.lit  = true;
+        p20_rectify_w_matrix(state);
+        return UpdateOutcome::Accepted;
     }
 
-    // §6.6: 3-sigma reject gate.
-    // Guard against non-finite S (should not happen but protects from NaN loops).
-    let threshold = 3.0 * libm::sqrt(libm::fabs(s));
-    if libm::fabs(residual) > threshold {
-        return UpdateOutcome::Rejected;
-    }
-
-    // §6.7: Kalman gain vector k = (W * b) / S.
-    let mut k = [0.0_f64; 6];
-    for i in 0..6 {
-        k[i] = wb[i] / s;
-    }
-
-    // §6.8: State update  x_new = x_old + k * residual.
-    for i in 0..3 {
-        state.rendezvous_nav.target_pos[i] += k[i]     * residual;
-        state.rendezvous_nav.target_vel[i] += k[i + 3] * residual;
-    }
-
-    // §6.9: Covariance downdate  W_new[i][j] = W_old[i][j] - k[i] * k[j] * S.
-    // (Uses W_old * b = k * S already computed, avoids a second matrix product.)
-    for i in 0..6 {
-        for j in 0..6 {
-            state.rendezvous_nav.w_matrix[i][j] -= k[i] * k[j] * s;
-        }
-    }
-
-    // §6.10: Positive-definite check on diagonal.
-    for i in 0..6 {
-        if state.rendezvous_nav.w_matrix[i][i] < 0.0 {
-            state.alarm.code = ALARM_W_OVERFLOW;
-            state.alarm.lit  = true;
-            p20_rectify_w_matrix(state);
-            return UpdateOutcome::Accepted; // state was updated before overflow
-        }
-    }
-
-    // §6.11: Counters and timestamp are updated by the caller.
-    UpdateOutcome::Accepted
+    outcome
 }
 
 /// Check and act on the consecutive-reject counter.
