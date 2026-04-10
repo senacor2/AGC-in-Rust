@@ -1,0 +1,234 @@
+[
+  {
+    "name": "tc_kal_f1_pure_x_position_measurement",
+    "description": "Pure-X position measurement with diagonal covariance. W = diag(250000, 250000, 250000, 1.0, 1.0, 1.0). b = [1,0,0,0,0,0]. residual = 100.0 m. sigma_sq = 225.0 m^2. Step 1: Wb = W*b. Since b = [1,0,0,0,0,0] and W is diagonal, Wb[0] = W[0][0] = 250000; Wb[1..5] = 0. Wb = [250000, 0, 0, 0, 0, 0]. Step 2: S = b^T*Wb + sigma_sq = 1*250000 + 225 = 250225. Step 3: Gate check. sqrt(250225) = 500.225. 3*sqrt(S) = 1500.675. |residual| = 100 < 1500.675. Accepted. Step 4: k = Wb/S. k[0] = 250000/250225 = 0.99910135. k[1..5] = 0. Step 5: x_new = x_old + k*residual. x_new[0] = 0 + 0.99910135*100 = 99.910135. x_new[1..5] = 0. Step 6: W_new[i][j] = W_old[i][j] - k[i]*k[j]*S. Only the [0][0] entry changes (k[1..5]=0). W_new[0][0] = 250000 - (250000)^2/250225 = 250000 - 62500000000/250225. 62500000000/250225 = 249774.91. W_new[0][0] = 250000 - 249774.91 = 225.09. All other diagonal entries unchanged. All off-diagonal entries remain 0. Step 7: 225.09 > 0. Outcome = Accepted.",
+    "initial_x": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "initial_w": [
+      [250000.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 250000.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 250000.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    ],
+    "b": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "residual": 100.0,
+    "sigma_sq": 225.0,
+    "expected_outcome": "Accepted",
+    "expected_x_after": [99.910135, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "expected_w_after": [
+      [225.09, 0.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 250000.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 250000.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    ],
+    "state_tolerance": 1.0e-4,
+    "covariance_tolerance": 0.1,
+    "note": "Canonical pure-X position measurement. S=250225, k[0]=250000/250225=0.99910135, x[0]_after=99.910135, W[0][0]_after=250000-250000^2/250225=225.09. Only the [0][0] entry of W changes."
+  },
+  {
+    "name": "tc_kal_f2_pure_x_velocity_measurement",
+    "description": "Pure-X velocity measurement. W = diag(250000, 250000, 250000, 1.0, 1.0, 1.0). b = [0,0,0,1,0,0]. residual = 0.5 m/s. sigma_sq = 0.01 (m/s)^2. Step 1: Wb. b = [0,0,0,1,0,0]. W[3][3]=1.0. Wb[3] = 1.0. Wb = [0, 0, 0, 1.0, 0, 0]. Step 2: S = b^T*Wb + sigma_sq = 1*1.0 + 0.01 = 1.01. Step 3: sqrt(1.01) = 1.004988. 3*sqrt(S) = 3.01497. |0.5| < 3.01497. Accepted. Step 4: k[3] = 1.0/1.01 = 0.9900990099. k[0,1,2,4,5] = 0. Step 5: x_new[3] = 0 + 0.9900990099*0.5 = 0.4950495050. x[0,1,2,4,5] unchanged. Step 6: W_new[3][3] = 1.0 - (1.0)^2/1.01 = 1.0 - 0.9900990099 = 0.0099009901 = 1/101. All other entries unchanged. Step 7: 0.0099 > 0. Outcome = Accepted.",
+    "initial_x": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "initial_w": [
+      [250000.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 250000.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 250000.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    ],
+    "b": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+    "residual": 0.5,
+    "sigma_sq": 0.01,
+    "expected_outcome": "Accepted",
+    "expected_x_after": [0.0, 0.0, 0.0, 0.4950495, 0.0, 0.0],
+    "expected_w_after": [
+      [250000.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 250000.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 250000.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0099009901, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    ],
+    "state_tolerance": 1.0e-7,
+    "covariance_tolerance": 1.0e-7,
+    "note": "Pure-X velocity measurement. S=1.01, k[3]=1/1.01=0.99009901. x[3]_after=0.5/1.01=0.4950495. W[3][3]_after=1-1/1.01=1/101=0.0099009901. Only velocity-x covariance entry changes."
+  },
+  {
+    "name": "tc_kal_f3_diagonal_45deg_position_measurement",
+    "description": "45-degree position measurement. W = diag(250000, 250000, 250000, 1.0, 1.0, 1.0). b = [1/sqrt(2), 1/sqrt(2), 0, 0, 0, 0] = [0.7071067812, 0.7071067812, 0, 0, 0, 0]. residual = 50.0 m. sigma_sq = 100.0 m^2. Step 1: Wb. Wb[0] = 250000*(1/sqrt(2)) = 176776.695. Wb[1] = 250000*(1/sqrt(2)) = 176776.695. Wb[2..5] = 0. Step 2: S = b[0]*Wb[0] + b[1]*Wb[1] + sigma_sq = (1/sqrt(2))*176776.695 + (1/sqrt(2))*176776.695 + 100. (1/sqrt(2))*176776.695 = 250000/2 = 125000. S = 125000 + 125000 + 100 = 250100. Step 3: sqrt(250100) = 500.100. 3*sqrt(S) = 1500.300. |50| < 1500.300. Accepted. Step 4: k[0] = 176776.695/250100 = 0.70683. k[1] = 176776.695/250100 = 0.70683. Exact: k[0] = (250000/sqrt(2))/250100. k[1..5] = 0. Step 5: x_new[0] = 0 + 0.70683*50 = 35.342. x_new[1] = 0 + 0.70683*50 = 35.342. x_new[2..5] = 0. Step 6: W_new[i][j] = W_old[i][j] - k[i]*k[j]*S. k[0]^2*S = (176776.695)^2/250100 = 31249974005/250100 = 124950.315. Wait: (176776.695)^2 = (250000/sqrt(2))^2 = 250000^2/2 = 6.25e10/2 = 3.125e10. 3.125e10/250100 = 124950.020. W_new[0][0] = 250000 - 124950.020 = 125049.980. k[0]*k[1]*S = (176776.695)^2/250100 = 124950.020. W_new[0][1] = 0 - 124950.020 = -124950.020. W_new[1][0] = -124950.020. W_new[1][1] = 250000 - 124950.020 = 125049.980. W_new[2][2]=250000, W_new[3][3]=1, W_new[4][4]=1, W_new[5][5]=1 unchanged. Step 7: All diagonal >= 0. Outcome = Accepted. Note: 2x2 submatrix [[125049.98,-124950.02],[-124950.02,125049.98]] has eigenvalues 125049.98+/-124950.02 = {250000, 99.96}. Both positive, so positive definite.",
+    "initial_x": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "initial_w": [
+      [250000.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 250000.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 250000.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    ],
+    "b": [0.7071067812, 0.7071067812, 0.0, 0.0, 0.0, 0.0],
+    "residual": 50.0,
+    "sigma_sq": 100.0,
+    "expected_outcome": "Accepted",
+    "expected_x_after": [35.342, 35.342, 0.0, 0.0, 0.0, 0.0],
+    "expected_w_after": [
+      [125049.98, -124950.02, 0.0, 0.0, 0.0, 0.0],
+      [-124950.02, 125049.98, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 250000.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    ],
+    "state_tolerance": 1.0e-3,
+    "covariance_tolerance": 1.0,
+    "note": "45-deg position measurement. S=250100. k[0]=k[1]=(250000/sqrt(2))/250100=0.70683. x_new[0]=x_new[1]=35.342 m. W_new[0][0]=W_new[1][1]=125049.98. W_new[0][1]=W_new[1][0]=-124950.02. 2x2 eigenvalues: {250000, 99.96} -- still positive definite."
+  },
+  {
+    "name": "tc_kal_f4_outlier_rejection",
+    "description": "Outlier rejection gate test. W = diag(250000, 250000, 250000, 1.0, 1.0, 1.0). b = [1,0,0,0,0,0]. residual = 10000.0 m. sigma_sq = 225.0 m^2. Step 1: Wb = [250000, 0, 0, 0, 0, 0]. Step 2: S = 250000 + 225 = 250225. Step 3: sqrt(250225) = 500.225. 3*sqrt(S) = 1500.675. |residual| = 10000. 10000 > 1500.675. Gate triggered: return Rejected immediately. x and W are completely unchanged. No state update, no covariance downdate.",
+    "initial_x": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "initial_w": [
+      [250000.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 250000.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 250000.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    ],
+    "b": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "residual": 10000.0,
+    "sigma_sq": 225.0,
+    "expected_outcome": "Rejected",
+    "expected_x_after": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "expected_w_after": [
+      [250000.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 250000.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 250000.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    ],
+    "state_tolerance": 0.0,
+    "covariance_tolerance": 0.0,
+    "note": "3-sigma outlier gate: |10000| > 3*sqrt(250225)=1500.675. Gate fires; state and covariance are exactly unchanged. Zero tolerance means exact equality is required."
+  },
+  {
+    "name": "tc_kal_f5_zero_residual",
+    "description": "Zero residual: no state update but covariance is still downdated. W = diag(250000, 250000, 250000, 1.0, 1.0, 1.0). b = [1,0,0,0,0,0]. residual = 0.0. sigma_sq = 225.0. Step 1: Wb = [250000, 0, 0, 0, 0, 0]. Step 2: S = 250225. Step 3: |0| = 0 < 1500.675. Accepted. Step 4: k[0] = 250000/250225 = 0.99910135. Step 5: x_new = x_old + k*0 = x_old = [0,0,0,0,0,0]. Zero residual means no state change regardless of k. Step 6: W_new[0][0] = 250000 - (250000)^2/250225 = 225.09 (same as TC-KAL-F1). All other entries unchanged. Step 7: 225.09 > 0. Outcome = Accepted. Key invariant: state x is exactly unchanged, but covariance is reduced -- the observation has information content even though it happened to match the prediction.",
+    "initial_x": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "initial_w": [
+      [250000.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 250000.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 250000.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    ],
+    "b": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "residual": 0.0,
+    "sigma_sq": 225.0,
+    "expected_outcome": "Accepted",
+    "expected_x_after": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "expected_w_after": [
+      [225.09, 0.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 250000.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 250000.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    ],
+    "state_tolerance": 1.0e-9,
+    "covariance_tolerance": 0.1,
+    "note": "Zero residual: state x exactly unchanged. W[0][0] still reduces from 250000 to 225.09. Confirms covariance update is independent of residual magnitude."
+  },
+  {
+    "name": "tc_kal_f6_correlated_covariance",
+    "description": "Non-diagonal W with off-diagonal correlations in position x-y. W[0][0]=250000, W[1][1]=250000, W[0][1]=W[1][0]=10000, all other diagonal entries: W[2][2]=250000, W[3][3]=1, W[4][4]=1, W[5][5]=1; all other off-diagonal = 0. b = [1,0,0,0,0,0]. residual = 100.0 m. sigma_sq = 225.0 m^2. Step 1: Wb. b=[1,0,...]. Wb[0] = W[0][0]*1 + W[0][1]*0 = 250000. Wb[1] = W[1][0]*1 + W[1][1]*0 = 10000. Wb[2..5] = 0. Step 2: S = b[0]*Wb[0] + sigma_sq = 1*250000 + 225 = 250225. Step 3: sqrt(250225)=500.225. 3*500.225=1500.675. |100| < 1500.675. Accepted. Step 4: k[0] = 250000/250225 = 0.99910135. k[1] = 10000/250225 = 0.039964054. k[2..5] = 0. Step 5: x_new[0] = 0 + 0.99910135*100 = 99.910135. x_new[1] = 0 + 0.039964054*100 = 3.9964054. x_new[2..5] = 0. Step 6: W_new[i][j] = W_old[i][j] - k[i]*k[j]*S. k[0]^2*S = (250000)^2/250225 = 249774.91. k[1]^2*S = (10000)^2/250225 = 100000000/250225 = 399.641. k[0]*k[1]*S = (250000*10000)/250225 = 2500000000/250225 = 9991.01. W_new[0][0] = 250000 - 249774.91 = 225.09. W_new[1][1] = 250000 - 399.641 = 249600.359. W_new[0][1] = 10000 - 9991.01 = 8.99. W_new[1][0] = 8.99 (symmetric). W_new[2][2]=250000, W_new[3][3]=1, W_new[4][4]=1, W_new[5][5]=1 unchanged. All other off-diagonals (with k[i]=0 or k[j]=0) remain 0. Step 7: All diagonal >= 0. Outcome = Accepted.",
+    "initial_x": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "initial_w": [
+      [250000.0, 10000.0, 0.0, 0.0, 0.0, 0.0],
+      [10000.0, 250000.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 250000.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    ],
+    "b": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "residual": 100.0,
+    "sigma_sq": 225.0,
+    "expected_outcome": "Accepted",
+    "expected_x_after": [99.910135, 3.9964054, 0.0, 0.0, 0.0, 0.0],
+    "expected_w_after": [
+      [225.09, 8.99, 0.0, 0.0, 0.0, 0.0],
+      [8.99, 249600.359, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 250000.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    ],
+    "state_tolerance": 1.0e-5,
+    "covariance_tolerance": 0.1,
+    "note": "Non-diagonal W: W[0][1]=W[1][0]=10000. x-measurement propagates to y-state via k[1]=10000/250225=0.039964. x_new[1]=3.9964 m. W[0][1] reduces from 10000 to 8.99. W[1][1] reduces from 250000 to 249600.36."
+  },
+  {
+    "name": "tc_kal_f7_w_overflow_via_large_off_diagonal",
+    "description": "AcceptedWOverflow test: large off-diagonal W entry causes W[0][0] to go negative after the rank-1 downdate. W = [[1.0, 50.0, 0,...],[50.0, 100.0, 0,...], diag(250000,1,1,1) for remaining entries]. b = [0,1,0,0,0,0] (pure-y measurement). residual = 1.0 m. sigma_sq = 0.01 m^2. Step 1: Wb[i] = sum_j W[i][j]*b[j] = W[i][1]*1. W[0][1]=50, W[1][1]=100, W[2..5][1]=0. Wb = [50.0, 100.0, 0, 0, 0, 0]. Step 2: S = b^T*Wb + sigma_sq = 0*50 + 1*100 + 0 + 0 + 0 + 0 + 0.01 = 100.01. Step 3: sqrt(100.01)=10.0005. 3*sqrt(S)=30.0015. |residual|=1.0 < 30.0015. Accepted. Step 4: k[0] = 50/100.01 = 0.4999500050. k[1] = 100/100.01 = 0.9999000100. k[2..5] = 0. Step 5: x_new[0] = 0 + 0.49995*1.0 = 0.49995. x_new[1] = 0 + 0.99990*1.0 = 0.99990. x_new[2..5] = 0. Step 6: W_new[i][j] = W_old[i][j] - k[i]*k[j]*S. k[0]^2*S = (50)^2/100.01 = 2500/100.01 = 24.99750025. k[1]^2*S = (100)^2/100.01 = 10000/100.01 = 99.99000100. k[0]*k[1]*S = (50*100)/100.01 = 5000/100.01 = 49.99500050. W_new[0][0] = 1.0 - 24.99750025 = -23.99750025 (NEGATIVE). W_new[1][1] = 100.0 - 99.99000100 = 0.00999900. W_new[0][1] = 50.0 - 49.99500050 = 0.00499950. W_new[1][0] = 0.00499950 (symmetric). W_new[2][2]=250000, W_new[3][3]=1, W_new[4][4]=1, W_new[5][5]=1 unchanged. All other off-diagonals 0. Step 7: W_new[0][0] = -23.9975 < 0. Outcome = AcceptedWOverflow. State and covariance have been updated (the update is not rolled back; the caller is responsible for calling the rectify function).",
+    "initial_x": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "initial_w": [
+      [1.0, 50.0, 0.0, 0.0, 0.0, 0.0],
+      [50.0, 100.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 250000.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    ],
+    "b": [0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+    "residual": 1.0,
+    "sigma_sq": 0.01,
+    "expected_outcome": "AcceptedWOverflow",
+    "expected_x_after": [0.49995, 0.99990, 0.0, 0.0, 0.0, 0.0],
+    "expected_w_after": [
+      [-23.99750, 0.00500, 0.0, 0.0, 0.0, 0.0],
+      [0.00500, 0.00999900, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 250000.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    ],
+    "state_tolerance": 1.0e-4,
+    "covariance_tolerance": 0.0001,
+    "note": "AcceptedWOverflow: W[0][1]=50 >> W[0][0]=1. A y-measurement gives Wb[0]=50, so k[0]^2*S = 2500/100.01 = 24.9975, making W_new[0][0] = 1 - 24.9975 = -23.9975 < 0. S=100.01, k[0]=50/100.01=0.49995, k[1]=100/100.01=0.99990. W_new[0][1]=50-5000/100.01=50-49.9950=0.0050. W_new[1][1]=100-10000/100.01=0.0100."
+  },
+  {
+    "name": "tc_kal_f8_nonzero_initial_state",
+    "description": "Update applied to non-zero initial state. W = diag(250000, 250000, 250000, 1.0, 1.0, 1.0). b = [0,0,1,0,0,0] (pure-Z position measurement). residual = -30.0 m (negative residual). sigma_sq = 400.0 m^2. x_old = [1000.0, -500.0, 200.0, 0.5, -0.3, 0.1]. Step 1: Wb. b=[0,0,1,...]. Wb[2] = W[2][2]*1 = 250000. Wb[0,1,3,4,5] = 0. Step 2: S = b[2]*Wb[2] + sigma_sq = 250000 + 400 = 250400. Step 3: sqrt(250400) = 500.400. 3*500.400 = 1501.2. |-30| = 30 < 1501.2. Accepted. Step 4: k[2] = 250000/250400 = 0.99840255. k[0,1,3,4,5] = 0. Step 5: x_new[2] = 200.0 + 0.99840255*(-30) = 200.0 - 29.95208 = 170.04792. All other x components unchanged: x_new[0]=1000.0, x_new[1]=-500.0, x_new[3]=0.5, x_new[4]=-0.3, x_new[5]=0.1. Step 6: W_new[2][2] = 250000 - (250000)^2/250400. 250000^2 = 6.25e10. 6.25e10/250400 = 249600.638. W_new[2][2] = 250000 - 249600.638 = 399.362. Equivalently: W_new[2][2] = 250000*400/250400 = 100000000/250400 = 399.362. All other entries unchanged. Step 7: 399.362 > 0. Outcome = Accepted.",
+    "initial_x": [1000.0, -500.0, 200.0, 0.5, -0.3, 0.1],
+    "initial_w": [
+      [250000.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 250000.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 250000.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    ],
+    "b": [0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+    "residual": -30.0,
+    "sigma_sq": 400.0,
+    "expected_outcome": "Accepted",
+    "expected_x_after": [1000.0, -500.0, 170.04792, 0.5, -0.3, 0.1],
+    "expected_w_after": [
+      [250000.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 250000.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 399.362, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    ],
+    "state_tolerance": 1.0e-4,
+    "covariance_tolerance": 0.01,
+    "note": "Non-zero initial state, negative residual, pure-Z measurement. x[2] corrected from 200.0 to 170.04792 (Δ = -29.95208 = k[2]*residual = 0.99840*(-30)). W[2][2] = 250000*400/250400 = 399.362. All other state/covariance entries unchanged."
+  }
+]
