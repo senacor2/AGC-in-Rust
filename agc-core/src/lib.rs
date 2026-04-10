@@ -31,7 +31,7 @@ use guidance::maneuver::BurnState;
 use guidance::targeting::Maneuver;
 use navigation::StateVector;
 use programs::p61_p67::EntryState;
-use services::{AlarmState, DskyState, average_g::PipaCalibration};
+use services::{AlarmState, DskyState, average_g::PipaCalibration, v_n::VnState};
 use types::{CduAngle, Mat3x3, Met};
 
 /// Central mutable state of the guidance computer.
@@ -190,6 +190,12 @@ pub struct AgcState {
     /// (g units, test-harness driven in MS4), stub roll command, target
     /// range, and drogue-deployed flag.
     pub entry: EntryState,
+
+    // ── Verb/Noun processor ──────────────────────────────────────────────────
+    /// Crew interface (DSKY) Verb/Noun input state machine.
+    ///
+    /// Updated by `services::v_n::feed_key` each keypress.
+    pub vn: VnState,
 }
 
 impl AgcState {
@@ -262,6 +268,7 @@ impl AgcState {
                 temp: false,
                 prog_alarm: false,
                 comp_acty: false,
+                lamp_test_active: false,
             },
             alarm: AlarmState {
                 code: 0,
@@ -274,6 +281,7 @@ impl AgcState {
             servicer_exit: None,
             servicer_last_dv_inertial: [0.0; 3],
             entry: EntryState::new(),
+            vn: VnState::new(),
         }
     }
 }
