@@ -230,45 +230,6 @@ pub struct StarLandmarkMark {
     pub angle_observed_rad: f64,
 }
 
-/// A navigational star entry for P23 cislunar sightings.
-///
-/// Direction vectors are unit vectors in the Earth mean equatorial J2000 frame
-/// (identical to the ECI frame used by the AGC navigation software).
-/// The same vectors apply in the MCI frame because MCI axes are parallel to ECI.
-///
-/// Source: Comanche055/STAR_TABLES.agc entries for stars with |declination| > 30°.
-/// Spec: p23-spec.md §3.2
-#[derive(Clone, Copy, Debug)]
-pub struct CislunarStar {
-    /// AGC star catalogue number (1-based, 1–37).
-    pub number: u8,
-    /// Common name for documentation purposes.
-    pub name: &'static str,
-    /// Unit vector toward the star in J2000 equatorial frame.
-    pub direction: Vec3,
-}
-
-/// Compile-time star table for P23.  8 entries covering geometrically diverse
-/// directions for cislunar navigation.
-///
-/// Indices 0–7 correspond to stars commonly used on Apollo missions for
-/// cislunar midcourse navigation (O'Brien p. 329).
-///
-/// NOTE: `direction` values are placeholder `[0.0; 3]` pending population from
-/// STAR_TABLES.agc.  Unit tests use hard-coded star directions directly and
-/// do not depend on this table.
-/// Spec: p23-spec.md §3.2
-pub const CISLUNAR_STAR_TABLE: [CislunarStar; 8] = [
-    CislunarStar { number:  1, name: "Alpheratz", direction: [0.0; 3] }, // TODO: populate from STAR_TABLES.agc
-    CislunarStar { number:  4, name: "Achernar",  direction: [0.0; 3] }, // TODO
-    CislunarStar { number:  7, name: "Hamal",     direction: [0.0; 3] }, // TODO
-    CislunarStar { number: 10, name: "Menkar",    direction: [0.0; 3] }, // TODO
-    CislunarStar { number: 16, name: "Pollux",    direction: [0.0; 3] }, // TODO
-    CislunarStar { number: 25, name: "Antares",   direction: [0.0; 3] }, // TODO
-    CislunarStar { number: 30, name: "Vega",      direction: [0.0; 3] }, // TODO
-    CislunarStar { number: 36, name: "Peacock",   direction: [0.0; 3] }, // TODO
-];
-
 // ── Entry point ────────────────────────────────────────────────────────────────
 
 /// Public shim registered in `PROGRAM_TABLE[23]`.

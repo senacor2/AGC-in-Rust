@@ -263,47 +263,22 @@ tests in agc-sim. Total project: 302 agc-core tests pass.
   Acceptance: `propagate_coast` switches to `kepler_step` for `dt > 600 s`
   in the pure-two-body case; all existing integration tests still pass.
 
-- [ ] **Data + Impl** — Populate `navigation/star_catalog.rs` with the
-  full 37-entry AGC navigation star catalogue, sourced verbatim from
-  `Comanche055/STAR_TABLES.agc`. Currently both `CISLUNAR_STAR_TABLE` in
-  `programs/p23.rs` (8 entries) and `navigation/star_catalog.rs` (empty
-  orphan) carry zero directions. Full analysis of the AGC's star-table
-  usage is in `specs/star-catalog-research.md`.
-  - **Scope**: all 37 stars, not 8. The full 37 are needed by PICAPAR's
-    pair-selection algorithm in P51/P52 (a truncated table would break
-    the pair search). P23 can then look up any star 1..=37 that the
-    crew enters.
-  - **Consumers** (per research §3): P23 cislunar nav, P51/P52 IMU
-    alignment, R51 fine-align, R56/PICAPAR auto-star-select, the
-    PLANET optics-mark entry point.
-  - **Recommended layout** (per research §7.2):
-    `pub const STAR_CATALOG: [StarEntry; 37]` in `navigation/star_catalog.rs`;
-    `pub fn star_direction(number: u8) -> Option<[f64; 3]>` helper;
-    `CISLUNAR_STAR_TABLE` in `p23.rs` removed in favour of the shared
-    module.
-  - **Index arithmetic gotcha**: the AGC table is stored descending
-    (star 37 first, star 1 last) with the `CATLOG` label at the END.
-    Rust lookup is `STAR_CATALOG[37 - star_number]` (0-based), NOT
-    `STAR_CATALOG[star_number - 1]`. The research doc extracts the
-    37 direction vectors in star-number order so the Rust array can
-    be written as `STAR_CATALOG[star_number - 1]` instead — the
-    developer agent must pick one convention and document it.
-  - **Struct shape**: `{ number: u8, name: &'static str, direction: [f64; 3] }`.
-    The `name` field is for documentation only — the AGC has no star
-    names. Verify against a published Apollo navigation star list
-    (e.g. NASA Mission Planning documents or GSOP §5.6) before
-    committing.
-  - **Planet mode**: `star_direction(n)` returns `None` for `n == 0`
-    and `n > 37`. Callers (P23 in particular) handle the `n == 0`
-    planet case by reading a separately-stored Sun/planet vector
-    (`STARSAV3` in the AGC; in Rust this lives in AgcState or is
-    computed from an ephemeris — not from the star catalogue).
-  - **Acceptance**: all 37 entries have unit-length direction vectors
-    (within 1e-9 of norm 1.0), `navigation/star_catalog.rs` is no
-    longer orphaned (P23 imports from it), and a unit test verifies
-    every entry's magnitude.
-  - **Frame**: AGC Mean of 1969.5, verbatim from `STAR_TABLES.agc`. No
-    precession applied. See ADR-013.
+- [x] **Data + Impl** — Populate `navigation/star_catalog.rs` with the
+  full 37-entry AGC navigation star catalogue. **RESOLVED 2026-04-10.**
+  All 37 direction vectors transcribed verbatim from `Comanche055/STAR_TABLES.agc`
+  in the AGC Mean of 1969.5 equatorial frame (ADR-013); no precession
+  rotation applied. Layout: `pub const STAR_CATALOG: [StarEntry; 37]`
+  in `navigation/star_catalog.rs` with `star_direction(n: u8) -> Option<Vec3>`
+  helper. Ascending index convention (`STAR_CATALOG[number - 1]`) —
+  the AGC's descending file layout is not mirrored. `CislunarStar` /
+  `CISLUNAR_STAR_TABLE` stub removed from `programs/p23.rs` (was dead
+  code, never referenced). Six unit tests cover unit-length invariant
+  (tolerance 1e-6 to accommodate ~1e-7 decimal-transcription rounding),
+  ascending number convention, `star_direction` boundary cases
+  (0/1/37/38/50/255), sign-correctness spot checks for Polaris/Alpheratz/
+  Antares, CATALOG_SIZE consistency, and no-duplicate-numbers.
+  agc-core tests: 363 → 369. Star names are approximate identifications
+  only — documented as non-authoritative and not verified by tests.
 
 - [x] **Architecture** — Navigation reference-frame decision. **RESOLVED
   2026-04-10** as ADR-013 (`transformation/decisions.md`): the port's
