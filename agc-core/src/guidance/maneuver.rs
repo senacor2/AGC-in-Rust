@@ -8,6 +8,10 @@ use crate::types::{Met, Vec3};
 /// AGC: Group 3 phase table safety bound.
 pub const MAX_BURN_DURATION_CS: u32 = 75_000; // 750 seconds
 
+/// Delta-V cutoff tolerance (m/s). When `|accumulated_dv|` is within this of
+/// `|target_dv|`, the burn is considered complete. AGC uses ≈ 0.3 m/s.
+pub const BURN_CUTOFF_TOLERANCE_MS: f64 = 0.3;
+
 /// Mutable state for a single SPS burn execution instance.
 ///
 /// Created by `burn_init` from a targeting solution (`Maneuver`) and stored
@@ -215,6 +219,44 @@ pub fn trim_residual_dv(state: &BurnState) -> Vec3 {
     linalg::vsub(state.target_dv_inertial, state.accumulated_dv_inertial)
 }
 
+/// SERVICER exit hook installed by P40 and P41 while a burn is in progress.
+///
+/// Called by `services::average_g::servicer_task` at the end of every 2-second
+/// SERVICER cycle, via `state.servicer_exit`. Reads the inertial delta-V the
+/// SERVICER just integrated from `state.servicer_last_dv_inertial`, folds it
+/// into `state.burn.accumulated_dv_inertial` via `burn_update`, and checks
+/// `is_burn_complete`. On completion it:
+///
+/// 1. Clears `state.burn.burn_active` (the burn loop terminates).
+/// 2. Clears `state.engine_thrusting` (the ISR shim will drop the SPS enable
+///    discrete on its next iteration).
+/// 3. Drops the exit hook itself (`state.servicer_exit = None`) so the
+///    SERVICER stops calling it.
+/// 4. Transitions the DAP to `AttitudeHold` so the vehicle continues to hold
+///    orientation after cutoff.
+///
+/// If `state.burn.burn_active` is already false when the hook runs, it is a
+/// no-op — this covers the one-cycle race between P40 clearing the flag and
+/// the SERVICER observing the new `servicer_exit` value.
+///
+/// AGC correspondence: the POWERED_FLIGHT_SUBROUTINES.agc SERVICER exit path
+/// that checks TGO and performs ENGINOFF.
+pub fn burn_servicer_exit(state: &mut crate::AgcState) {
+    if !state.burn.burn_active {
+        return;
+    }
+
+    let dv = state.servicer_last_dv_inertial;
+    burn_update(&mut state.burn, dv, 2.0);
+
+    if is_burn_complete(&state.burn, BURN_CUTOFF_TOLERANCE_MS) {
+        state.burn.burn_active = false;
+        state.engine_thrusting = false;
+        state.servicer_exit = None;
+        state.dap_state.mode = crate::control::DapMode::AttitudeHold;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,6 +355,79 @@ mod tests {
         // Backup criterion: cutoff_time_met overrides
         state.cutoff_time_met = true;
         assert!(is_burn_complete(&state, 0.1));
+    }
+
+    /// TC-MAN-6: burn_servicer_exit integrates one cycle without completing.
+    #[test]
+    fn tc_man_6_servicer_exit_one_cycle() {
+        let mut state = crate::AgcState::new();
+        let target = Maneuver {
+            tig: Met(0),
+            delta_v: DeltaV([10.0, 0.0, 0.0]),
+            burn_attitude: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            mode: TargetingMode::ExternalDeltaV,
+        };
+        state.burn = burn_init(target);
+        state.servicer_exit = Some(burn_servicer_exit);
+        state.servicer_last_dv_inertial = [3.0, 0.0, 0.0];
+
+        burn_servicer_exit(&mut state);
+
+        assert_vec_near(state.burn.accumulated_dv_inertial, [3.0, 0.0, 0.0], 1e-14);
+        assert!(state.burn.burn_active, "burn must still be active after 3/10 m/s");
+        assert!(
+            state.servicer_exit.is_some(),
+            "hook must remain installed until burn completes"
+        );
+    }
+
+    /// TC-MAN-7: burn_servicer_exit triggers cutoff at target completion.
+    #[test]
+    fn tc_man_7_servicer_exit_cutoff() {
+        let mut state = crate::AgcState::new();
+        state.dap_state.mode = crate::control::DapMode::Tvc;
+        state.engine_thrusting = true;
+
+        let target = Maneuver {
+            tig: Met(0),
+            delta_v: DeltaV([10.0, 0.0, 0.0]),
+            burn_attitude: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            mode: TargetingMode::ExternalDeltaV,
+        };
+        state.burn = burn_init(target);
+        state.burn.accumulated_dv_inertial = [9.5, 0.0, 0.0];
+        state.servicer_exit = Some(burn_servicer_exit);
+        state.servicer_last_dv_inertial = [0.8, 0.0, 0.0]; // lands at 10.3
+
+        burn_servicer_exit(&mut state);
+
+        assert!(!state.burn.burn_active, "burn must cut off after target reached");
+        assert!(!state.engine_thrusting, "engine_thrusting must clear on cutoff");
+        assert!(
+            state.servicer_exit.is_none(),
+            "hook must be uninstalled on cutoff"
+        );
+        assert_eq!(
+            state.dap_state.mode,
+            crate::control::DapMode::AttitudeHold,
+            "DAP must transition to AttitudeHold after cutoff"
+        );
+    }
+
+    /// TC-MAN-8: burn_servicer_exit is a no-op when burn_active is false.
+    #[test]
+    fn tc_man_8_servicer_exit_inactive_noop() {
+        let mut state = crate::AgcState::new();
+        state.burn.burn_active = false;
+        state.servicer_exit = Some(burn_servicer_exit);
+        state.servicer_last_dv_inertial = [5.0, 0.0, 0.0];
+        let prior_accum = state.burn.accumulated_dv_inertial;
+
+        burn_servicer_exit(&mut state);
+
+        assert_eq!(state.burn.accumulated_dv_inertial, prior_accum);
+        // Hook is NOT uninstalled from the no-op path — P40 clears it explicitly.
+        assert!(state.servicer_exit.is_some());
     }
 
     /// TC-MAN-5: trim_residual_dv after a slightly off-axis burn.

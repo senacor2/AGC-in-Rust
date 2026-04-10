@@ -175,6 +175,12 @@ pub struct AgcState {
     /// P40 SPS burns set this to `guidance::maneuver::burn_servicer_exit`.
     /// P00 and programs that do not need a SERVICER exit leave this as `None`.
     pub servicer_exit: Option<fn(&mut AgcState)>,
+
+    /// Inertial-frame delta-V (m/s) integrated by the SERVICER during the
+    /// most recent 2-second cycle. Populated by `servicer_task` immediately
+    /// before invoking `servicer_exit`. Read by `burn_servicer_exit` during
+    /// a P40/P41 burn to advance `BurnState.accumulated_dv_inertial`.
+    pub servicer_last_dv_inertial: types::Vec3,
 }
 
 impl AgcState {
@@ -257,6 +263,7 @@ impl AgcState {
             pipa_cal: PipaCalibration::NOMINAL,
             pipa_counts: [0i16; 3],
             servicer_exit: None,
+            servicer_last_dv_inertial: [0.0; 3],
         }
     }
 }

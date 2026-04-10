@@ -214,6 +214,9 @@ pub fn servicer_task(state: &mut AgcState) {
     state.time = new_sv.epoch;
     state.restart.set_phase(GROUP_2, Phase(1));  // cycle complete
 
+    // Stage the delta-V this cycle for burn_servicer_exit (P40/P41 hook).
+    state.servicer_last_dv_inertial = delta_v_inertial;
+
     // Step 9 — call program-specific exit hook (e.g., P40 TVC steering).
     if let Some(exit_fn) = state.servicer_exit {
         exit_fn(state);
