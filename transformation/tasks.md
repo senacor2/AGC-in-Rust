@@ -305,6 +305,60 @@ tests in agc-sim. Total project: 302 agc-core tests pass.
   declared "mean-of-1969 inertial frame" and needed no change.
   **Unblocks**: the star catalogue population work above.
 
+- [ ] **Bug** — V06/V16 monitor verbs never populate the data display
+  registers. **Observed symptom**: in the `agc-sim dsky_sim` binary,
+  keying `V16 N65 E` (monitor time) shows `00 00 00000` in R1 instead
+  of the current mission elapsed time. Other monitor nouns behave the
+  same — R1/R2/R3 stay at whatever value the last data-entry sequence
+  left, or zero if none.
+  - **Root cause**: `services::v_n::v06_display_decimal` and
+    `services::v_n::v16_monitor` (lines 462–473) set `state.dsky.verb`
+    and `state.dsky.noun` but never write to `state.dsky.r[0..3]`.
+    There is no noun-to-data-source dispatch table that reads the
+    referenced state variable and writes it to the appropriate
+    register(s). The V/N processor implements the **data-entry**
+    direction (V21/V22/V23/V25 — noun_commit handlers write state
+    from the crew's keystrokes) but not the **data-display** direction
+    (V06/V16 — read state and populate R1/R2/R3).
+  - **What the real AGC did**: `Comanche055/PINBALL_NOUN_TABLES.agc`
+    contained per-noun tables mapping a noun number to a pointer-fetch
+    into erasable memory plus a scale factor and format flag. The
+    "NOUN TABLE" dispatch in PINBALL walked the table for a given
+    noun, fetched the referenced value, applied the scale, and wrote
+    it to the three R-register display fields.
+  - **What the Rust port needs to add**: a noun table keyed by noun
+    number that maps each noun to a closure or function pointer
+    `fn(&AgcState) -> (Option<f32>, Option<f32>, Option<f32>)`
+    returning the three register values. Example entries:
+    - **N33** (TIG): read `vn.pending_tig`, format as HH MM SS.cc → R1/R2/R3
+    - **N34** (TFI / TFF): derived time
+    - **N36** (Vehicle time GET): read `state.time.to_seconds()`, format as HH MM SS.cc → R1/R2/R3
+    - **N37** (TIG of next burn): similar to N33
+    - **N40** (velocity to be gained / time / velocity): three-register burn display for P40
+    - **N43** (lat / lon / alt): ground-track display for P21
+    - **N44** (apogee / perigee / TFF): apsidal display
+    - **N49** (delta-R / delta-V range): rendezvous display from `rendezvous_nav`
+    - **N54** (range / range-rate / theta): already set directly by P20's `p20_rendezvous_nav_cycle`; this noun works because P20 writes the registers itself
+    - **N62** (absolute value of velocity / time from TIG / accumulated Δv)
+    - **N65** (mission time): `state.time.to_seconds()` → HH MM SS.cc in R1
+    - **N68** (range to landing site / time from landing site)
+    - **N81** (LVLH ΔV components): already set by P30 when V25 commits; same pattern as N54
+    - ... (AGC had ~40 nouns; start with the ~10 most commonly used
+      for monitoring and extend as needed)
+  - **Where the call should happen**: the table lookup should fire
+    (a) once on dispatch in `v06_display_decimal`/`v16_monitor`, and
+    (b) again on each `p20_rendezvous_nav_cycle` / equivalent periodic
+    refresh for V16 monitor nouns, so the display stays live as state
+    evolves.
+  - **Acceptance**: `V16 N65 E` in `agc-sim dsky_sim` shows the current
+    mission elapsed time, updating every cycle. `V06 N33 E` after a
+    P30 TIG load shows the TIG. `V06 N43 E` after P21 runs shows
+    lat/lon/alt. Unit tests for each noun verify the register values
+    match the referenced state variable within the noun's display
+    scale.
+  - **Blocked by**: nothing. All the state variables already exist on
+    `AgcState`; this is a pure dispatch-plumbing task.
+
 - [ ] **Impl** — Cortex-M firmware boot sequence (`#[entry]` and GOPROG).
   The project currently ships as a `no_std` library (`agc-core`) and a
   host-side simulator (`agc-sim`), but there is no runnable binary that
