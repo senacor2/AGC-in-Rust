@@ -40,16 +40,25 @@
 
 ### Milestone 3 — Guidance and DAP
 
-- [ ] **Spec + Impl** — `math/kepler.rs` (KEPRTN)
-- [ ] **Spec + Impl** — `math/lambert.rs` (Lambert targeting)
-- [ ] **Spec + Impl** — `navigation/conics.rs`
-- [ ] **Spec + Impl** — `control/imu_control.rs` (coarse/fine align, typestate)
-- [ ] **Spec + Impl** — `control/dap.rs` (T5RUPT driven)
-- [ ] **Spec + Impl** — `control/attitude.rs`
-- [ ] **Spec + Impl** — `control/rcs_logic.rs` (jet select, T6RUPT timing)
-- [ ] **Spec + Impl** — `control/tvc.rs`
-- [ ] **Spec + Impl** — `guidance/targeting.rs`
-- [ ] **Spec + Impl** — `guidance/maneuver.rs`
+- [x] **Spec + Impl** — `math/kepler.rs` (KEPRTN) → `specs/kepler-spec.md`, 14 tests, Battin universal-variable
+- [x] **Spec** — `math/lambert.rs` (Lambert targeting) → `specs/lambert-spec.md`
+- [~] **Impl** — `math/lambert.rs` — Izzo 2015, 3 tests pass + 4 ignored (needs convergence debug)
+- [x] **Spec + Impl** — `navigation/conics.rs` → `specs/conics-spec.md`, OrbitalElements + 5 tests
+- [x] **Spec** — `control/imu_control.rs` → `specs/imu-control-spec.md`
+- [ ] **Impl** — `control/imu_control.rs`
+- [x] **Spec** — `control/dap.rs` → `specs/dap-spec.md`
+- [ ] **Impl** — `control/dap.rs`
+- [x] **Spec** — `control/attitude.rs` → `specs/attitude-spec.md`
+- [ ] **Impl** — `control/attitude.rs`
+- [x] **Spec** — `control/rcs_logic.rs` → `specs/rcs-logic-spec.md`
+- [ ] **Impl** — `control/rcs_logic.rs`
+- [x] **Spec** — `control/tvc.rs` → `specs/tvc-spec.md`
+- [ ] **Impl** — `control/tvc.rs`
+- [x] **Spec** — `guidance/targeting.rs` → `specs/targeting-spec.md`
+- [ ] **Impl** — `guidance/targeting.rs`
+- [x] **Spec** — `guidance/maneuver.rs` → `specs/maneuver-spec.md`
+- [ ] **Impl** — `guidance/maneuver.rs`
+- [x] **Architect review** — `specs/milestone-3-architect-review.md` (10 critical issues, 6 ADs, all resolved)
 
 ### Milestone 4 — Programs (P-codes)
 
@@ -67,6 +76,15 @@
 - [ ] **Spec + Impl** — `services/v_n.rs` (Verb/Noun state machine)
 - [ ] **Spec + Impl** — `services/display.rs` (PINBALL display driver)
 - [ ] `agc-sim` terminal DSKY simulator
+
+### Technical Debt
+
+- [ ] **Debug** — `math/lambert.rs` Izzo convergence bugs. 4 tests currently `#[ignore]`:
+  - `tc_lam_1_leo_to_meo_90deg` — residual ~6e-7 (close but not converging to 1e-12)
+  - `tc_lam_2_leo_rendezvous` — velocity magnitude wrong (1329 m/s vs expected 7668 m/s)
+  - `tc_lam_3_tli_like` — Halley iteration diverges (residual 3.6) on long TOF
+  - `tc_lam_5_retrograde_long_way` — retrograde (λ<0) branch diverges (residual 3.0)
+  - Likely causes: initial guess formula, TOF derivative expression near boundaries, or sign convention in the λ<0 branch. Needs dedicated debugging session.
 
 ## Completed
 
