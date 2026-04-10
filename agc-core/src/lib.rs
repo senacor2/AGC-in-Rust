@@ -30,6 +30,7 @@ use executive::{Executive, RestartProtection, Waitlist};
 use guidance::maneuver::BurnState;
 use guidance::targeting::Maneuver;
 use navigation::StateVector;
+use programs::p61_p67::EntryState;
 use services::{AlarmState, DskyState, average_g::PipaCalibration};
 use types::{CduAngle, Mat3x3, Met};
 
@@ -181,6 +182,14 @@ pub struct AgcState {
     /// before invoking `servicer_exit`. Read by `burn_servicer_exit` during
     /// a P40/P41 burn to advance `BurnState.accumulated_dv_inertial`.
     pub servicer_last_dv_inertial: types::Vec3,
+
+    // ── Entry guidance ───────────────────────────────────────────────────────
+    /// Atmospheric entry state machine and stub guidance fields.
+    ///
+    /// Tracks the P61..P67 phase sequence, current sensed acceleration
+    /// (g units, test-harness driven in MS4), stub roll command, target
+    /// range, and drogue-deployed flag.
+    pub entry: EntryState,
 }
 
 impl AgcState {
@@ -264,6 +273,7 @@ impl AgcState {
             pipa_counts: [0i16; 3],
             servicer_exit: None,
             servicer_last_dv_inertial: [0.0; 3],
+            entry: EntryState::new(),
         }
     }
 }
