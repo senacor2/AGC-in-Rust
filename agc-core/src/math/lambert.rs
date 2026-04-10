@@ -375,17 +375,11 @@ mod tests {
         );
     }
 
-    // ── TC-LAM-1: Near-Hohmann transfer 400km LEO → 1200km ───────────────────
+    // ── TC-LAM-1: Near-Hohmann transfer 400 km LEO → 1200 km ─────────────────
     //
     // Classical Hohmann transfer: 179° arc (slightly offset from exactly 180°
     // to avoid Lambert's anti-parallel degeneracy). TOF = half transfer ellipse
     // period. Analytical expected velocities from vis-viva.
-    //
-    // STATUS: Test geometry is now physically consistent (replaces the
-    // previous ill-posed tof=T/4 setup). The Lambert solver converges to
-    // residual ~1.2e-5 (just over the 1e-6 tolerance) — algorithm is
-    // borderline but not quite converging in this near-Hohmann regime.
-    // Needs further algorithm work.
     #[test]
     fn tc_lam_1_hohmann_400_to_1200km() {
         let r1_mag = 6_778_000.0_f64; // 6378 + 400 km
@@ -449,16 +443,8 @@ mod tests {
     // ── TC-LAM-2: LEO circular arc, 5-minute transfer ────────────────────────
     //
     // Spacecraft on a 400 km circular LEO. In 5 minutes (300 s) at v_circ
-    // = 7668 m/s, the arc traversed is (300/T_period)·360° ≈ 19.44°.
-    // The Lambert solver should recover the circular velocity (this is a
-    // zero-delta-V baseline).
-    //
-    // STATUS: Test geometry is physically consistent (replaces the previous
-    // pathological 0.3° arc in 300s setup). The Lambert solver converges
-    // but to the WRONG x value — returns |v1| ≈ 5404 m/s instead of the
-    // expected 7668 m/s (circular velocity). The ratio 7668/5404 ≈ √2
-    // suggests a factor-of-2 error in the T(x,λ) formula or velocity
-    // reconstruction near the minimum-energy regime (x ≈ 1).
+    // ≈ 7668 m/s, the arc traversed is (300/T_period)·360° ≈ 19.44°. The
+    // Lambert solver should recover the circular velocity — zero-ΔV baseline.
     #[test]
     fn tc_lam_2_leo_circular_arc_5min() {
         let r_mag = 6_778_000.0_f64;
@@ -512,10 +498,9 @@ mod tests {
     }
 
     // ── TC-LAM-3: Trans-lunar injection (TLI-like, 3-day transfer) ───────────
-    // TODO: Halley iteration diverges (residual 3.6) for long TOF (T_nd >> T_00).
-    // Bug 3 stopgap (clamp x₀ to -0.5) did not help. The proper fix requires
-    // Izzo (2015) Eq. 23-24 initial guess formula for the slow-arc regime.
-    // Need to retrieve exact formula from the paper.
+    //
+    // Long-TOF elliptic transfer from 6563 km radius to approximately lunar
+    // distance. Verifies the slow-regime initial guess (T ≥ T₀₀) converges.
     #[test]
     fn tc_lam_3_tli_like() {
         let r1: Vec3 = [6_563_000.0, 0.0, 0.0];
@@ -573,10 +558,10 @@ mod tests {
     }
 
     // ── TC-LAM-5: Retrograde (long-way) transfer ─────────────────────────────
-    // TODO: Halley still diverges (residual 3.0) after Bug 1 (h_hat sign) and
-    // Bug 2 (signed λ³ in T₁) fixes. The dnu > π regime requires further
-    // analysis. Possibly the T(x,λ) formula has additional sign issues for
-    // negative λ, or the initial guess is placing x in the wrong branch.
+    //
+    // dnu > π branch: traverses 3/4 of the transfer ellipse period so the
+    // arc crosses the z = 0 plane from below. Verifies h_hat sign-flip and
+    // signed-λ handling in T(x,λ) for the retrograde regime.
     #[test]
     fn tc_lam_5_retrograde_long_way() {
         let r1: Vec3 = [6_778_000.0, 0.0, 0.0];
