@@ -45,19 +45,19 @@
 - [~] **Impl** — `math/lambert.rs` — Izzo 2015, 3 tests pass + 4 ignored (needs convergence debug)
 - [x] **Spec + Impl** — `navigation/conics.rs` → `specs/conics-spec.md`, OrbitalElements + 5 tests
 - [x] **Spec** — `control/imu_control.rs` → `specs/imu-control-spec.md`
-- [ ] **Impl** — `control/imu_control.rs`
+- [x] **Impl** — `control/imu_control.rs` (10 tests: PIPA comp, gyro drift, coarse align, REFSMMAT TRIAD, gimbal lock)
 - [x] **Spec** — `control/dap.rs` → `specs/dap-spec.md`
-- [ ] **Impl** — `control/dap.rs`
+- [x] **Impl** — `control/dap.rs` (7 tests: dap_init/stop/step, mode dispatch, staging fields)
 - [x] **Spec** — `control/attitude.rs` → `specs/attitude-spec.md`
-- [ ] **Impl** — `control/attitude.rs`
+- [x] **Impl** — `control/attitude.rs` (6 tests: error, rates, damping, PD, maneuver rate)
 - [x] **Spec** — `control/rcs_logic.rs` → `specs/rcs-logic-spec.md`
-- [ ] **Impl** — `control/rcs_logic.rs`
+- [x] **Impl** — `control/rcs_logic.rs` (14 tests: jet tables, selection, pulse duration)
 - [x] **Spec** — `control/tvc.rs` → `specs/tvc-spec.md`
-- [ ] **Impl** — `control/tvc.rs`
+- [x] **Impl** — `control/tvc.rs` (7 tests: lead-lag filter, trim, saturation)
 - [x] **Spec** — `guidance/targeting.rs` → `specs/targeting-spec.md`
-- [ ] **Impl** — `guidance/targeting.rs`
+- [x] **Impl** — `guidance/targeting.rs` (10 tests: LVLH, Lambert, burn attitude)
 - [x] **Spec** — `guidance/maneuver.rs` → `specs/maneuver-spec.md`
-- [ ] **Impl** — `guidance/maneuver.rs`
+- [x] **Impl** — `guidance/maneuver.rs` (5 tests: burn execution, cross-product steering, cutoff)
 - [x] **Architect review** — `specs/milestone-3-architect-review.md` (10 critical issues, 6 ADs, all resolved)
 
 ### Milestone 4 — Programs (P-codes)

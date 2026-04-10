@@ -5,7 +5,7 @@ pub mod rcs_logic;
 pub mod tvc;
 
 pub use attitude::AttitudeError;
-pub use dap::{DapMode, DapState};
+pub use dap::{dap_init, dap_step, dap_stop, DapMode, DapState, DAP_PERIOD_CS, DAP_PERIOD_S};
 pub use imu_control::{
     apply_pipa_compensation,
     coarse_align_step,
