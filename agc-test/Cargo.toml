@@ -10,3 +10,4 @@ agc-sim = { path = "../agc-sim" }
 [dev-dependencies]
 agc-core = { path = "../agc-core" }
 agc-sim = { path = "../agc-sim" }
+serial_test = "3"

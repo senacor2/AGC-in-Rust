@@ -5,8 +5,23 @@ edition.workspace = true
 
 [dependencies]
 libm = { version = "0.2", default-features = false }
+# critical-section provides the ISR-safe mutual exclusion facade.
+# We always pull it in, but the *implementation* is registered inside
+# this crate (see sync module): a no-op for host/test builds, and a
+# real interrupt-disable on the bare-metal target.
+critical-section = "1.1"
 
 [dev-dependencies]
 
 [features]
 default = []
+# Enable for bare-metal Cortex-M4F builds (thumbv7em-none-eabihf).
+# Activates the binary entry point and pull-in of the BSP panic handler.
+bare-metal = []
+
+# The bare-metal binary entry point is only built when explicitly targeting
+# a no_std embedded device.  Host builds (cargo test, cargo check) use lib.rs only.
+[[bin]]
+name = "agc-core"
+path = "src/main.rs"
+required-features = ["bare-metal"]
