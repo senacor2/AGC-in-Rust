@@ -458,11 +458,145 @@ fn start_load(state: &mut crate::AgcState, verb: u8, noun: u8, total_regs: u8, r
 
 // ── Verb handlers ─────────────────────────────────────────────────────────────
 
+/// Look up the display values for a noun from the current AgcState.
+///
+/// Returns `(R1, R2, R3)` as f32 values for the DSKY registers.
+/// Returns `None` for unrecognised nouns.
+///
+/// AGC source: Comanche055/PINBALL_NOUN_TABLES.agc noun dispatch table.
+/// Decompose a time in centiseconds into (hours, minutes, seconds.centiseconds)
+/// for DSKY display across R1/R2/R3.
+///
+/// AGC time display convention: R1 = hours, R2 = minutes, R3 = seconds×100
+/// (i.e. seconds with two fractional digits expressed as an integer, so
+/// 30.45 s → 3045).
+fn time_to_hms(cs: u32) -> (f32, f32, f32) {
+    let total_s = cs / 100;
+    let frac_cs = cs % 100;
+    let hours = total_s / 3600;
+    let minutes = (total_s % 3600) / 60;
+    let seconds = total_s % 60;
+    // R3 = SSSCC (seconds * 100 + centiseconds), matching AGC N65/N36 format
+    let r3 = (seconds * 100 + frac_cs) as f32;
+    (hours as f32, minutes as f32, r3)
+}
+
+fn noun_display(state: &crate::AgcState, noun: u8) -> Option<(f32, f32, f32)> {
+    use crate::math::linalg::norm;
+
+    match noun {
+        // N33 — TIG (Time of Ignition). R1 = hours, R2 = minutes, R3 = seconds×100.
+        33 => {
+            let cs = match state.vn.pending_tig {
+                Some(t) => t.0,
+                None => 0,
+            };
+            let (h, m, s) = time_to_hms(cs);
+            Some((h, m, s))
+        }
+
+        // N36 — Vehicle GET (Ground Elapsed Time). R1 = hours, R2 = minutes, R3 = seconds×100.
+        36 => {
+            let (h, m, s) = time_to_hms(state.time.0);
+            Some((h, m, s))
+        }
+
+        // N40 — Burn display. R1 = target ΔV magnitude, R2 = accumulated ΔV magnitude,
+        //        R3 = remaining ΔV magnitude.
+        40 => {
+            let target_mag = norm(state.burn.target_dv_inertial) as f32;
+            let accum_mag = norm(state.burn.accumulated_dv_inertial) as f32;
+            let remaining = (target_mag - accum_mag).max(0.0);
+            Some((target_mag, accum_mag, remaining))
+        }
+
+        // N43 — Lat/Lon/Alt. Placeholder — P21 writes these directly when active.
+        43 => Some((0.0, 0.0, 0.0)),
+
+        // N44 — Apogee/Perigee/TFF.
+        //        R1 = apogee altitude (m), R2 = perigee altitude (m),
+        //        R3 = orbital half-period (s).
+        44 => {
+            use crate::math::linalg::cross;
+            let r = norm(state.csm_state.position);
+            let h_vec = cross(state.csm_state.position, state.csm_state.velocity);
+            let h = norm(h_vec);
+            // Guard: both position and angular momentum must be nonzero for a
+            // valid Keplerian orbit (zero h means rectilinear or unset state).
+            if r > 0.0 && h >= 1.0 {
+                use crate::navigation::conics::{
+                    sv_to_elements, apoapsis_altitude_earth, periapsis_altitude_earth,
+                    orbital_period,
+                };
+                let el = sv_to_elements(state.csm_state);
+                if el.is_hyperbolic() {
+                    // No apoapsis/period for a hyperbolic escape trajectory.
+                    Some((0.0, 0.0, 0.0))
+                } else {
+                    let apo = apoapsis_altitude_earth(&el) as f32;
+                    let peri = periapsis_altitude_earth(&el) as f32;
+                    let mu = el.mu();
+                    let period_s = orbital_period(&el, mu) as f32;
+                    let half_period = period_s / 2.0;
+                    Some((apo, peri, half_period))
+                }
+            } else {
+                Some((0.0, 0.0, 0.0))
+            }
+        }
+
+        // N54 — Range/Rate/Theta. Already written by P20 directly — return current
+        //        register values unchanged.
+        54 => Some((state.dsky.r[0], state.dsky.r[1], state.dsky.r[2])),
+
+        // N62 — Abs vel / time from TIG / accum ΔV.
+        //        R1 = |velocity| (m/s), R2 = time from TIG (seconds×100),
+        //        R3 = accumulated ΔV magnitude (m/s).
+        62 => {
+            let abs_vel = norm(state.csm_state.velocity) as f32;
+            let time_from_tig = match &state.pending_maneuver {
+                Some(m) => {
+                    let elapsed_cs = state.time.0.wrapping_sub(m.tig.0);
+                    // Display as seconds×100 (SSSCC format)
+                    elapsed_cs as f32
+                }
+                None => 0.0,
+            };
+            let accum_dv = norm(state.burn.accumulated_dv_inertial) as f32;
+            Some((abs_vel, time_from_tig, accum_dv))
+        }
+
+        // N65 — Mission time. R1 = hours, R2 = minutes, R3 = seconds×100.
+        65 => {
+            let (h, m, s) = time_to_hms(state.time.0);
+            Some((h, m, s))
+        }
+
+        // N81 — ΔV components from pending maneuver (inertial frame).
+        81 => {
+            match &state.pending_maneuver {
+                Some(m) => {
+                    let dv = m.delta_v.0;
+                    Some((dv[0] as f32, dv[1] as f32, dv[2] as f32))
+                }
+                None => Some((0.0, 0.0, 0.0)),
+            }
+        }
+
+        _ => None,
+    }
+}
+
 /// V06 — Display decimal.
 fn v06_display_decimal(state: &mut crate::AgcState, noun: u8) {
     state.dsky.verb = 6;
     state.dsky.noun = noun;
     state.dsky.flashing = false;
+    if let Some((r1, r2, r3)) = noun_display(state, noun) {
+        state.dsky.r[0] = r1;
+        state.dsky.r[1] = r2;
+        state.dsky.r[2] = r3;
+    }
 }
 
 /// V16 — Continuous monitor display.
@@ -470,6 +604,28 @@ fn v16_monitor(state: &mut crate::AgcState, noun: u8) {
     state.dsky.verb = 16;
     state.dsky.noun = noun;
     state.dsky.flashing = false;
+    if let Some((r1, r2, r3)) = noun_display(state, noun) {
+        state.dsky.r[0] = r1;
+        state.dsky.r[1] = r2;
+        state.dsky.r[2] = r3;
+    }
+}
+
+/// Refresh the DSKY data registers for V16 (continuous monitor).
+///
+/// Called by periodic tasks (e.g. P20's nav cycle, the 1 Hz display
+/// refresh in `dsky_sim`) to update R1/R2/R3 while V16 is active.
+/// No-op if the current verb is not V16.
+pub fn refresh_monitor_display(state: &mut crate::AgcState) {
+    if state.dsky.verb != 16 {
+        return;
+    }
+    let noun = state.dsky.noun;
+    if let Some((r1, r2, r3)) = noun_display(state, noun) {
+        state.dsky.r[0] = r1;
+        state.dsky.r[1] = r2;
+        state.dsky.r[2] = r3;
+    }
 }
 
 /// V34 — Terminate active program: return to P00.
@@ -1135,5 +1291,173 @@ mod tests {
         // (`-` is only accepted before digits in the current implementation,
         // so exercise via a fresh load if your test runtime rejects mid-load.)
         let _ = state.dsky.r[0];
+    }
+
+    // ── TC-VN-ND: Noun display table tests ───────────────────────────────────
+
+    /// TC-VN-ND-1: V06 N65 displays mission time as HH / MM / SSSCC.
+    /// Met(12345) = 123.45 s = 0 h, 2 min, 3.45 s → R1=0, R2=2, R3=345.
+    #[test]
+    fn tc_vn_nd_1_v06_n65_mission_time() {
+        let mut state = AgcState::new();
+        // 12345 centiseconds = 123.45 seconds = 0h 2m 3.45s
+        state.time = crate::types::Met(12345);
+
+        feed(
+            &mut state,
+            &[Key::Verb, d(0), d(6), Key::Noun, d(6), d(5), Key::Entr],
+        );
+
+        assert_eq!(state.dsky.verb, 6, "TC-VN-ND-1: verb must be 6");
+        assert_eq!(state.dsky.noun, 65, "TC-VN-ND-1: noun must be 65");
+        assert_eq!(state.dsky.r[0], 0.0f32, "TC-VN-ND-1: R1 = hours = 0");
+        assert_eq!(state.dsky.r[1], 2.0f32, "TC-VN-ND-1: R2 = minutes = 2");
+        assert_eq!(state.dsky.r[2], 345.0f32, "TC-VN-ND-1: R3 = 3.45s as SSSCC = 345");
+    }
+
+    /// TC-VN-ND-2: V16 N65 monitors mission time; refresh_monitor_display
+    /// updates registers when MET changes.
+    /// Met(360100) = 3601.00 s = 1h 0m 1.00s → R1=1, R2=0, R3=100.
+    /// After advance to Met(363700) = 3637.00 s = 1h 0m 37.00s → R1=1, R2=0, R3=3700.
+    #[test]
+    fn tc_vn_nd_2_v16_n65_monitor_and_refresh() {
+        let mut state = AgcState::new();
+        // 360100 cs = 3601.00 s = 1h 0m 1.00s
+        state.time = crate::types::Met(360100);
+
+        feed(
+            &mut state,
+            &[Key::Verb, d(1), d(6), Key::Noun, d(6), d(5), Key::Entr],
+        );
+
+        assert_eq!(state.dsky.r[0], 1.0f32, "TC-VN-ND-2: R1 = 1 hour");
+        assert_eq!(state.dsky.r[1], 0.0f32, "TC-VN-ND-2: R2 = 0 minutes");
+        assert_eq!(state.dsky.r[2], 100.0f32, "TC-VN-ND-2: R3 = 1.00s as SSSCC = 100");
+
+        // Advance MET and refresh — display must update.
+        // 363700 cs = 3637.00 s = 1h 0m 37.00s
+        state.time = crate::types::Met(363700);
+        refresh_monitor_display(&mut state);
+
+        assert_eq!(state.dsky.r[0], 1.0f32, "TC-VN-ND-2: R1 still 1 hour");
+        assert_eq!(state.dsky.r[1], 0.0f32, "TC-VN-ND-2: R2 still 0 minutes");
+        assert_eq!(state.dsky.r[2], 3700.0f32, "TC-VN-ND-2: R3 = 37.00s as SSSCC = 3700");
+    }
+
+    /// TC-VN-ND-3: V06 N33 displays pending TIG as HH / MM / SSSCC.
+    /// Met(99900) = 999.00 s = 0h 16m 39.00s → R1=0, R2=16, R3=3900.
+    #[test]
+    fn tc_vn_nd_3_v06_n33_pending_tig() {
+        let mut state = AgcState::new();
+        state.vn.pending_tig = Some(crate::types::Met(99900));
+
+        feed(
+            &mut state,
+            &[Key::Verb, d(0), d(6), Key::Noun, d(3), d(3), Key::Entr],
+        );
+
+        assert_eq!(state.dsky.r[0], 0.0f32, "TC-VN-ND-3: R1 = 0 hours");
+        assert_eq!(state.dsky.r[1], 16.0f32, "TC-VN-ND-3: R2 = 16 minutes");
+        assert_eq!(state.dsky.r[2], 3900.0f32, "TC-VN-ND-3: R3 = 39.00s as SSSCC");
+    }
+
+    /// TC-VN-ND-4: V06 N33 with no pending TIG shows zero in R1.
+    #[test]
+    fn tc_vn_nd_4_v06_n33_no_pending_tig() {
+        let mut state = AgcState::new();
+        state.vn.pending_tig = None;
+
+        feed(
+            &mut state,
+            &[Key::Verb, d(0), d(6), Key::Noun, d(3), d(3), Key::Entr],
+        );
+
+        assert_eq!(
+            state.dsky.r[0], 0.0f32,
+            "TC-VN-ND-4: r[0] must be 0.0 when no pending TIG"
+        );
+    }
+
+    /// TC-VN-ND-5: V06 N44 computes apogee/perigee/half-period from CSM state
+    /// in a circular LEO orbit. For a circular orbit apogee ≈ perigee within 1 km.
+    #[test]
+    fn tc_vn_nd_5_v06_n44_apogee_perigee_circular_leo() {
+        use crate::navigation::gravity::MU_EARTH;
+        use crate::navigation::state_vector::{Frame, StateVector};
+
+        let mut state = AgcState::new();
+        let r_mag = 6_671_000.0_f64;
+        let v_circ = libm::sqrt(MU_EARTH / r_mag);
+        state.csm_state = StateVector {
+            position: [r_mag, 0.0, 0.0],
+            velocity: [0.0, v_circ, 0.0],
+            epoch: crate::types::Met(0),
+            frame: Frame::EarthInertial,
+        };
+
+        feed(
+            &mut state,
+            &[Key::Verb, d(0), d(6), Key::Noun, d(4), d(4), Key::Entr],
+        );
+
+        let apo = state.dsky.r[0];
+        let peri = state.dsky.r[1];
+        let half_period = state.dsky.r[2];
+
+        assert!(apo > 0.0, "TC-VN-ND-5: apogee altitude must be positive, got {apo}");
+        assert!(peri > 0.0, "TC-VN-ND-5: perigee altitude must be positive, got {peri}");
+        assert!(
+            half_period > 0.0,
+            "TC-VN-ND-5: half-period must be positive, got {half_period}"
+        );
+        assert!(
+            (apo - peri).abs() < 1000.0,
+            "TC-VN-ND-5: circular orbit apogee ≈ perigee within 1 km, |apo-peri| = {}",
+            (apo - peri).abs()
+        );
+    }
+
+    /// TC-VN-ND-6: refresh_monitor_display is a no-op when verb != 16.
+    /// Setting verb = 6 with noun = 65 and then refreshing must NOT update r[0].
+    #[test]
+    fn tc_vn_nd_6_refresh_noop_when_not_v16() {
+        let mut state = AgcState::new();
+        state.dsky.verb = 6;
+        state.dsky.noun = 65;
+        state.time = crate::types::Met(1000);
+        state.dsky.r = [0.0, 0.0, 0.0];
+
+        refresh_monitor_display(&mut state);
+
+        assert_eq!(
+            state.dsky.r[0], 0.0f32,
+            "TC-VN-ND-6: r[0] must stay 0.0 when verb != 16"
+        );
+    }
+
+    /// TC-VN-ND-7: V06 with an unknown noun (N99) leaves the DSKY registers
+    /// unchanged because noun_display returns None.
+    #[test]
+    fn tc_vn_nd_7_v06_unknown_noun_leaves_registers_unchanged() {
+        let mut state = AgcState::new();
+        state.dsky.r = [42.0, 43.0, 44.0];
+
+        feed(
+            &mut state,
+            &[Key::Verb, d(0), d(6), Key::Noun, d(9), d(9), Key::Entr],
+        );
+
+        assert_eq!(
+            state.dsky.r[0], 42.0f32,
+            "TC-VN-ND-7: r[0] must remain 42.0 for unknown noun"
+        );
+        assert_eq!(
+            state.dsky.r[1], 43.0f32,
+            "TC-VN-ND-7: r[1] must remain 43.0 for unknown noun"
+        );
+        assert_eq!(
+            state.dsky.r[2], 44.0f32,
+            "TC-VN-ND-7: r[2] must remain 44.0 for unknown noun"
+        );
     }
 }

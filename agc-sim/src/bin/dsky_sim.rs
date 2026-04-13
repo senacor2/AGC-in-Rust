@@ -92,6 +92,7 @@ fn run<W: Write>(out: &mut W) -> io::Result<()> {
 
         // Redraw at ~20 Hz.
         if last_frame.elapsed() >= FRAME {
+            agc_core::services::v_n::refresh_monitor_display(&mut state);
             let frame = decode_dsky(&state.dsky);
             render(out, (1, 1), &frame, elapsed_cs as u64, &status, flash_on)?;
             last_frame = Instant::now();
