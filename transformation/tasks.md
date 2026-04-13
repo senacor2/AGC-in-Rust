@@ -346,11 +346,17 @@ tests in agc-sim. Total project: 302 agc-core tests pass.
     digit. Visual check only — this is a layout bug, not a data bug.
   - **Blocked by**: nothing. Contained entirely to `agc-sim/src/dsky_ui.rs`.
 
-- [ ] **Bug** — V06/V16 monitor verbs never populate the data display
-  registers. **Observed symptom**: in the `agc-sim dsky_sim` binary,
-  keying `V16 N65 E` (monitor time) shows `00 00 00000` in R1 instead
-  of the current mission elapsed time. Other monitor nouns behave the
-  same — R1/R2/R3 stay at whatever value the last data-entry sequence
+- [x] **Bug** — V06/V16 monitor verbs never populate the data display
+  registers. **RESOLVED 2026-04-13** (commit `1dfb803`). Added
+  `noun_display()` dispatch table in `services/v_n.rs` covering nouns
+  N33, N36, N40, N43, N44, N54, N62, N65, N81. Time nouns (N33/N36/N65)
+  display as R1=hours, R2=minutes, R3=seconds×100 (SSSCC format) via
+  `time_to_hms()` helper. Added `refresh_monitor_display()` for periodic
+  V16 updates, called from `dsky_sim` 20 Hz render loop. 7 new tests
+  (TC-VN-ND-1..7). **Observed symptom**: in the `agc-sim dsky_sim` binary,
+  keying `V16 N65 E` (monitor time) showed `00 00 00000` in R1 instead
+  of the current mission elapsed time. Other monitor nouns behaved the
+  same — R1/R2/R3 stayed at whatever value the last data-entry sequence
   left, or zero if none.
   - **Root cause**: `services::v_n::v06_display_decimal` and
     `services::v_n::v16_monitor` (lines 462–473) set `state.dsky.verb`
