@@ -31,7 +31,7 @@ use crossterm::{
 pub const WIDTH: u16 = 66;
 
 /// Total rendered height in rows (display + keyboard + status).
-pub const HEIGHT: u16 = 27;
+pub const HEIGHT: u16 = 29;
 
 // ── Colours ───────────────────────────────────────────────────────────────────
 
@@ -62,7 +62,7 @@ pub fn render<W: Write>(
     draw_lamp_panel(out, ox, oy, &frame.lamps, frame.lamp_test)?;
     draw_display_panel(out, ox + 32, oy, frame, flash_on)?;
     draw_keyboard(out, ox, oy + 17)?;
-    draw_status(out, ox, oy + 25, met_cs, status)?;
+    draw_status(out, ox, oy + 27, met_cs, status)?;
 
     queue!(out, ResetColor)?;
     out.flush()
