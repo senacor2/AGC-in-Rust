@@ -305,11 +305,16 @@ tests in agc-sim. Total project: 302 agc-core tests pass.
   declared "mean-of-1969 inertial frame" and needed no change.
   **Unblocks**: the star catalogue population work above.
 
-- [ ] **Bug** — `agc-sim dsky_sim` DSKY display panel: the bottom border
-  is drawn on the same row as R3's digit content. **Observed symptom**:
-  the third data register's value (R3) has a horizontal line drawn
+- [x] **Bug** — `agc-sim dsky_sim` DSKY display panel: the bottom border
+  was drawn on the same row as R3's digit content. **RESOLVED 2026-04-13**
+  (commit follows). Extended the display panel from 16 to 17 rows so R3
+  content stays at `oy+15` and the bottom border moves to `oy+16`.
+  Extended the lamp panel to match. Removed the duplicated overwrite
+  logic. Keyboard and status line shifted down by 1 row; `HEIGHT`
+  updated from 26 to 27. **Observed symptom**:
+  the third data register's value (R3) had a horizontal line drawn
   across the digits — the `└─────┘` bottom-border row and the R3
-  content row collide.
+  content row collided.
   - **Root cause**: in `agc-sim/src/dsky_ui.rs::draw_display_panel`
     (around lines 145–180), the display panel is sized 16 rows tall
     (`oy..=oy+15`). The cell separators and register content rows are:

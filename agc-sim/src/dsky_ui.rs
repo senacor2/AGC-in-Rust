@@ -31,7 +31,7 @@ use crossterm::{
 pub const WIDTH: u16 = 66;
 
 /// Total rendered height in rows (display + keyboard + status).
-pub const HEIGHT: u16 = 26;
+pub const HEIGHT: u16 = 27;
 
 // ── Colours ───────────────────────────────────────────────────────────────────
 
@@ -61,8 +61,8 @@ pub fn render<W: Write>(
 
     draw_lamp_panel(out, ox, oy, &frame.lamps, frame.lamp_test)?;
     draw_display_panel(out, ox + 32, oy, frame, flash_on)?;
-    draw_keyboard(out, ox, oy + 16)?;
-    draw_status(out, ox, oy + 24, met_cs, status)?;
+    draw_keyboard(out, ox, oy + 17)?;
+    draw_status(out, ox, oy + 25, met_cs, status)?;
 
     queue!(out, ResetColor)?;
     out.flush()
@@ -100,10 +100,9 @@ fn draw_lamp_panel<W: Write>(
         queue!(out, MoveTo(ox, y),     Print("│             │             │"))?;
         queue!(out, MoveTo(ox, y + 1), Print("├─────────────┼─────────────┤"))?;
     }
-    queue!(out, MoveTo(ox, oy + 15), Print("└─────────────┴─────────────┘"))?;
-
-    // Overwrite the last separator with a bottom border.
-    queue!(out, MoveTo(ox, oy + 15), Print("└─────────────┴─────────────┘"))?;
+    // Extra blank row to align with the 17-row display panel.
+    queue!(out, MoveTo(ox, oy + 15), Print("│             │             │"))?;
+    queue!(out, MoveTo(ox, oy + 16), Print("└─────────────┴─────────────┘"))?;
 
     for (row_idx, row) in grid.iter().enumerate() {
         let y = oy + 1 + (row_idx as u16) * 2;
@@ -129,7 +128,7 @@ fn draw_display_panel<W: Write>(
     flash_on: bool,
 ) -> io::Result<()> {
     queue!(out, SetForegroundColor(DIM))?;
-    // Outer frame (31 cols wide, 16 rows tall, matching the lamp panel height).
+    // Outer frame (31 cols wide, 17 rows tall, matching the lamp panel height).
     queue!(out, MoveTo(ox, oy),      Print("┌──────────────┬──────────────┐"))?;
     for row in 1..=3 {
         queue!(out, MoveTo(ox, oy + row),     Print("│              │              │"))?;
@@ -148,11 +147,7 @@ fn draw_display_panel<W: Write>(
     }
     queue!(out, MoveTo(ox, oy + 14), Print("├─────────────────────────────┤"))?;
     queue!(out, MoveTo(ox, oy + 15), Print("│                             │"))?;
-    queue!(out, MoveTo(ox, oy + 15), Print("└─────────────────────────────┘"))?;
-    // Redraw bottom separator-free:
-    queue!(out, MoveTo(ox, oy + 15), Print("└─────────────────────────────┘"))?;
-    queue!(out, MoveTo(ox, oy + 14), Print("│                             │"))?;
-    queue!(out, MoveTo(ox, oy + 14), Print("├─────────────────────────────┤"))?;
+    queue!(out, MoveTo(ox, oy + 16), Print("└─────────────────────────────┘"))?;
 
     // Row 0: COMP ACTY lamp | PROG label
     queue!(out, SetForegroundColor(if frame.lamps.comp_acty { ACTIVE } else { DIM }))?;
