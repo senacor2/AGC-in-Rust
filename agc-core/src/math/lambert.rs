@@ -24,7 +24,8 @@ const TOL_NDIM: f64 = 1.0e-5;
 /// Maximum Halley iterations before panic.
 const MAX_ITER: usize = 100;
 
-/// Boundary epsilon for x clamping (keeps x away from ±1 singularities).
+/// Boundary epsilon for x clamping (keeps x away from ±1 and the parabolic
+/// singularity at x = 1).
 const X_EPS: f64 = 1.0e-10;
 
 /// Cross-product magnitude threshold for collinearity detection (anti-parallel).
@@ -171,7 +172,15 @@ pub fn lambert(r1: Vec3, r2: Vec3, tof: f64, mu: f64, prograde: bool) -> (Vec3, 
         libm::pow(t00 / t_nd, exponent) - 1.0
     };
 
-    let mut x = x0.clamp(-1.0 + X_EPS, 1.0 - X_EPS);
+    // Determine regime: if T_nd < T₁ the solution is hyperbolic (x > 1),
+    // otherwise elliptic (x ∈ (-1, 1)).  Keep x away from the parabolic
+    // singularity at x = 1.
+    let hyperbolic = t_nd < t1;
+    let mut x = if hyperbolic {
+        x0.max(1.0 + X_EPS)
+    } else {
+        x0.clamp(-1.0 + X_EPS, 1.0 - X_EPS)
+    };
 
     // ── 4. Halley iteration on x ─────────────────────────────────────────────
     let mut converged = false;
@@ -190,7 +199,11 @@ pub fn lambert(r1: Vec3, r2: Vec3, tof: f64, mu: f64, prograde: bool) -> (Vec3, 
         } else {
             -err * dt / denom
         };
-        x = (x + dx).clamp(-1.0 + X_EPS, 1.0 - X_EPS);
+        x = if hyperbolic {
+            (x + dx).max(1.0 + X_EPS)
+        } else {
+            (x + dx).clamp(-1.0 + X_EPS, 1.0 - X_EPS)
+        };
     }
 
     if !converged {
@@ -262,25 +275,37 @@ pub fn lambert(r1: Vec3, r2: Vec3, tof: f64, mu: f64, prograde: bool) -> (Vec3, 
 #[inline]
 fn tof_and_derivs(x: f64, lambda: f64) -> (f64, f64, f64) {
     let x2 = x * x;
-    let a_inv = 1.0 - x2; // = 1/a; always > 0 for x in (-1,1)
-    let a = 1.0 / a_inv; // non-dim semi-major axis
+    let a_inv = 1.0 - x2; // positive for elliptic, negative for hyperbolic
 
-    // Lancaster-Blanchard time equation.
-    let alfa = 2.0 * libm::acos(x); // in (0, 2π)
-    // β = 2·asin(|λ|·√(1−x²)); sign flipped for λ < 0.
-    let beta_sin_arg = (lambda.abs() * libm::sqrt(a_inv)).min(1.0);
-    let beta = if lambda < 0.0 {
-        -2.0 * libm::asin(beta_sin_arg)
+    // Lancaster-Blanchard time equation — elliptic vs hyperbolic branch.
+    let t_val = if x < 1.0 {
+        // Elliptic: x ∈ (−1, 1), a_inv > 0.
+        let a = 1.0 / a_inv;
+        let alfa = 2.0 * libm::acos(x);
+        let beta_sin_arg = (lambda.abs() * libm::sqrt(a_inv)).min(1.0);
+        let beta = if lambda < 0.0 {
+            -2.0 * libm::asin(beta_sin_arg)
+        } else {
+            2.0 * libm::asin(beta_sin_arg)
+        };
+        let sqrt_a3 = libm::sqrt(a * a * a);
+        ((alfa - beta) - (libm::sin(alfa) - libm::sin(beta))) * sqrt_a3 / 2.0
     } else {
-        2.0 * libm::asin(beta_sin_arg)
+        // Hyperbolic: x > 1. Use cosh/sinh formulas.
+        // ā = 1/(x²−1) > 0 (positive magnitude of the negative semi-major axis).
+        let a_bar = 1.0 / (x2 - 1.0);
+        let alfa_h = 2.0 * libm::acosh(x);
+        let beta_h_arg = lambda.abs() * libm::sqrt(x2 - 1.0);
+        let beta_h = if lambda < 0.0 {
+            -2.0 * libm::asinh(beta_h_arg)
+        } else {
+            2.0 * libm::asinh(beta_h_arg)
+        };
+        let sqrt_a3 = libm::sqrt(a_bar * a_bar * a_bar);
+        ((libm::sinh(alfa_h) - alfa_h) - (libm::sinh(beta_h) - beta_h)) * sqrt_a3 / 2.0
     };
 
-    // T = [(α−β) − (sin α − sin β)] · a^(3/2) / 2
-    // (Lancaster-Blanchard, Izzo 2015 Eq. 18 equivalent form)
-    let sqrt_a3 = libm::sqrt(a * a * a);
-    let t_val = ((alfa - beta) - (libm::sin(alfa) - libm::sin(beta))) * sqrt_a3 / 2.0;
-
-    // Derivatives (Izzo 2015, Eq. 22).
+    // Derivatives (Izzo 2015, Eq. 22) — unified formula valid for all x ≠ ±1.
     let lam2 = lambda * lambda;
     let lam3 = lam2 * lambda;
     let y_sq = (1.0 - lam2 * a_inv).max(0.0);
@@ -313,21 +338,26 @@ fn tof_and_derivs(x: f64, lambda: f64) -> (f64, f64, f64) {
 
 /// Inner helper: compute only T(x,λ) without the finite-difference branch for d²T.
 /// Used by the finite-difference computation in `tof_and_derivs` to avoid infinite recursion.
+/// Inner helper: compute T(x,λ) and derivatives without the finite-difference
+/// branch for d²T.  Used by the finite-difference path in `tof_and_derivs` to
+/// avoid infinite recursion.  Only called for x near 0 (elliptic), so the
+/// hyperbolic branch is included for completeness but won't be exercised by
+/// the FD stencil.
 #[inline]
 fn tof_and_derivs_inner(x: f64, lambda: f64) -> (f64, f64, f64) {
     let x_safe = x.clamp(-1.0 + X_EPS, 1.0 - X_EPS);
     let x2 = x_safe * x_safe;
-    let a_inv = (1.0 - x2).max(X_EPS);
-    let a = 1.0 / a_inv;
+    let a_inv = 1.0 - x2;
 
+    // T(x,λ) — only elliptic here (inner helper is called near x = 0).
+    let a = 1.0 / a_inv.max(X_EPS);
     let alfa = 2.0 * libm::acos(x_safe);
-    let beta_sin_arg = (lambda.abs() * libm::sqrt(a_inv)).min(1.0);
+    let beta_sin_arg = (lambda.abs() * libm::sqrt(a_inv.max(0.0))).min(1.0);
     let beta = if lambda < 0.0 {
         -2.0 * libm::asin(beta_sin_arg)
     } else {
         2.0 * libm::asin(beta_sin_arg)
     };
-
     let sqrt_a3 = libm::sqrt(a * a * a);
     let t_val = ((alfa - beta) - (libm::sin(alfa) - libm::sin(beta))) * sqrt_a3 / 2.0;
 
@@ -342,8 +372,7 @@ fn tof_and_derivs_inner(x: f64, lambda: f64) -> (f64, f64, f64) {
         (3.0 * x_safe * t_val - 2.0 + 2.0 * lam3 * x_safe / y) / a_inv
     };
 
-    // d2t: use the analytic formula directly (no recursion guard needed here).
-    // This value is not used by the finite-difference caller; return 0.0 near x=0.
+    // d2t: analytic formula (no recursion guard needed). Return 0.0 near x=0.
     let d2t = if x_safe.abs() < 1.0e-8 {
         0.0
     } else {
@@ -580,6 +609,58 @@ mod tests {
             "Retrograde h_z must be negative, got {}",
             h[2]
         );
+    }
+
+    // ── TC-LAM-8: Hyperbolic TEI escape (LLO → Earth, 60 h) ───────────────────
+    //
+    // Trans-Earth injection from low lunar orbit to Earth entry sphere.
+    // This is a hyperbolic escape from the Moon (x > 1 in Izzo's parametrization).
+    // Verifies the cosh/sinh branch of tof_and_derivs and the unclamped
+    // Halley iteration for the fast regime (T < T₁).
+    #[test]
+    fn tc_lam_8_hyperbolic_tei() {
+        let r1_mag = 1_837_400.0_f64; // R_Moon + 100 km
+        let r1: Vec3 = [r1_mag, 0.0, 0.0];
+
+        // Earth entry sphere ≈ 384 400 km away, offset 5° to avoid anti-parallel.
+        let earth_dist = 384_400_000.0_f64;
+        let offset = 5.0_f64.to_radians();
+        let r2: Vec3 = [
+            -earth_dist * libm::cos(offset),
+            earth_dist * libm::sin(offset),
+            0.0,
+        ];
+
+        let tof = 60.0 * 3600.0; // 60 hours
+
+        let (v1, v2) = lambert(r1, r2, tof, MU_MOON, true);
+
+        // Must be a hyperbolic escape: specific energy > 0.
+        let e1 = 0.5 * dot(v1, v1) - MU_MOON / norm(r1);
+        assert!(
+            e1 > 0.0,
+            "TC-LAM-8: TEI must be hyperbolic (E > 0), got E = {e1:.3e}"
+        );
+
+        // Departure speed from LLO should exceed escape velocity (≈ 2310 m/s
+        // at r = 1.837 Mm). TEI delta-V from ~1633 m/s circular puts |v1| ≈ 2400–3000 m/s.
+        let v1_mag = norm(v1);
+        let v_esc = libm::sqrt(2.0 * MU_MOON / r1_mag);
+        assert!(
+            v1_mag > v_esc,
+            "TC-LAM-8: |v1| = {v1_mag:.1} m/s must exceed v_esc = {v_esc:.1} m/s"
+        );
+        assert!(
+            v1_mag < 5_000.0,
+            "TC-LAM-8: |v1| = {v1_mag:.1} m/s unreasonably large"
+        );
+
+        // Prograde: h_z > 0.
+        let h = cross(r1, v1);
+        assert!(h[2] > 0.0, "TC-LAM-8: h_z must be positive (prograde)");
+
+        // Energy conservation I2.
+        check_energy(r1, v1, r2, v2, MU_MOON, "TC-LAM-8");
     }
 
     // ── TC-LAM-6: Degenerate — anti-parallel vectors (should panic) ───────────

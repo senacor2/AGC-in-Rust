@@ -178,12 +178,7 @@ mod tests {
 
     /// TC-P37-1: `init` with `Frame::MoonInertial` state sets `major_mode = 37`.
     ///
-    /// Blocked on the same Lambert long-TOF convergence edge case as TC-TGT-10.
-    /// Any `p37_compute_tei` call using a lunar-orbit → Earth-entry geometry
-    /// currently stalls the Halley iteration. Kept for when the Lambert regime
-    /// fix lands.
     #[test]
-    #[ignore = "TC-P37-1: Lambert Halley stalls on long-TOF TEI geometry (same as TC-TGT-10)"]
     fn tc_p37_1_init_sets_major_mode() {
         let mut state = AgcState::new();
         state.csm_state = llo_state();
@@ -211,9 +206,7 @@ mod tests {
 
     /// TC-P37-2: `p37_compute_tei` with 30-hour TOF produces a finite `Maneuver`.
     ///
-    /// Blocked on the Lambert long-TOF convergence edge case (same as TC-TGT-10).
     #[test]
-    #[ignore = "TC-P37-2: Lambert Halley stalls on long-TOF TEI geometry (same as TC-TGT-10)"]
     fn tc_p37_2_compute_tei_finite_maneuver() {
         let mut state = AgcState::new();
         state.csm_state = llo_state();
@@ -296,9 +289,7 @@ mod tests {
 
     /// TC-P37-4: After `p37_compute_tei`, `state.pending_maneuver` is `Some(_)`.
     ///
-    /// Blocked on the Lambert long-TOF convergence edge case (same as TC-TGT-10).
     #[test]
-    #[ignore = "TC-P37-4: Lambert Halley stalls on long-TOF TEI geometry (same as TC-TGT-10)"]
     fn tc_p37_4_result_stored_in_pending_maneuver() {
         let mut state = AgcState::new();
         state.csm_state = llo_state();

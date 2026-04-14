@@ -739,12 +739,9 @@ mod tests {
     /// and the entry target is a point on the Earth entry sphere expressed in the
     /// same Moon-inertial frame (pre-converted by the caller, as per §5.3).
     ///
-    /// TC-TGT-10: return_to_earth TEI burn targeting test. Offset from the
-    /// x-axis to avoid Lambert anti-parallel singularity, but the long-TOF
-    /// (~60 hour) high-eccentricity transfer still causes Halley to stall.
-    /// This is a separate Lambert edge case beyond the core regime fixes.
+    /// TC-TGT-10: return_to_earth TEI burn targeting test. Hyperbolic escape
+    /// from LLO to Earth entry sphere (~60 h, μ_Moon).
     #[test]
-    #[ignore = "TC-TGT-10: Lambert Halley stalls on long-TOF TEI geometry"]
     fn tc_tgt_10_return_to_earth_mode() {
         use crate::navigation::gravity::MU_MOON;
 

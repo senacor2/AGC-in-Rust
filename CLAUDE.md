@@ -29,6 +29,9 @@ Each agent reads outputs from the prior stage. The analyst's functional specs ar
 
 ## Build & Test
 
+Rust has been installed via rustup. The rust proxies can be found
+in `/opt/homebrew/opt/rustup/bin`.
+
 ```sh
 cargo build                                                    # build (host)
 cargo build --target thumbv7em-none-eabihf -p agc-core         # bare-metal build
