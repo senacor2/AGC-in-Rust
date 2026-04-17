@@ -1898,23 +1898,795 @@ print line was changed in the most recent modification of the Subroutine.
 
 ## Card Layout
 
+Although the assignnent of functions to rhe individual columns of
+the cards that are input to the assembler is not of direct concern unless
+cards nust be punched, the card format serves as a methodical explanation
+of some of ihe features of the assembler, and also can be useful in
+reviewing lists of program changes that might be provided in the form
+of a listing of input cards to the assembler.
+
+- Column 1 is used for specification of the type of input: blank for
+normal input, and otherwise A, L, P, or R as reviewed above.
+If a change to a log section is provided, "=LOG" appears in
+columns 1-4 to identify the subsequent information on the card
+as a log identification.
+- Columns 2-7 contain the left justified sequence number.
+- Column 8 is used to contain printer control information, with
+values of 0-7 providing the same number of line spacings after
+the current line is printed (a blank is treated the same as a 1);
+a value of 8 causing a page eject after the current
+line is printed; and a value of 9 causing (with R in column 1)
+the card information in columns 9-48 to be printed in print
+columns 81-120 with n o space since the previous card. If a
+"9" appears, of course, the sequence number for the card would
+not appear in the final printout (although it would appear in
+a list of card changes, naturally).
+- Column 9-16 contain the tag of the cell, if any. The information
+in the tag must observe the constraints, on allowable "symbols",
+since the purpose of the tag is to permit reference to the
+cell by symbolic means. As pointed out above, a "tag" such as
+"#2" is essentially a comment, and is ignored by the assembler
+if it appears in this card field, which is the "location field".
+- Column 17 may contain a minus sign, in which case the memory
+information resulting from the remainder of the card will be
+completed before being stored.
+- column 18-23 contain the operation code, making use of the
+appropriate mnemonics assigned to machine-language or
+interpretive-language orders (Sections IV and VI respectively),
+or the appropriate assembler pseudo-operations (Section V).
+In addition to these, however, the following asseembler control
+operations (which do not generate binary memory information)
+may also be used:
+  - BANK: Set location counter (assembler counter used to
+  determine the assignment of binary memory information
+  to absolute machine address) equal to the first
+  unassigned cell in the variable-fixed memory bank
+  specified by the two-digit octal fixed bank number in
+  the address fiewld. If the address field is blank,
+  perform a similar function using the bank of the
+  present location counter setting (generally follows
+  a SETLOC instruction). Cells are assigned in ascending
+  sequence starting from the beginning of each bank, but
+  location counter changes to a fifferent bank must be
+  by an explicit assembler control operation. BANK orders
+  referencing a cell in S3 or S4 cause the Si printout
+  (see SBANK= below) to be changed.
+  - BLOCK: Same function as BANK, but conventionally used for
+  fixed-fixed memory banks (02 and 03). "Blocks" 00 and 01
+  are erasable memory, 04 is FBANK 00, etc. (cf. Section IIB).
+  A blank BANK card can be used successfully with fixed-fixed
+  memory banks, however.
+  - COUNT: INitiate a count of the number of fixed memory cells,
+  terminating when the next COUNT card is reached, for
+  printout in a table at the end of the listing. The number
+  of cells counted is associated with the tag in the
+  address field (and the previous count, if any, and
+  current total is provided on the printout). The operation
+  COUNT*, if the tag is suitably flagged (e.g. "$$/xxx"),
+  will replace the "$$" with the current fixed memory bank
+  number (as if "$$" had originally been punched in that
+  fashion). See Information at End of Listing.
+  - EBANK=: Set the erasable memory bank portion of the following
+  address pseudo-operation (BBCON, 2CADR, etc., See Section VC)
+  to the erasable memory bank number of the tag in
+  the address field (or to the number in the address field).
+  If the EBANK= is not followed immediately by such an
+  address pseudo-operation, an assembler cell is set to
+  the same value, for use in monitoring machine language
+  references to the erasable memory. This monitoring is
+  reset at the beginning of each log section. The bank
+  being monitored (if any) as ofthe last line on the
+  previous page of the listing appears in print columns
+  111-112 (e.g. "E3") of the third line (header log data).
+  - EQUAL (or =): Translate the quantity in the tag field of
+  the card in the same manner as the quantity in the address
+  field of the card (which need not have preceded the EQUALS
+  and which may be an absolute address as well as a symbol).
+  If the address field is blank, the address corresponding
+  to the present value of the location counter (e.g. one
+  greater than the last filled address) is assigned to
+  the tag in the tag fie1d. A distinction sometimes observed
+  in the software is to use "EQUALS" to indicate either
+  a relationship to a previous address ("chaining" of
+  address assignments, useful for erasable memory) or a
+  time-sharing of cells (between thrusting programs and
+  entry guidance, for example); "=" on the other hand,
+  indicates different tags for the same quantity.
+  - ERASE: Allocate erasable memory cells in accordance with
+  the material in the address field. If the address field
+  is blank, one cell is allocated (and location counter
+  advanced); if it is a signed integer (e.g. "+5"), then
+  an additional number of cells (in this example, a total
+  of six, sufficient for a double precision vector) are
+  allocated as specified by this integer. If an unsigned
+  (octal) integer is in the address field, on the other
+  hand, then that absolute erasable memory cell (in ECADR
+  format, see Section VC) is assigned to the tag in the
+  tag field. Allocation of a set of cells can be
+  accomplished in this fashion by ERASE xxx - yyy,
+  where xxx is starting address and yyy the final address.
+  - MEMORY: Allocate memory of the type indicated by location
+  field (functions similarly to ERASE).
+  - SBANK=: Set an aseembler control cell to indicate the
+  use of the superbank (i.e. setting of SUPERBNK, channel
+  07) given by the address field. This setting (in a
+  manner similar to EBANK=, except it is not reset
+  at the start of each log section) appears in print
+  columns 114-115 (e.g. "S3") of the third line (header
+  log data). Address constants such as BBCON and
+  2CADR (see Section VC), if reference to a cell in
+  53 or 54 is made (cf. Section IIB), will place the
+  proper SUPERBNK bit setting in bits 7-5; if reference
+  to bank nunbers of 27 or less is made, however, these
+  bits will be set to either the most recent SBANK=
+  statement or the last BANK pseudo-operation (whichever
+  was the last to occur). The software is generally
+  arranged so that reference to 53 is made wherever
+  possible. The Si information on the third line, of
+  course, is also changed by ihe BANK pseudo-operation.
+  - SETLOC: Set location counter to value specified by address
+  of card, which may be a True Address (see Section IIB)
+  or a symbol. Frequently followed by a BANK card with a
+  blank address field, to facilitate changes to memory
+  bank allocations of the coding (see Information
+  at Start of Listing). LOC means the same as SETLOC.
+  - SUBRO: Include in the assembly the Subroutine identified
+  by the symbol in the address field: see Information at
+  Start of Listing below.
+- Column 24 is blank.
+- Columns 25-40 comprise the norEal address field. For machine-
+language instructions, it may consist of a symbol or a symbol
++/- an integer (with a space before the sign). A blank means
+the address of the present step, so that an address of "+2" would
+mean an address two steps beyond the current step. For
+interpretive-language orders, the address field contains
+infornation as described in Section VI. Values of constants and
+addresses, of course, appear in the address field too.
+The information in the address field should end at or prior to
+card column 40. If the required information is too lengthy to
+complete in 16 card columns, the number of card columns
+all-ocated to the address field may be increased by punching an
+asterisk following the last character ( changing "2DEC" to
+"2DEC*", for example) of the operation field and another
+asterisk after the last character of the address information.
+An asterisk may also be used to obtain special assembler
+program performance (as mentioned above with COUNT and as also
+mentioned in Section IIF), or to indicate indexing in the
+interpretive language (see Section VI).
+- Columns 41-80 (unless used with the address-field extension
+technique described for columns 25-40) arc used for comments
+information: the contents of these columns, of course, would
+not affect the binary information generated by the assembler
+for the computer memory.
+
 ## Symbol Reference Information
+
+In the analysis of the performance of the software, it is
+frequently valuable to be able to identify quickly and reliably
+references to a given tag. Information permitting this to be done is
+included in print columns 9-26 for those lines of coding with a tag in
+the address field (for the operations such as 2CADR that generate two
+lines of coding, the reference information is provided with the first
+line). The symbol reference information, which is generated for the
+various assembler control operations as well as for cards that generate
+binary memory informnation, has the following print format:
+
+- Columns 9-11 contain "REF" (for the serial number of the reference to the tag).
+- Columns 13-15 contain the serial number of the reference to the
+tag (starting from the beginning of the listing), with the
+least significant digit in column 15 and with leading zeros
+suppressed.
+- Column 18-21 contain "LAST" (for the previous time in the
+listing that the symbol was referenced), provided that
+columns 13-15 do not contain 1 (if they do, meaning that
+this is the first reference encountered, the printing of
+"LAST" is suppressed).
+- Column 23-26 contain the master page number (i.e. the one on
+the top line of the page) where the previous reference (if any)
+to the symbol was made).
+
+It should be understood that the symbol reference information
+applies to the symbol in the address field, not to the symbol in the
+tag field. In order to identify references to the symbol in the tag
+field, the information printed in the Symbol Table Listing at the end
+of the program printout may be used (see Information at End of Listing below).
 
 ## Information at Start of Listing
 
+The first 1og section of the listing is conventionalty titled
+"Assembly and Operation Information". This 1og section generally
+consists solely of remarks information, and hence no binary memory
+loading information is generated from this segment. Therefore,
+although the log section is intended to be a convenient source of
+rapid reference information on the program, it should be clearly
+understood that this information has no direct effect on the binary
+memory information. Consequently, unless conscientious management
+control procedures are enforced the material in this 1og section can
+deviate from the actual performance of the software (an observation
+that applies to all "comments" in the listing, of course). The
+information generally included in this first 1og section includes:
+
+- A table of Log Sections, giving the various Subroutines in the
+software and the log sections that comprise them.
+- A Verb List, giving the various verbs (see Section IIJ) in the
+software and their numerical codes.
+- A Noun List, giving the various nouns (see Section IIJ) in the
+software and their numerical codes.
+- An Alarm Code List, giving the patterns in the software and their
+significance.
+- Checklist and Option Codes, giving the patterns generated by the
+software to request certain operation actions or decisions, an
+the significance of each pattern.
+
+It is emphasized once again that this log secion is made up solely of
+remarks cards, and need no be consistent with the actual binary memory
+information.
+
+The second log section of the listing as conventionally titled
+"Tags for Relative SETLOC and Blank BANK Cards". This log section is
+used to assign various portions of the software to different fixed
+memory banks. This is accomplished by having the software coding itself
+written so as to specify the assembler location counter value by means
+of a SETLOC card referencing a tag in this log section, followed by a
+blank BANK card (see Card Layout above), causing the subsequent binary
+memory information to be placed in the fixed memory bank dictated by
+this second log section. The function of this log section, therefore,
+is to associate a set of tags with appropriate fixed memory banks; it
+allows absolute memory assignments in the software to be arranged
+(for suitably fine-grained SETLOC and blank BANK cards) without changing
+the log section in which the softuare itself appears. This technique
+also allows some Subroutine information to be identical in different
+programs, with necessary memory allocation differences handled in
+this second log section rather than within the individual log sections
+of the Subroutine. The only binary information generated by this
+second log section of the listing is conventionally the memory check-
+sum information, since the BNKSUM operands (see Section IIF) for the
+different banks are conventionally placed here. In addition to fixed
+memory bank assignments, sone fixed memory tag equivalences can appear
+in this second log section, as well as some erasable memory bank
+assignments and tag equivalences reflecting vehicle-peculiar computations.
+Following this second log section may be additional log sections
+for special purposes (such as bank-peculiar constants). The final
+Iog section in the front of the program, however, is conventionally
+titled "Subroutine Calls". During coding, it is convenient to have
+the various elements of the software grouped into functions at a higher
+level than the individual log section. This grouping is acconplished
+by segmenting the software into groups called "Subroutines" (with a
+capital "S" if the word appears with a lower-case "s", it has the
+standard Websters 1965 definition of "specific instruction(s) whereby
+a digital computer is guided to perfom a precisely defined mathematical
+or logical operation"). Subroutines are assigned individual names
+(which are not tags within the Subroutine itself), and software
+modifications are made on a Subroutine basis (by, of course, specifying
+log sections to be changed within the Subroutine). The listing flags
+the last modification(s) made to the Subroutine as described earlier,
+and an accounting is kept of the serial number of the Subroutine
+revision (printed with the Subroutine name on line 1 of each page of
+the Subroutine in the listing).
+
+Subroutines are included in the assembly listing by means of
+SUBRO cards (see Card Layout above), whose address field is the
+name of the Subroutine. Each Subroutine, of course, must be compatible
+with the others as far as memory usage, tag conflict, etc. are concerned
+(there is no constraint on tag references between Subroutines, nor is
+there any requirement for special assembler inputs to define such
+tags). During the course of program development, the SUBRO log
+section is the final one associated with the complete program,
+and hence at the end of this log section there is a printout to
+this effect (such as "*** END OF MAIN PROGRAM***"). The place for
+the Subroutine name on line 1 of early pages of the assembly is
+filled with "(MAIN)", indicating that no Subroutine is being printed
+on this part of the listing.
+
+After the program reaches a certain stage in its development,
+however, it can be desirabte to restrict modifications to those which
+are generated with reference to the complete program, rather than
+merely to an individual Subroutine. This can be accomprished by suitable
+assembler control cards, which cause the insertion of an "R" (for
+Remark) in column 1 of each SUBRO card, thus retaining them in the
+listing for reference. After this is accomplished, the place for the
+Subroutine name in line 1 on all pages of the listing is filled with
+"(MAIN)". This process is known as a "freeze" of Subroutines.
+
 ## Erasable Memory Information
+
+The next log section in the listing (which can also comprise a
+Subroutine) is conventionally titled "Erasable Assignment", and
+gives most of the erasable memory and special register tag assigmnents
+to absolute addresses (for convenience, the channel tag assignments
+also are included). Many tags are assigned octal equivalent addresses
+by the EQUALS or "=" assembler control operation (see Card Layout
+above), and in these cases the corresponding S-register contents appear
+in print columns 33-36. If EBANK is 3 or more for the address (see
+Section IIB), the quantity "Ei" (where i is the EBANK number) appears
+in print columns 30-32.
+
+Other tags are assigned octal equivalent addresses by the ERASE
+assembler control operation (see Card Layout above), and these have
+the first address of the "block", (even if only one cell) in print
+columns 30-36 and the second in print columns 39-45. As for the
+assignment of tags by the EQUALS or "=" operation, the "Ei" is
+suppressed for EBANK ralues of 0, 1, or 2 (so the address appears
+in print columns 33-36 and 42-45 only).
+
+The convention is sometimes followed that comments concerning the
+erasable memory cell use are made in the comments field of the card,
+such as "B(2)" if two cells are required for the quantity and it is
+referenced in "basic" (i.e. machine language) coding so that its use
+is EBANK sensitive; "I(6)" if six cells are required and it is referenced
+only in "interpretive" coding (so use not EBANK sensitive); "PL(1)", if
+the quantity is part of a "pad load", needing on1y 1 cell; etc. As is
+true of all comments in the listing, however, there is no guarantee that
+this information necessarily reflects the current status of the software.
+Other aspects of the listing of erasable memory information (formats,
+allowab1e symbols, symbol reference information, etc.) have already been
+covered.
 
 ## Fixed Memory Information
 
+Specification of the contents of the fixed memory is the major
+purpose of the remairning 1og sections of the listing. The format of
+the octal information (most of the other portions of this listilg have
+already been described) is as follows:
+
+1. An odd parity bit (to make the sum of the binary ones in the
+15-bit memory word, including this bit, an odd value) is given
+in print position 46 for all words to be loaded into the memory.
+The onty allowable values, of course, that can appear in this
+print column are O and 1.
+
+2. For words loaded into the memory, print positions 33-36 give
+the contents of the S-register. If the cell address is in
+variable-fixed memory, the memory bank is in positions 30-31,
+and a comma appears in print position 32. Words in fixed-fixed
+memory (banks 02 and 03) have print positions 30-32 blank (and
+S-register contents in range 4000~8~ - 7777~8~, cf. Section IIB).
+
+3. For machine language instructions whose operation code is
+specified completely by bits 15-13 (e.g. those operations which
+can have addresses in both erasable and fixed memory, see
+Section IV), the single octal digit of the operation code is in
+print position 39 and the four octal digits of the operation
+address are in positions 41-44.
+
+4. For machine language instructions requiring portions of the
+most significant digit of the (nominal) S-register portion for
+their specification, and which reference the erasable memory
+(or a channel), print positions 39-40 contain the two octal
+digits of the operation and positions 42-44 contain the three
+octal digits that remain for the address. If the most
+significant bit of the allowed ten-bit address is a binary 1,
+the operation code is an odd number (except for the channel
+operations of Section IVC, only the most significant two bits
+of the nominal S-register information are used for operation
+information), and in addition an apostrophe (which nay appear
+as some other character for different print chains) appears in
+position 41 to emphasize the presence of a binary 1 from the
+address information in the operation-code octal digits.
+
+5. For address information, constants, and interpretive instructions
+the five octal digits to be loaded into the memory are printed
+in print positions 40-44.
+
+6. Addresses generated by assembler functions (BANK, BLOCK, EBANK=,
+EQUALS, "=", SBANK=, or SETLOC) appear in print positions 30-36
+(the full address equivalent of the symbol is given, even)
+though only a portion is functional). Since no binary memory
+information is generated, no parity bit is printed.
+
 ## Information at End of Listing
+
+After the final log section of the program, there are several
+valuable reference tables which give useful information on the program.
+The first of these is a "Symbol Table Listing", which gives all symbols
+defined in the program as arranged in the order "sorted" by the assembler
+(i.e. in order of increasing EBCDIC representation):
+
+````
+.
+(
++
+&
+$
+*
+)
+-
+/
+,
+?
+=
+A-Z
+0-9
+````
+
+Given after each symbol is the address (bank register, then S-register:
+erasable banks of 3 or more are designated by Ei, while those less than
+3 can be identified by their S-register contents, less than 1400~8~). To
+the right of the address is given the "health" of the definition, which
+is blank unless it is defined by EQUALS (or "="), in which case an "="
+appears, or if some other difficulty was encountered such as poorly
+or multiply defined symbols (suitably indicated per table at bottom of
+each page). To the right of the "health" is given the page number on
+which the symbol was defined, which of course is the "master" page number
+appearing on the first line of each page. If the symbol is referenced
+on several different pages of the program, the next three columns on
+the page give the total number of references to the synbol, the page
+number of the first reference, and the page nunber of the final
+reference. If the symbol is only referenced on one page, the page number
+of the "final" reference is blank, while if it is not referenced at all
+these three columns are blank. Three symbol columns appear on each page.
+
+If there were undefined symbols detected during the assembly, the
+table following the "Symbol Table Listing" is the "Undefined Symbol
+Table Listing", which gives the undefined symbols in the listing, with
+their "health" (e.g. "UN" for undefined) and the same type of reference
+information as for the previous table. No address or page number of
+definition, of course, appears in this table. If there were no undefined
+symbols, then the printing of this table is suppressed.
+
+Next comes the "Unreferenced Symbol Listing", uhich lists only
+those symbols from the "Symbol Table Listing" that are not referenced
+in the program: this table repeats the information from the first 4
+columns (symbol, address, health, and page of definition) of the "Symbol
+Table Listing". Four symbol columns appear on each page.
+
+Next comes an "Erasable & Equals Cross-Reference Table", which
+lists all erasable memory tags in the order of increasing erasabl_e
+memory address: the octal equivalent address is actually used, so that
+flagword bits ard channel mnemonic assigmnents also appear. Tags
+assigned to the same octal equivalent address are listed in the order
+im which they were defined within the assembly (i.e. in order of increasing
+page number), except those symbols which are equated to the same octal
+value on the same page of the listing are provided instead in alphabetical
+order for that page. At the end of the erasable memory tags, those
+fixed memory tags which are defined by "=" (or EQUALS) assembler
+operations are shown. Five columns of addresses are given on a page,
+with each address followed by the page number and associated symbol.
+
+The next table at the end of the listing provides a summary of
+the addresses assigned ("Reserved") and spare ("Available"), in the
+form of a "Memory Type & Availability Display", arranged with erasable
+memory first, followed by fixed-fixed memory and then variable-fixed
+memory. Figures deduced from this table would differ slightly from
+numbers obtained from BNKSUM (see Section IIF), since this table includes
+the two TC orders as "reserved". In addition, this table recognizes
+erasable nemory as "reserved" only by the ERASE assembler operation,
+so memory cell assignments by "chained" EQUALS cards are not reflected.
+
+Following this table, there is a table which provides information
+on the number of fixed memory cells that are expended for various
+functions within the program. Information to make up this table is
+provided by the COUNT and COUNT* (see Card Layout) cards within the
+listing. The table lists in order the address-fieId information
+associated with the COUNT and COUNT* cards (except that the COUNT*
+"bank to be specified" information has instead the actual octal fixed
+memory number inserted): these frequently take the form nn/XXXX,
+where nn is the fixed memory bank number end XXXX is some convenient
+mnnemonic (normal printing occurs, however, if a COUNT card specified
+an nn different from that in which the steps involved actually are
+located). With the address-field information is given the nunber of
+references (including both COUNT and COUNt* that results in same "tag"),
+the first and last pages of the final assembly accumulation of cell counts
+for that "tag", with the number counted then ("LAST xxx TO yyy: zz"),
+the total counted for that tag (the same as the final accumulation of
+cell counts if REF = 1) and finally the cumulative count of cells used
+since the beginning of the table: the final entry in this last column
+in the table, therefore, would give the number of fixed memory cells
+assigned in the complete program, since provision is made for a "blank"
+count tag. If more than one reference to a given "tag" occurs,
+the page nunber given for the first page of the final accumulation can
+be checked: on that page will be found (to the left of the COUNT or
+COUNT* print) the serial number of the reference to the "tag", the
+previous "span" of counting for that "tag", the nunber found then,
+and the number total to that point for the "tag". The count information
+which is supplied, of course, is only as valid as the original placement
+of the COUNT and COUNT* cards within the listing, and should be used
+with caution as an indicator of how many steps would be "saved", for
+example, if a function with a familiar mnemonic were to be deleted.
+
+After this table comes a list of the "Paragraphs Generated for this
+Assembly; Address Limits and the Manufacturing Location Code are shown
+for Each." The hardware-oriented information presented in this table
+is given in Secrion IIF.
+
+Next comes an octal listing of the contents of each paragraph
+(256 cells) in the program. Constants and interpretive operations
+are flagged by "C:" and "I:" respectively before the cell contents
+(which shows the odd parity bit to the right of the rest of the memory
+word, separated by a space). The check sum word (the final cell that is
+wired in the bank) is flagged by "CKSM" before the cell. The checksum
+is computed by the assembler prior to printing each memory bank, using the
+same algorithm as described in section IIF (including stopping when two
+TC orders to the present step are found). Unwired cells in the memory
+are flagged by the character "@" (which may appear differently due to
+other printing hardware), while those cells whose contents were not
+uniquely defined are suitably flagged.
+
+After the octal listing comes a table which provides for each
+assigned fixed memory cell the page number in the listing on which the
+contents of that cell are specified (except for the check sum word
+itself, see Section IIF, in each bank). This is followed by a list of
+the Subroutines (if any) that are included in the program, along with
+their revision numbers.
+
+Finally, there is an indication of whether or not the assembly was
+satisfactory. If it was, meaning that the assembler program detected no
+deficiencies, an indication (e.g. "The assembly was good and manufacturable.
+No lines were cussed.") is provided. If deficiencies ("cussed lines") were
+detected, the number of these is provided, together with the page number
+of the first page and last page where faults were noted. Within the
+listing, each fault is accompanied by information on the reason for
+flagging as a fault, its serial number, and the page number of the previous
+fault (unless the previous one is on the same page). Pages III-25 to III-28
+give a list of the fault messages appearing in one version of the assembly
+program, arranged in order of increasing hexadecimal (base 15) serial
+number of the message (printed to the far right of the line on which
+the fault message appears in the listing). Also indicated is whether the
+fault is considered "fatal" (if so, the assembly is considered 
+"unmanufacturable").
 
 ## Program Changes
 
-# Machine Language Instructions
+Program changes are specified by providing the modification
+information segregated. by individual 1og sections which are to be
+modified. The locations of the modifications are specified by the
+sequence number punched on the card, as described earlier. Deletions
+can be accomplished by ihe pseudo-operation DELETE, with the option
+of adding "THRU yyyy" to delete the cards (i.e. lines) with sequence
+numbers ranging from that of the DELETE through yyyy inclusive.
+
+For an extensive insertion, the requirement for punching the sequence
+number on every card may be avoided by the pseudo-operation INSERT
+(with BEGIN in tag field, assigned a suitable sequence number); the
+end of the insertion is again indicated by INSERT, this time with END
+in the tag fie1d. Alternatively, "WITH nnnn", rather than a blank, can
+be provided in the address field of the BEGIN INSERT, in which case the
+first sequence number of the inserted coding will be that specified. In
+either case, all subsequent sequence numbers (up through the end of the
+1og section) will be modified so as to count up in the standard "counting
+position" of these numbers (which allows four digits, i.e. print column 5).
+If it is merely desired to modify the sequence numbers, this can be
+accomplished by the CARDNS pseudo-operation.
+
+A capability exists to print revision infornation by individual
+Subroutine, reflecting the card inputs which were made to generate the
+various versions. For such a listing, the first word in the top line
+is "PRINT" (as opposed to "ASSEMBLE" for the normal program listing),
+and instead of the overall program name, the name of the Subroutine is
+included in the top line (if the overall program name is given, the
+changes made to the material at the front of the listing, identified by
+"(MAIN)" on the first line of the program, are supplied). The second
+printed line for such listings gives the "author" and "date" (preceded
+by the control characters "./"). 'A similar listing is generated when
+the original modification is inserted, and has the first word in the
+top line as "MODIIY" (or "CREATE" if a new Subroutine being gererated).
+These have "GOOD UPDATE" printed at the botton if update successful.
+
+### Fault Messages Generated by Assembler
+
+| Serial | Fatal | Message |
+| --- | --- | --- |
+| Card Format |
+| 01 | | Queer information in column 17 |
+| 02 | | Queer information in column 24 |
+| Erasable Problem |
+| ß3 | x | EBANK/SBANK illegal except with BBCON & 2CADR |
+| 04 | | EBANK conflict with one-shot declaration |
+| Polish Opcode Problems |
+| 05 | | Erased region should not cross E-banks |
+| 06 | x | Polish words require blanks in columns 1, 17, & 24 |
+| 07 | x | Previous Polish equation not concluded properly |
+| 08 | x | Polish push-up requires negative word here |
+| 09 | | Polish address expected here |
+| 0A | x | Asterisk illegal on this opcode |
+| 0B | x | Interpretive instruction not expected |
+| 0C | x | Rt-opcode's mode-in disagrees with mode-out setting |
+| 0D | x | Lft-opcode's mode-in disagrees with mode-out setting |
+| 0E | | Address has no associated Polish opcode |
+| 0F | x | Polish address(es) missing prior to this op pair |
+| 10 | x | Location symbol improper on STADR'ed store word |
+| 11 | x |Store opcode must be next after STADR |
+| 12 | x | Push-up illegal before store opcode without "STADR" |
+| 13 | | Address words cross over bank or VAR are boundary |
+| 14 | x | Intrerpretive address word out of sequence |
+| 15 | x | Address field should contain a Polish operator |
+| 16 | x | First Polish operator illegally indexed |
+| 17 | x | Interpreter opcode requires indexed address here |
+| 18 | x | Interpreter opcode did not call for indexing |
+| 19 | x | Second Polish operator illegally indexed |
+| 1A | x | Can not handle neg addresses with indexing here |
+| Numeric constant problems |
+| 1B | | More than 14 octal digits in octal constant |
+| 1C | | More than 10 digits in decimal constant |
+| 1D | | Fractional part lost by truncation |
+| 1E | x | Range error in constant field |
+| 1F | | Inexact decimal to binary conversion |
+| 20 | | Double precision constant should not cross banks |
+| 21 | | No "D" in decimal number |
+| Merge Control Problems |
+| 22 | x | Subroutine name not recognized |
+| 23 | | Multiple calls in one program or subroutine |
+| 24 | x | Card ignored because it makes memory table too long |
+| 25 | x | Card ignored because it's too late in the deck |
+| 26 | x | Conflict with earlier head specification |
+| 27 | | Card number out of sequence |
+| 28 | x | No match found for second card number |
+| 29 | x | First card number not less than second |
+| 2A | x | No match found for card number or acceptor text |
+| General Address Field Problems |
+| 2B | | Blank address field expected |
+| 2C | x | Blank address is undefined |
+| 2D | x | Blank address was undefined in pass1 |
+| 2E | | Blank address should be symbolic |
+| 2F | x | Blank address was nearly defined by equals |
+| 30 | x | Blank address was nearly defined by equals in pass1 |
+| 31 | x | Blank address given multiple definitions |
+| 32 | x | Blank address multiply defined including by equals |
+| 33 | x | Blank address multiply defined including nearly by ='s |
+| 34 | x | Blank address given oversize definition |
+| 35 | x | Blank address associated with conflict |
+| 36 | x | Blank address associated with multiple errors |
+| 37 | x | Blank address associated with wrong memory type |
+| 38 | x | Blank address is in miscellaneous trouble |
+| 39 | | Address is inappropriate for opcode |
+| 3A | x | Address is in bank 00 (filled in with bank number) |
+| 3B | x | Address depends on unknown location |
+| 3C | | Irregular but aacceptable address |
+| 3D | x | Address field is meaningless |
+| 3E | x | Addr. must be basic single-precision constant or inst |
+| 3F | x | Range error in value of address |
+| 40 | x | Indexing is illegal here |
+| Opcode field problem |
+| 41 | x | Illegal or mis-spelled operation field |
+| 42 | | This instruction should be indexed |
+| 43 | x | This instruction should be extended |
+| 44 | x | This instruction should not be extended |
+| Predefinition Problems |
+| 45 | x | This instruction shouldn't have been predefined |
+| 46 | x | Attempt to predefine location symbol failed |
+| Location Field Problems |
+| 47 | | Illegal location field format |
+| 48 | | Location field should be blank |
+| 49 | x | Location is in wrong type of memory |
+| 4A | x | Numeric location field is illegal here |
+| 4B | x | Oversized or ill-defined location |
+| 4C | x | Conflict in use of this location |
+| 4D | x | Conflict in won't fit in symbol table |
+| 4E | x | No such bank or block number on this machine |
+| 4F | x | This bank or block is full |
+| Leftover Problems |
+| 50 | x | This bank is indefinably leftover |
+| 51 | x | Leftover won't fit in memory |
+| 52 | x | Improper leftover location field format |
+| More Cusses |
+| 53 | | Queer information in column 1 |
+| 54 | | Address field arithmetic not allowed here |
+| 55 | | Address constant not expected here |
+| 56 | | Address constant expected here |
+| 57 | | Count table full. Address field ignored. |
+| 58 | x | BBANK type constants require preceding EBANK= |
+| 59 | | One shot SBANK= above was not needed |
+| 5A | | Address 00,00 (filled with address) |
+| 5B | | "STADR" unnecessary |
+| 5C | | Assembler finds error but has no specific cuss for it |
+| 5D | x | Address is in super bank 0 (filled with bank) |
+
+# IV Machine Language Instructions
 
 ## IVA General Principles
 
+There are 34 machine-language operation codes which may be performed
+under program control (the operation EDRUPT is conventionally excluded
+from the list of operation codes, and is discussed in Section IIH rather
+than here). Use of special addresses with certain of these instructions
+permits an additional four special functions EXTEND, INHINT, RELINT,
+and RESUME, see Section VA) to be perforned, and use of addresses
+0020~8~ - 0023~8~ permits shifting operations to be performed, as described
+in Section IID. Of the 34 instructions, 15 may be classified as
+"regular" orders and the remaining 19 as "extended" (or "extra code")
+orders. The extended orders must be written as two lines of coding
+(occupying two fixed memory cells, cf. Section IIB), with the first
+line setting a special bit in the instruction register (by the EXTEND
+operation: the bit is normally reset after the instruction is performed)
+and the second line giving the order itself. Without the EXTEND, the
+second line would be interpreted as a regular order.
+
+Only a few of the instructions can be used with operands in both
+erasable and fixed memory, since most of them achieve an effective
+extension of the operation code bits by using the most significant two
+bits of the l-2 bits nominally assigned to the S-register. The seven
+channel instructions (see Section IIE), however, use the most significant
+three bits of the nominal S-register information to determine the
+operation to be performed.
+
+The following two sections list the operation codes in alphabetical
+sequence, with Section IVB givinig the regular orders and Section IVC
+giving the extended orders, The symbols A, L, and Q refer to the
+arithmetic registers defined in Section IIC, while quotation marks
+around a symbol signify that the value of the address is of interest
+rather than the information stored in that address. The fol1owing
+special symbols are also used:
+
+- E means an address in the range (S-register) 0000~8~ - 1777~8~, i.e.
+a hardware register or an erasable memory.
+- F means an address in the range (S-register) 2000~8~ - 7777~8~, i.e.
+a cell in fixed memory.
+- H means a channel (see Section IIE)
+- K means an address in the range (S-register) 0000~8~ - 7777~8~, i.er.
+a hardware register, an erasable memory cell, or a cell in fixed memory.
+- N means the address of the step now being performed (i.e. the
+one containing the operation code being described).
+
+The term "erasable memory" is used in Sections IVB and IVC to
+signify either an erasable memory cell or a hardware register.
+
+The value shown in the "Operation" column is the operation code
+that appears in the program listing: if two values appear, the choice
+between them depends on the value of the address, as discussed in
+Section III. A parenthetical 1 is used with the orders in Section IVC
+to emphasize the need for having the extended-order flip-flop set by
+the EXTEND operation.
+
+The table on the following page summarizes the machine language
+orders by operation value, separated into "regular orders" and the
+"extended orders".
+
+### Regular Orders
+
+| Operation Value | Mnemonic |
+| --- | --- |
+| 0 | TC |
+| | Address 3 = RELINT |
+| | Address 4 = INHINT |
+| | Address 6 = EXTEND |
+| 10-11 | CCS |
+| 12-17 | TCF |
+| 20-21 | DAS |
+| 22-23 | LXCH |
+| 24-25 | INCR |
+| 26-27 | ADS |
+| 3 | CA |
+| 4 | CS |
+| 50-51 | INDEX |
+| | Address 17 = RESUME |
+| 52-53 | DXCH |
+| 54-55 | TS |
+| 56-57 | XCH |
+| 6 | AD |
+| 7 | MASK |
+
+### Extended Orders
+
+| Operation Value | Mnemonic |
+| 00 | READ |
+| 01 | WRITE |
+| 02 | RAND |
+| 03 | WAND |
+| 04 | ROR |
+| 05 | WOR |
+| 06 | RXOR |
+| 07 | EDRUPT |
+| 10-11 | DV |
+| 12-17 | BZF |
+| 20-21 | MSU |
+| 22-23 | QXCH |
+| 24-25 | AUG |
+| 26-27 | DIM |
+| 3 | DCA |
+| 4 | DCS |
+| 5 | INDEX |
+| 60-61 | SU |
+| 62-67 | BZMF |
+| 7 | MP |
+
 ## IVB Regular Orders
+
+| Mnemonic | Operation | Performance |
+| --- | --- | --- |
+| AD "K" | 6 | Add. Two MCT (23.4 ms). Address can be in erasable or fixed memory. A = A+ K. If "K" = "A", this doubles the contents of the accumulator. If "K" = 20~8~ - 23~8~, K modified as described in Section IID. |
+| ADS "E" | 26 27 | Add and Store. Two MCT (23.4 ms). Address can be in erasable memory only. A = A + E E = A If "E" = 20~8~ - 23~8~, the value stored in "E" modified as described in Section IID. |
+| CA "K" | 3 | Clear and add. Two MCT (23.4 ms). Address can be in erasable or fixed memory. A = K If "K" = 20~8~ - 23~8~, K is modified as desribed in Section IID. |
+| CCS "E" | 10 11 | Count, Compare and Skip. Two MCT (23.4 ms). Address can be in erasable memory only. Load A with |E| -1, limited >= +0 and skip 0 (E>0), 1 (E=+0), 2 (E<-0), or 3(E=-0) steps. Overflow bit can be sensed. If E is positive non-zero (in range 00001~8~ - 37777~8~): A = E-1 (if E=1, A=+0) Proceed to "N"+1 (the next step)
 
 ## IVC Extended Orders
 
