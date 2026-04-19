@@ -198,6 +198,113 @@ P40's crew go/no-go gates.
 **Test coverage**: 30 v_n tests, 13 pinball tests, 6 key-mapping/render
 tests in agc-sim. Total project: 302 agc-core tests pass.
 
+### Milestone 6b — V21-V25 Noun Commit Handlers
+
+Complete the `noun_commit()` dispatch table in `services/v_n.rs` so that
+all loadable nouns from the Comanche055 `PINBALL_NOUN_TABLE` are handled.
+Reference matrix: `specs/loadable-verbs.txt`. Currently implemented: N33,
+N81 only.  All other loadable nouns are silently ignored.
+
+#### Group 1 — Program-critical nouns (needed by existing programs)
+
+- [x] **Impl** — N18 commit (auto maneuver ball angles, 3 components → `dap_state.commanded_attitude`). R1/R2/R3 = deg×100, scale 0.01 → degrees → radians. Test: TC-VND-10.
+- [x] **Impl** — N70 commit (star/planet selection code, R1 → `VnState.crew_star_code`). Test: TC-VND-11.
+- [x] **Impl** — N72 commit (landmark lat/lon/alt, 3 components → `VnState.crew_landmark`). Test: TC-VND-12.
+
+Skipped to Group 3 (spec needs updating before implementation):
+N11, N13, N17, N37, N46, N47, N71, N89.
+
+#### Group 2 — Time nouns (HMS format, need HMS↔cs conversion)
+
+- [ ] **Impl** — HMS↔centisecond conversion helpers for `noun_commit`/`noun_display`.
+  All HMS nouns (Komp=HMS "ja") share the same R1=hours, R2=minutes,
+  R3=seconds×100 format.  Factor out `hms_to_cs(values: [f64; 3]) -> u32`
+  and `cs_to_hms(cs: u32) -> [f64; 3]` helpers, then wire into
+  noun_commit and noun_display.
+- [ ] **Impl** — N16 commit (time of event, HMS → cs).
+- [ ] **Impl** — N24 commit (delta time for AGC clock, HMS → cs).
+- [ ] **Impl** — N31 commit (time of landing site, HMS → cs).
+- [ ] **Impl** — N32 commit (time to perigee, HMS → cs).
+- [ ] **Impl** — N34 commit (time of event, HMS → cs). Scale entry exists but no handler.
+- [ ] **Impl** — N35 commit (time to go to event, HMS → cs).
+- [ ] **Impl** — N36 commit (time of AGC clock, HMS → cs). Overwrite MET.
+- [ ] **Impl** — N38 commit (time of state vector, HMS → cs).
+- [ ] **Impl** — N39 commit (delta time to transfer, HMS → cs).
+- [ ] **Impl** — N65 commit (sampled AGC time, HMS → cs).
+
+#### Group 3 — Remaining loadable nouns
+
+Deferred from Group 1 (spec update required):
+- [ ] **Spec + Impl** — N11 commit (TIG of CSI, HMS). Spec says Excluded/reserved; loadable-verbs.txt says loadable. Reconcile before implementing.
+- [ ] **Spec + Impl** — N13 commit (TIG of CDH, HMS). Not in v_n-spec.md noun table; P32 currently uses N33 for TIG. Clarify whether N13 is a distinct noun or alias.
+- [ ] **Spec + Impl** — N17 commit (star angle difference). Spec says display-only; loadable-verbs.txt says loadable. Reconcile.
+- [ ] **Spec + Impl** — N37 commit (time to next maneuver event, HMS). Spec says display-only countdown; loadable-verbs.txt says loadable. Reconcile.
+- [ ] **Spec + Impl** — N46 commit (autopilot configuration, 2 components). Spec says Excluded/spare; loadable-verbs.txt says loadable. Reconcile.
+- [ ] **Spec + Impl** — N47 commit (vehicle weight / reentry trajectory angle, 2 components). Spec says display-only; loadable-verbs.txt says loadable. Reconcile.
+- [ ] **Spec + Impl** — N71 commit (IMU calendar time, HMS). Consumer does not exist yet. Determine target field.
+- [ ] **Spec + Impl** — N89 commit (landmark). Spec says Excluded/spare; loadable-verbs.txt says loadable. Reconcile with N72.
+
+Previously listed:
+- [ ] **Impl** — N01/N02/N03 commit (machine address fractional/whole/degrees). Debug/test support.
+- [ ] **Impl** — N05 commit (angular error/difference, 1 component, V21 only).
+- [ ] **Impl** — N06 commit (option code, 2 components).
+- [ ] **Impl** — N07 commit (ECADR of word to be modified).
+- [ ] **Impl** — N08/N09 commit (alarm data / alarm codes).
+- [ ] **Impl** — N10 commit (channel to be specified, 1 component, V21 only).
+- [ ] **Impl** — N12 commit (option code, 2 components).
+- [ ] **Impl** — N15 commit (increment machine address, 1 component, V21 only).
+- [ ] **Impl** — N19 commit (bypass attitude trim maneuver, 3 components).
+- [ ] **Impl** — N20 commit (ICDU angles, 3 components).
+- [ ] **Impl** — N21 commit (PIPAs, 3 components).
+- [ ] **Impl** — N22 commit (new ICDU angles, 3 components).
+- [ ] **Impl** — N25 commit (checklist, 3 components).
+- [ ] **Impl** — N26 commit (prio/delay, adres, bbcon).
+- [ ] **Impl** — N27 commit (self test on/off, 1 component, V21 only).
+- [ ] **Impl** — N29 commit (XSM launch azimuth, 1 component, V21 only).
+- [ ] **Impl** — N30 commit (target codes, 3 components).
+- [ ] **Impl** — N41 commit (target azimuth, 2 components).
+- [ ] **Impl** — N42 commit (apogee, 3 components).
+- [ ] **Impl** — N43 commit (latitude, 3 components).
+- [ ] **Impl** — N48 commit (pitch trim, 2 components).
+- [ ] **Impl** — N49 commit (delta R, 3 components).
+- [ ] **Impl** — N51 commit (S-band antenna pitch, 2 components).
+- [ ] **Impl** — N52 commit (central angle of active vehicle, 1 component, V21 only).
+- [ ] **Impl** — N53/N54 commit (range, 3 components each).
+- [ ] **Impl** — N55 commit (perigee code, 3 components).
+- [ ] **Impl** — N56 commit (reentry angle, 2 components).
+- [ ] **Impl** — N57 commit (delta R, 1 component, V21 only).
+- [ ] **Impl** — N58 commit (perigee alt, 3 components).
+- [ ] **Impl** — N59 commit (delta velocity LOS, 3 components).
+- [ ] **Impl** — N60 commit (Gmax, 3 components).
+- [ ] **Impl** — N61 commit (impact latitude, 3 components).
+- [ ] **Impl** — N62 commit (inertial velocity magnitude, 3 components).
+- [ ] **Impl** — N64 commit (drag acceleration, 3 components).
+- [ ] **Impl** — N66 commit (command bank angle, 3 components).
+- [ ] **Impl** — N67 commit (range to target, 3 components).
+- [ ] **Impl** — N68 commit (command bank angle, 3 components).
+- [ ] **Impl** — N69 commit (beta, 3 components).
+- [ ] **Impl** — N72 commit (delta angle, 3 components).
+- [ ] **Impl** — N73 commit (altitude, 3 components).
+- [ ] **Impl** — N74 commit (command bank angle, 3 components).
+- [ ] **Impl** — N82 commit (delta V LV, 3 components).
+- [ ] **Impl** — N83 commit (delta V body, 3 components).
+- [ ] **Impl** — N84 commit (delta V other vehicle, 3 components).
+- [ ] **Impl** — N85 commit (VG body, 3 components).
+- [ ] **Impl** — N86 commit (delta V LV, 3 components).
+- [ ] **Impl** — N87 commit (mark data shaft, 2 components).
+- [ ] **Impl** — N88 commit (half unit sun/planet vector, 3 components).
+- [ ] **Impl** — N90 commit (Y, 3 components).
+- [ ] **Impl** — N91/N92 commit (OCDU angles / new optics angles shaft, 2 components each).
+- [ ] **Impl** — N93 commit (delta gyro angles, 3 components).
+- [ ] **Impl** — N94 commit (new optics angles shaft, 2 components).
+- [ ] **Impl** — N95 commit (preferred attitude ICDU angles, 3 components).
+- [ ] **Impl** — N96 commit (+X-axis attitude ICDU angles, 3 components).
+- [ ] **Impl** — N97 commit (system test inputs, 3 components).
+- [ ] **Impl** — N98 commit (system test results, 3 components).
+- [ ] **Impl** — N99 commit (RMS in position, 3 components).
+
+Read-only nouns (no commit handler needed): N40, N44, N45, N50, N63, N75, N76, N80.
+
 ### Technical Debt
 
 - [x] **Debug** — `math/lambert.rs` Izzo convergence bugs. **RESOLVED 2026-04-10** using the Izzo 2015 paper (https://www.esa.int/gsp/ACT/doc/MAD/pub/ACT-RPR-MAD-2014-RevisitingLambertProblem.pdf). All 7 Lambert tests pass (0 ignored). Fixes applied:

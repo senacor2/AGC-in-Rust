@@ -1,0 +1,98 @@
+Rope: Comanche055
+Kompatibilitaets-Matrix V21-V25 (x = kompatibel, - = nicht)
+
+N##  Komp HMS   V21  V22  V23  V24  V25   Beschreibung
+------------------------------------------------------------
+N01  3    nein   x   x   x   x   x   SPECIFY MACHINE ADDRESS (FRACTIONAL)
+N02  3    nein   x   x   x   x   x   SPECIFY MACHINE ADDRESS (WHOLE)
+N03  3    nein   x   x   x   x   x   SPECIFY MACHINE ADDRESS (DEGREES)
+N05  1    nein   x   -   -   -   -   ANGULAR ERROR/DIFFERENCE
+N06  2    nein   x   x   -   x   -   OPTION CODE
+N07  3    nein   x   x   x   x   x   ECADR OF WORD TO BE MODIFIED
+N08  3    nein   x   x   x   x   x   ALARM DATA
+N09  3    nein   x   x   x   x   x   ALARM CODES
+N10  1    nein   x   -   -   -   -   CHANNEL TO BE SPECIFIED
+N11  3    ja     x   x   x   x   x   TIG OF CSI (HRS,MIN,SEC)
+N12  2    nein   x   x   -   x   -   OPTION CODE
+N13  3    ja     x   x   x   x   x   TIG OF CDH (HRS,MIN,SEC)
+N15  1    nein   x   -   -   -   -   INCREMENT MACHINE ADDRESS
+N16  3    ja     x   x   x   x   x   TIME OF EVENT (HRS,MIN,SEC)
+N17  3    nein   x   x   x   x   x   ASTRONAUT TOTAL ATTITUDE
+N18  3    nein   x   x   x   x   x   AUTO MANEUVER BALL ANGLES
+N19  3    nein   x   x   x   x   x   BYPASS ATTITUDE TRIM MANEUVER
+N20  3    nein   x   x   x   x   x   ICDU ANGLES
+N21  3    nein   x   x   x   x   x   PIPAS
+N22  3    nein   x   x   x   x   x   NEW ICDU ANGLES
+N24  3    ja     x   x   x   x   x   DELTA TIME FOR AGC CLOCK (HRS,MIN,SEC)
+N25  3    nein   x   x   x   x   x   CHECKLIST
+N26  3    nein   x   x   x   x   x   PRIO/DELAY, ADRES, BBCON
+N27  1    nein   x   -   -   -   -   SELF TEST ON/OFF SWITCH
+N29  1    nein   x   -   -   -   -   XSM LAUNCH AZIMUTH
+N30  3    nein   x   x   x   x   x   TARGET CODES
+N31  3    ja     x   x   x   x   x   TIME OF LANDING SITE (HRS,MIN,SEC)
+N32  3    ja     x   x   x   x   x   TIME TO PERIGEE (HRS,MIN,SEC)
+N33  3    ja     x   x   x   x   x   TIME OF IGNITION (HRS,MIN(SEC)
+N34  3    ja     x   x   x   x   x   TIME OF EVENT (HRS,MIN,SEC)
+N35  3    ja     x   x   x   x   x   TIME TO GO TO EVENT (HRS,MIN,SEC)
+N36  3    ja     x   x   x   x   x   TIME OF AGC CLOCK (HRS,MIN,SEC)
+N37  3    ja     x   x   x   x   x   TIG OF TPI (HRS,MIN,SEC)
+N38  3    ja     x   x   x   x   x   TIME OF STATE VECTOR
+N39  3    ja     x   x   x   x   x   DELTA TIME TO TRANSFER (HRS,MIN,SEC)
+N40  3    nein   -   -   -   -   -   TIME TO IGNITION/CUTOFF
+N41  2    nein   x   x   -   x   -   TARGET	AZIMUTH
+N42  3    nein   x   x   x   x   x   APOGEE
+N43  3    nein   x   x   x   x   x   LATITUDE
+N44  3    nein   -   -   -   -   -   APOGEE
+N45  3    nein   -   -   -   -   -   MARKS (VHF -  OPTICS)
+N46  2    nein   x   x   -   x   -   AUTOPILOT CONFIGURATION
+N47  2    nein   x   x   -   x   -   THIS VEHICLE WEIGHT
+N48  2    nein   x   x   -   x   -   PITCH TRIM
+N49  3    nein   x   x   x   x   x   DELTA R
+N50  3    nein   -   -   -   -   -   SPLASH ERROR
+N51  2    nein   x   x   -   x   -   S-BAND ANTENNA	PITCH
+N52  1    nein   x   -   -   -   -   CENTRAL ANGLE OF ACTIVE VEHICLE
+N53  3    nein   x   x   x   x   x   RANGE
+N54  3    nein   x   x   x   x   x   RANGE
+N55  3    nein   x   x   x   x   x   PERIGEE CODE
+N56  2    nein   x   x   -   x   -   REENTRY ANGLE,
+N57  1    nein   x   -   -   -   -   DELTA R
+N58  3    nein   x   x   x   x   x   PERIGEE ALT
+N59  3    nein   x   x   x   x   x   DELTA VELOCITY LOS
+N60  3    nein   x   x   x   x   x   GMAX
+N61  3    nein   x   x   x   x   x   IMPACT LATITUDE
+N62  3    nein   x   x   x   x   x   INERTIAL VEL MAG (VI)
+N63  3    nein   -   -   -   -   -   RANGE 297,431 TO SPLASH (RTGO)
+N64  3    nein   x   x   x   x   x   DRAG ACCELERATION
+N65  3    ja     x   x   x   x   x   SAMPLED AGC TIME (HRS,MIN,SEC)
+N66  3    nein   x   x   x   x   x   COMMAND BANK ANGLE (BETA)
+N67  3    nein   x   x   x   x   x   RANGE TO TARGET
+N68  3    nein   x   x   x   x   x   COMMAND BANK ANGLE (BETA)
+N69  3    nein   x   x   x   x   x   BETA
+N70  3    nein   x   x   x   x   x   STAR CODE
+N71  3    nein   x   x   x   x   x   STAR CODE
+N72  3    nein   x   x   x   x   x   DELT ANG
+N73  3    nein   x   x   x   x   x   ALTITUDE
+N74  3    nein   x   x   x   x   x   COMMAND BANK ANGLE (BETA)
+N75  3    nein   -   -   -   -   -   DELTA ALTITUDE CDH
+N80  3    nein   -   -   -   -   -   TIME TO IGNITION/CUTOFF
+N81  3    nein   x   x   x   x   x   DELTA V (LV)
+N82  3    nein   x   x   x   x   x   DELTA V (LV)
+N83  3    nein   x   x   x   x   x   DELTA V (BODY)
+N84  3    nein   x   x   x   x   x   DELTA V (OTHER VEHICLE)
+N85  3    nein   x   x   x   x   x   VG (BODY)
+N86  3    nein   x   x   x   x   x   DELTA V (LV)
+N87  2    nein   x   x   -   x   -   MARK DATA	SHAFT
+N88  3    nein   x   x   x   x   x   HALF UNIT SUN OR PLANET VECTOR
+N89  3    nein   x   x   x   x   x   LANDMARK	LATITUDE
+N90  3    nein   x   x   x   x   x   Y
+N91  2    nein   x   x   -   x   -   OCDU ANGLES	SHAFT
+N92  2    nein   x   x   -   x   -   NEW OPTICS ANGLES SHAFT
+N93  3    nein   x   x   x   x   x   DELTA GYRO ANGLES
+N94  2    nein   x   x   -   x   -   NEW OPTICS ANGLES SHAFT
+N95  3    nein   x   x   x   x   x   PREFERRED ATTITUDE ICDU ANGLES
+N96  3    nein   x   x   x   x   x   +X-AXIS ATTITUDE ICDU ANGLES
+N97  3    nein   x   x   x   x   x   SYSTEM TEST INPUTS
+N98  3    nein   x   x   x   x   x   SYSTEM TEST RESULTS
+N99  3    nein   x   x   x   x   x   RMS IN POSITION
+
+Summen: V21: 84   V22: 77   V23: 65   V24: 77   V25: 65

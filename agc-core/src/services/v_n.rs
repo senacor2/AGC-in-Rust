@@ -118,6 +118,14 @@ pub struct VnState {
     /// A pending V50 "please perform" request, set by a program and
     /// cleared when the crew presses PRO.
     pub pending_v50: Option<Pending50>,
+    /// Star/planet selection code entered by crew via V25 N70.
+    /// Consumed by P51/P52 (star alignment) and P23 (cislunar nav).
+    /// AGC source: Comanche055/PINBALL_NOUN_TABLES.agc, N70.
+    pub crew_star_code: Option<u8>,
+    /// Landmark coordinates [lat_deg, lon_deg, alt_m] entered by crew via V25 N72.
+    /// Consumed by P22 (landmark tracking).
+    /// AGC source: Comanche055/PINBALL_NOUN_TABLES.agc, N72.
+    pub crew_landmark: Option<[f64; 3]>,
 }
 
 impl VnState {
@@ -127,6 +135,8 @@ impl VnState {
             phase: VnPhase::Idle,
             pending_tig: None,
             pending_v50: None,
+            crew_star_code: None,
+            crew_landmark: None,
         }
     }
 }
@@ -661,10 +671,13 @@ const ALARM_DV_LOAD_WITHOUT_TIG: u16 = 240;
 /// Convert the raw accumulated integer into the noun's target unit.
 fn noun_scale(noun: u8) -> f64 {
     match noun {
-        33 => 1.0, // TIG — centiseconds, integer
-        34 => 1.0, // TFI — centiseconds, integer (placeholder)
-        81 => 1.0, // LVLH ΔV — m/s, integer
-        _ => 1.0,  // default pass-through
+        18 => 0.01, // auto maneuver ball angles — deg×100 input → degrees
+        33 => 1.0,  // TIG — centiseconds, integer
+        34 => 1.0,  // TFI — centiseconds, integer (placeholder)
+        70 => 1.0,  // star/planet code — integer
+        72 => 1.0,  // landmark lat/lon/alt — degrees / metres, integer
+        81 => 1.0,  // LVLH ΔV — m/s, integer
+        _ => 1.0,   // default pass-through
     }
 }
 
@@ -672,10 +685,13 @@ fn noun_scale(noun: u8) -> f64 {
 /// V21/V22/V23/V25 sequence, with the already-scaled register values.
 fn noun_commit(state: &mut crate::AgcState, _verb: u8, noun: u8, values: [f64; 3]) {
     match noun {
+        18 => noun_18_commit_attitude(state, values),
         33 => noun_33_commit_tig(state, values[0]),
+        70 => noun_70_commit_star_code(state, values[0]),
+        72 => noun_72_commit_landmark(state, values),
         81 => noun_81_commit_dv_lvlh(state, values),
         _ => {
-            // Phase 2: unknown nouns are silently ignored. Future phases
+            // Unknown nouns are silently ignored. Future phases
             // will populate the DSKY R registers from `values`.
         }
     }
@@ -691,6 +707,36 @@ fn noun_33_commit_tig(state: &mut crate::AgcState, tig_cs: f64) {
     // Clamp to non-negative before converting to u32.
     let cs = if tig_cs < 0.0 { 0 } else { tig_cs as u32 };
     state.vn.pending_tig = Some(Met(cs));
+}
+
+/// N18 commit — auto maneuver ball angles → `dap_state.commanded_attitude`.
+///
+/// Values arrive as degrees (after noun_scale applies 0.01 to the deg×100
+/// crew entry).  Convert to radians for the DAP.
+/// AGC source: Comanche055/PINBALL_NOUN_TABLES.agc, N18.
+fn noun_18_commit_attitude(state: &mut crate::AgcState, values: [f64; 3]) {
+    const DEG_TO_RAD: f64 = core::f64::consts::PI / 180.0;
+    state.dap_state.commanded_attitude = [
+        values[0] * DEG_TO_RAD,
+        values[1] * DEG_TO_RAD,
+        values[2] * DEG_TO_RAD,
+    ];
+}
+
+/// N70 commit — star/planet selection code → `vn.crew_star_code`.
+///
+/// R1 = star catalogue number (1–37 for AGC star table, or planet code).
+/// AGC source: Comanche055/PINBALL_NOUN_TABLES.agc, N70.
+fn noun_70_commit_star_code(state: &mut crate::AgcState, code: f64) {
+    state.vn.crew_star_code = Some(code as u8);
+}
+
+/// N72 commit — landmark position → `vn.crew_landmark`.
+///
+/// R1 = latitude (degrees), R2 = longitude (degrees), R3 = altitude (metres).
+/// AGC source: Comanche055/PINBALL_NOUN_TABLES.agc, N72.
+fn noun_72_commit_landmark(state: &mut crate::AgcState, values: [f64; 3]) {
+    state.vn.crew_landmark = Some(values);
 }
 
 /// N81 commit — consume the pending TIG and call `p30_load_dv_lvlh`.
@@ -1459,5 +1505,106 @@ mod tests {
             state.dsky.r[2], 44.0f32,
             "TC-VN-ND-7: r[2] must remain 44.0 for unknown noun"
         );
+    }
+
+    // ── N18 commit: auto maneuver ball angles ────────────────────────────────
+
+    /// TC-VND-10: V25 N18 E +09000 E +18000 E +27000 E sets commanded_attitude
+    /// to [90°, 180°, 270°] in radians.
+    #[test]
+    fn tc_vnd_10_v25_n18_attitude() {
+        let mut state = AgcState::new();
+
+        // V25 N18 E → enter 3 registers (deg×100)
+        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(1), d(8), Key::Entr]);
+
+        // R1 = +09000 → 90.00°
+        feed_key(&mut state, Key::Plus);
+        feed_number(&mut state, 9000);
+        feed_key(&mut state, Key::Entr);
+        // R2 = +18000 → 180.00°
+        feed_key(&mut state, Key::Plus);
+        feed_number(&mut state, 18000);
+        feed_key(&mut state, Key::Entr);
+        // R3 = +27000 → 270.00°
+        feed_key(&mut state, Key::Plus);
+        feed_number(&mut state, 27000);
+        feed_key(&mut state, Key::Entr);
+
+        assert_eq!(state.vn.phase, VnPhase::Idle);
+
+        let att = state.dap_state.commanded_attitude;
+        let tol = 1.0e-9;
+        assert!(
+            (att[0] - core::f64::consts::FRAC_PI_2).abs() < tol,
+            "TC-VND-10: roll should be π/2, got {}",
+            att[0]
+        );
+        assert!(
+            (att[1] - core::f64::consts::PI).abs() < tol,
+            "TC-VND-10: pitch should be π, got {}",
+            att[1]
+        );
+        assert!(
+            (att[2] - 3.0 * core::f64::consts::FRAC_PI_2).abs() < tol,
+            "TC-VND-10: yaw should be 3π/2, got {}",
+            att[2]
+        );
+    }
+
+    // ── N70 commit: star/planet code ─────────────────────────────────────────
+
+    /// TC-VND-11: V25 N70 E +00014 E (R2, R3 ignored) sets crew_star_code = 14.
+    #[test]
+    fn tc_vnd_11_v25_n70_star_code() {
+        let mut state = AgcState::new();
+        assert!(state.vn.crew_star_code.is_none());
+
+        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(7), d(0), Key::Entr]);
+        // R1 = +00014
+        feed_key(&mut state, Key::Plus);
+        feed_number(&mut state, 14);
+        feed_key(&mut state, Key::Entr);
+        // R2 = +00000
+        feed_key(&mut state, Key::Plus);
+        feed_number(&mut state, 0);
+        feed_key(&mut state, Key::Entr);
+        // R3 = +00000
+        feed_key(&mut state, Key::Plus);
+        feed_number(&mut state, 0);
+        feed_key(&mut state, Key::Entr);
+
+        assert_eq!(state.vn.phase, VnPhase::Idle);
+        assert_eq!(state.vn.crew_star_code, Some(14));
+    }
+
+    // ── N72 commit: landmark lat/lon/alt ─────────────────────────────────────
+
+    /// TC-VND-12: V25 N72 E +00285 E -07742 E +00100 E sets crew_landmark
+    /// to [lat=285, lon=-7742, alt=100].
+    #[test]
+    fn tc_vnd_12_v25_n72_landmark() {
+        let mut state = AgcState::new();
+        assert!(state.vn.crew_landmark.is_none());
+
+        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(7), d(2), Key::Entr]);
+        // R1 = +00285 (lat)
+        feed_key(&mut state, Key::Plus);
+        feed_number(&mut state, 285);
+        feed_key(&mut state, Key::Entr);
+        // R2 = -07742 (lon)
+        feed_key(&mut state, Key::Minus);
+        feed_number(&mut state, 7742);
+        feed_key(&mut state, Key::Entr);
+        // R3 = +00100 (alt)
+        feed_key(&mut state, Key::Plus);
+        feed_number(&mut state, 100);
+        feed_key(&mut state, Key::Entr);
+
+        assert_eq!(state.vn.phase, VnPhase::Idle);
+        let lm = state.vn.crew_landmark.expect("TC-VND-12: crew_landmark must be Some");
+        assert_eq!(lm[0], 285.0, "TC-VND-12: lat");
+        assert_eq!(lm[1], -7742.0, "TC-VND-12: lon");
+        assert_eq!(lm[2], 100.0, "TC-VND-12: alt");
     }
 }
