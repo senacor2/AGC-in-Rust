@@ -672,8 +672,6 @@ const ALARM_DV_LOAD_WITHOUT_TIG: u16 = 240;
 fn noun_scale(noun: u8) -> f64 {
     match noun {
         18 => 0.01, // auto maneuver ball angles — deg×100 input → degrees
-        33 => 1.0,  // TIG — centiseconds, integer
-        34 => 1.0,  // TFI — centiseconds, integer (placeholder)
         70 => 1.0,  // star/planet code — integer
         72 => 1.0,  // landmark lat/lon/alt — degrees / metres, integer
         81 => 1.0,  // LVLH ΔV — m/s, integer
@@ -681,12 +679,36 @@ fn noun_scale(noun: u8) -> f64 {
     }
 }
 
+/// Convert HMS register values to centiseconds.
+///
+/// All HMS time nouns use the format R1 = hours, R2 = minutes,
+/// R3 = seconds × 100.  Returns the total elapsed time in centiseconds,
+/// clamped to non-negative.
+///
+/// AGC source: Comanche055/PINBALL_NOUN_TABLES.agc (SF_ROUTINE `2INTEG`
+/// with decimal-only flag and hours–minutes–seconds sub-format).
+fn hms_to_cs(values: [f64; 3]) -> u32 {
+    let hours = values[0];
+    let minutes = values[1];
+    let sec100 = values[2]; // seconds × 100 (e.g. 1230 = 12.30 s)
+    let total_cs = hours * 360_000.0 + minutes * 6_000.0 + sec100;
+    if total_cs < 0.0 { 0 } else { total_cs as u32 }
+}
+
 /// Commit a completed data load. Called after the final ENTR of a
 /// V21/V22/V23/V25 sequence, with the already-scaled register values.
 fn noun_commit(state: &mut crate::AgcState, _verb: u8, noun: u8, values: [f64; 3]) {
     match noun {
         18 => noun_18_commit_attitude(state, values),
-        33 => noun_33_commit_tig(state, values[0]),
+        // HMS time nouns → pending_tig (generic time staging area).
+        // The prompting program reads pending_tig after the crew entry.
+        11 | 13 | 16 | 31 | 32 | 33 | 34 | 35 | 37 | 38 | 39 => {
+            commit_hms_to_pending_tig(state, values);
+        }
+        // N24: delta time — ADD to AGC clock rather than replace.
+        24 => noun_24_commit_delta_time(state, values),
+        // N36 / N65: AGC clock set — overwrite state.time.
+        36 | 65 => noun_36_commit_clock_set(state, values),
         70 => noun_70_commit_star_code(state, values[0]),
         72 => noun_72_commit_landmark(state, values),
         81 => noun_81_commit_dv_lvlh(state, values),
@@ -702,11 +724,33 @@ fn noun_commit(state: &mut crate::AgcState, _verb: u8, noun: u8, values: [f64; 3
     }
 }
 
-/// N33 commit — stash TIG for a later delta-V load (typically V25 N81 after).
-fn noun_33_commit_tig(state: &mut crate::AgcState, tig_cs: f64) {
-    // Clamp to non-negative before converting to u32.
-    let cs = if tig_cs < 0.0 { 0 } else { tig_cs as u32 };
-    state.vn.pending_tig = Some(Met(cs));
+/// HMS time noun commit — convert R1/R2/R3 (hours/minutes/sec×100) to
+/// centiseconds and stash in `pending_tig`.
+///
+/// Used by N11 (TIG of CSI), N13 (TIG of CDH), N16 (time of event),
+/// N31 (time of landing site), N32 (time to perigee), N33 (TIG),
+/// N34 (time of event), N35 (time to go), N37 (TIG of TPI),
+/// N38 (time of state vector), N39 (delta time to transfer).
+///
+/// The prompting program reads `pending_tig` immediately after crew entry.
+/// AGC source: Comanche055/PINBALL_NOUN_TABLES.agc (HMS nouns).
+fn commit_hms_to_pending_tig(state: &mut crate::AgcState, values: [f64; 3]) {
+    state.vn.pending_tig = Some(Met(hms_to_cs(values)));
+}
+
+/// N24 commit — delta time for AGC clock.  Adds the HMS-encoded delta to
+/// the current mission elapsed time.
+/// AGC source: Comanche055/PINBALL_NOUN_TABLES.agc, N24.
+fn noun_24_commit_delta_time(state: &mut crate::AgcState, values: [f64; 3]) {
+    let delta_cs = hms_to_cs(values);
+    state.time = Met(state.time.0.wrapping_add(delta_cs));
+}
+
+/// N36 / N65 commit — set AGC clock.  Overwrites `state.time` with the
+/// absolute HMS value entered by the crew.
+/// AGC source: Comanche055/PINBALL_NOUN_TABLES.agc, N36 / N65.
+fn noun_36_commit_clock_set(state: &mut crate::AgcState, values: [f64; 3]) {
+    state.time = Met(hms_to_cs(values));
 }
 
 /// N18 commit — auto maneuver ball angles → `dap_state.commanded_attitude`.
@@ -1031,41 +1075,47 @@ mod tests {
         }
     }
 
-    /// TC-VND-1: V21 N33 E +12345 E stashes TIG = 12_345 cs.
+    /// TC-VND-1: V21 N33 E +00002 E stashes TIG = 2 hours = 720_000 cs.
+    ///
+    /// V21 loads R1 only; for HMS nouns R1 = hours, R2/R3 default to 0.
     #[test]
     fn tc_vnd_1_v21_single_register_load() {
         let mut state = AgcState::new();
 
         feed(&mut state, &[Key::Verb, d(2), d(1), Key::Noun, d(3), d(3), Key::Entr]);
         feed_key(&mut state, Key::Plus);
-        feed_number(&mut state, 12_345);
+        feed_number(&mut state, 2); // 2 hours
         feed_key(&mut state, Key::Entr);
 
         assert_eq!(state.vn.phase, VnPhase::Idle);
-        assert_eq!(state.vn.pending_tig, Some(Met(12_345)));
+        // 2 hours = 2 × 360_000 = 720_000 cs
+        assert_eq!(state.vn.pending_tig, Some(Met(720_000)));
         assert!(!state.dsky.opr_err);
     }
 
-    /// TC-VND-2: V25 N33 E +50000 E commits pending_tig.
+    /// TC-VND-2: V25 N33 E 00001 E 00023 E 04500 E → TIG = 1h 23m 45.00s.
+    ///
+    /// HMS: 1×360000 + 23×6000 + 4500 = 360000 + 138000 + 4500 = 502500 cs.
     #[test]
     fn tc_vnd_2_v25_n33_commits_tig() {
         let mut state = AgcState::new();
 
         feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(3), d(3), Key::Entr]);
-        // V25 N33 loads 3 registers, but noun 33 only reads values[0]
-        // for the TIG. We must still feed all three components to finish.
-        feed_number(&mut state, 50_000);
+        // R1 = hours
+        feed_number(&mut state, 1);
         feed_key(&mut state, Key::Entr);
-        feed_number(&mut state, 0);
+        // R2 = minutes
+        feed_number(&mut state, 23);
         feed_key(&mut state, Key::Entr);
-        feed_number(&mut state, 0);
+        // R3 = seconds × 100
+        feed_number(&mut state, 4500);
         feed_key(&mut state, Key::Entr);
 
         assert_eq!(state.vn.phase, VnPhase::Idle);
-        assert_eq!(state.vn.pending_tig, Some(Met(50_000)));
+        assert_eq!(state.vn.pending_tig, Some(Met(502_500)));
     }
 
-    /// TC-VND-3: V25 N33 followed by V25 N81 with 100 m/s prograde ΔV
+    /// TC-VND-3: V25 N33 (HMS) followed by V25 N81 with 100 m/s prograde ΔV
     /// produces a pending_maneuver (end-to-end P30 flow, no init_p30).
     #[test]
     fn tc_vnd_3_full_p30_data_load() {
@@ -1083,15 +1133,16 @@ mod tests {
         };
         state.time = Met(0);
 
-        // V25 N33 E 50000 E 0 E 0 E — TIG = 500 s (5-digit limit)
+        // V25 N33 E 0h 8m 20.00s = 50000 cs
         feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(3), d(3), Key::Entr]);
-        feed_number(&mut state, 50_000);
+        feed_number(&mut state, 0); // hours
         feed_key(&mut state, Key::Entr);
-        feed_number(&mut state, 0);
+        feed_number(&mut state, 8); // minutes
         feed_key(&mut state, Key::Entr);
-        feed_number(&mut state, 0);
+        feed_number(&mut state, 2000); // 20.00 s × 100
         feed_key(&mut state, Key::Entr);
 
+        // 0×360000 + 8×6000 + 2000 = 50000 cs
         assert_eq!(state.vn.pending_tig, Some(Met(50_000)));
 
         // V25 N81 E +100 E +0 E +0 E
@@ -1219,12 +1270,13 @@ mod tests {
     fn tc_vnd_9_v21_immediate_commit() {
         let mut state = AgcState::new();
 
+        // V21 N33 loads R1 only (hours). 3 hours = 1_080_000 cs.
         feed(&mut state, &[Key::Verb, d(2), d(1), Key::Noun, d(3), d(3), Key::Entr]);
-        feed_number(&mut state, 99_999);
+        feed_number(&mut state, 3);
         feed_key(&mut state, Key::Entr);
 
         assert_eq!(state.vn.phase, VnPhase::Idle);
-        assert_eq!(state.vn.pending_tig, Some(Met(99_999)));
+        assert_eq!(state.vn.pending_tig, Some(Met(1_080_000)));
     }
 
     // ── Extra: V37E11E selects P11 and sets major_mode = 11 ──────────────────
@@ -1606,5 +1658,97 @@ mod tests {
         assert_eq!(lm[0], 285.0, "TC-VND-12: lat");
         assert_eq!(lm[1], -7742.0, "TC-VND-12: lon");
         assert_eq!(lm[2], 100.0, "TC-VND-12: alt");
+    }
+
+    // ── Time noun commits ────────────────────────────────────────────────────
+
+    /// TC-VND-13: V25 N16 E 0h 0m 15.00s sets pending_tig = 1500 cs.
+    #[test]
+    fn tc_vnd_13_v25_n16_time_of_event() {
+        let mut state = AgcState::new();
+
+        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(1), d(6), Key::Entr]);
+        feed_number(&mut state, 0); // hours
+        feed_key(&mut state, Key::Entr);
+        feed_number(&mut state, 0); // minutes
+        feed_key(&mut state, Key::Entr);
+        feed_number(&mut state, 1500); // 15.00 s × 100
+        feed_key(&mut state, Key::Entr);
+
+        assert_eq!(state.vn.phase, VnPhase::Idle);
+        assert_eq!(state.vn.pending_tig, Some(Met(1500)));
+    }
+
+    /// TC-VND-14: V25 N36 E 2h 30m 0.00s overwrites state.time = 900_000 cs.
+    #[test]
+    fn tc_vnd_14_v25_n36_clock_set() {
+        let mut state = AgcState::new();
+        state.time = Met(0);
+
+        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(3), d(6), Key::Entr]);
+        feed_number(&mut state, 2); // hours
+        feed_key(&mut state, Key::Entr);
+        feed_number(&mut state, 30); // minutes
+        feed_key(&mut state, Key::Entr);
+        feed_number(&mut state, 0); // 0.00 s
+        feed_key(&mut state, Key::Entr);
+
+        assert_eq!(state.vn.phase, VnPhase::Idle);
+        // 2×360000 + 30×6000 = 720000 + 180000 = 900000 cs
+        assert_eq!(state.time, Met(900_000));
+    }
+
+    /// TC-VND-15: V25 N24 E 0h 5m 0.00s adds 30_000 cs to state.time.
+    #[test]
+    fn tc_vnd_15_v25_n24_delta_time() {
+        let mut state = AgcState::new();
+        state.time = Met(100_000);
+
+        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(2), d(4), Key::Entr]);
+        feed_number(&mut state, 0); // hours
+        feed_key(&mut state, Key::Entr);
+        feed_number(&mut state, 5); // minutes
+        feed_key(&mut state, Key::Entr);
+        feed_number(&mut state, 0); // 0.00 s
+        feed_key(&mut state, Key::Entr);
+
+        assert_eq!(state.vn.phase, VnPhase::Idle);
+        // 5×6000 = 30000 cs added to 100000 → 130000
+        assert_eq!(state.time, Met(130_000));
+    }
+
+    /// TC-VND-16: V25 N65 E 0h 0m 1.00s sets state.time = 100 cs (same as N36).
+    #[test]
+    fn tc_vnd_16_v25_n65_clock_set() {
+        let mut state = AgcState::new();
+        state.time = Met(999_999);
+
+        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(6), d(5), Key::Entr]);
+        feed_number(&mut state, 0);
+        feed_key(&mut state, Key::Entr);
+        feed_number(&mut state, 0);
+        feed_key(&mut state, Key::Entr);
+        feed_number(&mut state, 100); // 1.00 s × 100
+        feed_key(&mut state, Key::Entr);
+
+        assert_eq!(state.vn.phase, VnPhase::Idle);
+        assert_eq!(state.time, Met(100));
+    }
+
+    /// TC-VND-17: V25 N34 E 1h 0m 0.00s sets pending_tig = 360_000 cs.
+    #[test]
+    fn tc_vnd_17_v25_n34_tfi() {
+        let mut state = AgcState::new();
+
+        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(3), d(4), Key::Entr]);
+        feed_number(&mut state, 1);
+        feed_key(&mut state, Key::Entr);
+        feed_number(&mut state, 0);
+        feed_key(&mut state, Key::Entr);
+        feed_number(&mut state, 0);
+        feed_key(&mut state, Key::Entr);
+
+        assert_eq!(state.vn.phase, VnPhase::Idle);
+        assert_eq!(state.vn.pending_tig, Some(Met(360_000)));
     }
 }

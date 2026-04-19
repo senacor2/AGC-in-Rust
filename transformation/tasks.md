@@ -216,21 +216,14 @@ N11, N13, N17, N37, N46, N47, N71, N89.
 
 #### Group 2 — Time nouns (HMS format, need HMS↔cs conversion)
 
-- [ ] **Impl** — HMS↔centisecond conversion helpers for `noun_commit`/`noun_display`.
-  All HMS nouns (Komp=HMS "ja") share the same R1=hours, R2=minutes,
-  R3=seconds×100 format.  Factor out `hms_to_cs(values: [f64; 3]) -> u32`
-  and `cs_to_hms(cs: u32) -> [f64; 3]` helpers, then wire into
-  noun_commit and noun_display.
-- [ ] **Impl** — N16 commit (time of event, HMS → cs).
-- [ ] **Impl** — N24 commit (delta time for AGC clock, HMS → cs).
-- [ ] **Impl** — N31 commit (time of landing site, HMS → cs).
-- [ ] **Impl** — N32 commit (time to perigee, HMS → cs).
-- [ ] **Impl** — N34 commit (time of event, HMS → cs). Scale entry exists but no handler.
-- [ ] **Impl** — N35 commit (time to go to event, HMS → cs).
-- [ ] **Impl** — N36 commit (time of AGC clock, HMS → cs). Overwrite MET.
-- [ ] **Impl** — N38 commit (time of state vector, HMS → cs).
-- [ ] **Impl** — N39 commit (delta time to transfer, HMS → cs).
-- [ ] **Impl** — N65 commit (sampled AGC time, HMS → cs).
+- [x] **Impl** — `hms_to_cs(values: [f64; 3]) -> u32` conversion helper.
+  R1=hours, R2=minutes, R3=seconds×100 → centiseconds.
+- [x] **Impl** — N33 refactored to HMS (was raw centiseconds; now uses hms_to_cs).
+  Existing tests TC-VND-1/2/3/9 updated to enter hours/minutes/sec×100.
+- [x] **Impl** — N11/N13/N16/N31/N32/N34/N35/N37/N38/N39 commit (HMS → pending_tig).
+  All HMS time nouns route through `commit_hms_to_pending_tig`. Test: TC-VND-13 (N16), TC-VND-17 (N34).
+- [x] **Impl** — N24 commit (delta time → add to state.time). Test: TC-VND-15.
+- [x] **Impl** — N36/N65 commit (AGC clock set → overwrite state.time). Tests: TC-VND-14, TC-VND-16.
 
 #### Group 3 — Remaining loadable nouns
 
