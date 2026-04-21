@@ -1,5 +1,7 @@
 //! Simulated AgcHardware implementation for host testing.
 
+use std::time::Instant;
+
 use agc_core::hal::{
     AgcHardware, Dsky, Engine, Imu, Optics, Rcs, Telemetry, Timers, Uplink,
     dsky::Lamp,
@@ -8,7 +10,27 @@ use agc_core::types::CduAngle;
 
 // ── Sub-system stubs ──────────────────────────────────────────────────────────
 
-pub struct SimTimers { pub mission_time_cs: u32 }
+/// Simulated mission timer.  Tracks a `base_cs` value and an `epoch`
+/// instant; `mission_time()` returns `base_cs + elapsed_since_epoch`.
+/// Calling `set_time()` rebases the clock so crew clock-sets (V25 N36 /
+/// N65) are respected and the timer keeps advancing from the new value.
+pub struct SimTimers {
+    base_cs: u32,
+    epoch: Instant,
+}
+
+impl SimTimers {
+    pub fn new() -> Self {
+        Self { base_cs: 0, epoch: Instant::now() }
+    }
+
+    /// Set the mission clock to an absolute value.  The timer continues
+    /// to advance from this new base at wall-clock rate.
+    pub fn set_time(&mut self, cs: u32) {
+        self.base_cs = cs;
+        self.epoch = Instant::now();
+    }
+}
 pub struct SimDsky   { pub keys: std::collections::VecDeque<u8> }
 pub struct SimImu    { pub pipa: [i16; 3], pub cdu: [CduAngle; 3] }
 pub struct SimOptics { pub trunnion: CduAngle, pub shaft: CduAngle }
@@ -24,7 +46,10 @@ impl Timers for SimTimers {
     fn arm_t5(&mut self, _cs: u16) {}
     fn arm_t6(&mut self, _counts: u16) {}
     fn disarm_t6(&mut self) {}
-    fn mission_time(&self) -> u32 { self.mission_time_cs }
+    fn mission_time(&self) -> u32 {
+        let elapsed = (self.epoch.elapsed().as_millis() / 10) as u32;
+        self.base_cs.wrapping_add(elapsed)
+    }
 }
 
 impl Dsky for SimDsky {
@@ -90,7 +115,7 @@ pub struct SimHardware {
 impl SimHardware {
     pub fn new() -> Self {
         Self {
-            timers:    SimTimers { mission_time_cs: 0 },
+            timers:    SimTimers::new(),
             dsky:      SimDsky   { keys: Default::default() },
             imu:       SimImu    { pipa: [0; 3], cdu: [CduAngle(0); 3] },
             optics:    SimOptics { trunnion: CduAngle(0), shaft: CduAngle(0) },
@@ -141,14 +166,17 @@ mod tests {
     fn tc_timers_01_arm_t3_no_panic() {
         let mut hw = SimHardware::new();
         hw.timers().arm_t3(100);
-        assert_eq!(hw.timers().mission_time(), 0);
+        // mission_time starts near 0 (within a few ms of construction).
+        assert!(hw.timers().mission_time() < 10);
     }
 
     #[test]
-    fn tc_timers_02_mission_time_injected() {
+    fn tc_timers_02_mission_time_set() {
         let mut hw = SimHardware::new();
-        hw.timers.mission_time_cs = 54321;
-        assert_eq!(hw.timers().mission_time(), 54321);
+        hw.timers.set_time(54321);
+        // Should read back ≈ 54321 (plus a few ms elapsed).
+        let t = hw.timers().mission_time();
+        assert!(t >= 54321 && t < 54321 + 10, "expected ~54321, got {t}");
     }
 
     #[test]

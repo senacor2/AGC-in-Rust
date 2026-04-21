@@ -14,11 +14,13 @@
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
+use agc_core::hal::Timers as _;
 use agc_core::services::pinball::decode_dsky;
 use agc_core::services::v_n::feed_key;
 use agc_core::types::Met;
 use agc_core::AgcState;
 use agc_sim::dsky_ui::{key_from_code, render};
+use agc_sim::hardware::SimHardware;
 
 use crossterm::{
     cursor::{Hide, Show},
@@ -50,14 +52,20 @@ fn main() -> io::Result<()> {
 
 fn run<W: Write>(out: &mut W) -> io::Result<()> {
     let mut state = AgcState::new();
-    let start = Instant::now();
+    let mut hw = SimHardware::new();
     let mut last_frame = Instant::now();
     let mut flash_on = true;
     let mut last_flash = Instant::now();
     let mut status = String::from("Ready");
 
     loop {
-        // Drain any pending keyboard events.
+        // Read MET from the HAL timer (single source of truth).
+        state.time = Met(hw.timers.mission_time());
+
+        // Drain any pending keyboard events.  Snapshot state.time before
+        // processing keys so we can detect if a noun commit (V25 N36/N65/N24)
+        // changed it.
+        let time_before_keys = state.time;
         while event::poll(Duration::from_millis(0))? {
             if let Event::Key(KeyEvent {
                 code, modifiers, ..
@@ -80,9 +88,10 @@ fn run<W: Write>(out: &mut W) -> io::Result<()> {
             }
         }
 
-        // Advance MET from wall clock.
-        let elapsed_cs = (start.elapsed().as_millis() / 10) as u32;
-        state.time = Met(elapsed_cs);
+        // If a noun commit changed state.time, rebase the HAL timer.
+        if state.time != time_before_keys {
+            hw.timers.set_time(state.time.0);
+        }
 
         // Toggle VERB/NOUN flashing.
         if last_flash.elapsed() >= FLASH_PERIOD {
@@ -94,7 +103,7 @@ fn run<W: Write>(out: &mut W) -> io::Result<()> {
         if last_frame.elapsed() >= FRAME {
             agc_core::services::v_n::refresh_monitor_display(&mut state);
             let frame = decode_dsky(&state.dsky);
-            render(out, (1, 1), &frame, elapsed_cs as u64, &status, flash_on)?;
+            render(out, (1, 1), &frame, state.time.0 as u64, &status, flash_on)?;
             last_frame = Instant::now();
         }
 
