@@ -133,6 +133,30 @@ This file is the index and status tracker.
 
 ---
 
+## ADR-014: Izzo Lambert Solver Instead of AGC Conic Subroutines Port
+
+**Date**: 2026-04-22 | **Status**: Accepted
+
+**Decision**: Implement Lambert's problem using Izzo's (2015) λ-parametrization with Halley iteration rather than porting the universal-variable / Stumpff-function formulation from `Comanche055/CONIC_SUBROUTINES.agc`.
+
+**Rationale**: A direct port of the AGC's Lambert solver is not viable for three reasons:
+
+1. **Fixed-point vs floating-point mismatch.** The AGC code is meticulously tuned for 15-bit single-precision and 28-bit double-precision fixed-point arithmetic — scaling factors, shift counts, and iteration bounds are all specific to that word format. Porting to `f64` would either mean emulating fixed-point quirks (inheriting precision limitations with none of IEEE 754's advantages) or rewriting the numerical core anyway, at which point the "port" is a reimplementation.
+
+2. **The AGC's universal-variable formulation has known numerical difficulties.** Near-parabolic transfers (Stumpff singularity at the elliptic/hyperbolic boundary), near-180° transfers (ill-defined transfer plane), and hyperbolic escapes (under-exercised in the original code, which relied on ground-computed TEI targeting) all require carefully hand-tuned iteration bounds. Those bounds are meaningless outside the original fixed-point context.
+
+3. **Izzo's method is designed for IEEE 754 and solves exactly these problems.** The λ-parametrization unifies elliptic and hyperbolic regimes through a single parameter x with a clean (non-singular) branch at x = 1. Halley iteration provides cubic convergence with fewer iterations. Closed-form initial guesses (Eq. 30, three regimes) guarantee convergence basin entry without mission-specific knowledge. Signed λ handles retrograde transfers cleanly.
+
+**Trade-off**: The implementation cannot be validated line-by-line against the AGC source. Mitigation: the test suite validates against analytical solutions (Hohmann, circular arc), energy conservation invariants, and both elliptic and hyperbolic regimes including retrograde (TC-LAM-1 through TC-LAM-8). This is consistent with ADR-001 (interpreter elimination) and ADR-003 (native types) — the project recreates the AGC's *functionality* in idiomatic Rust, not its bit-level implementation.
+
+**Affected files**:
+- `agc-core/src/math/lambert.rs` — Izzo 2015 implementation with Halley iteration
+- `specs/lambert-spec.md` — functional specification references Izzo 2015 as the algorithm source
+
+**Reference**: Izzo, D. (2015). *Revisiting Lambert's problem.* Celestial Mechanics and Dynamical Astronomy, 121(1), 1–15. DOI: 10.1007/s10569-014-9587-y
+
+---
+
 ## Open / Proposed ADRs
 
 | ID | Topic | Status |
