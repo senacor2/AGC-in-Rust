@@ -19,7 +19,7 @@ use agc_core::services::pinball::decode_dsky;
 use agc_core::services::v_n::feed_key;
 use agc_core::types::Met;
 use agc_core::AgcState;
-use agc_sim::dsky_ui::{key_from_code, render};
+use agc_sim::dsky_ui::{key_from_code, render, PropulsionFrame};
 use agc_sim::hardware::SimHardware;
 
 use crossterm::{
@@ -103,7 +103,18 @@ fn run<W: Write>(out: &mut W) -> io::Result<()> {
         if last_frame.elapsed() >= FRAME {
             agc_core::services::v_n::refresh_monitor_display(&mut state);
             let frame = decode_dsky(&state.dsky);
-            render(out, (1, 1), &frame, state.time.0 as u64, &status, flash_on)?;
+
+            // Build propulsion frame from hardware state.
+            let (vis_sm, vis_cm) = hw.rcs.drain_visual();
+            let prop = PropulsionFrame {
+                sm_jets: vis_sm,
+                cm_jets: vis_cm,
+                sps_thrusting: hw.engine.thrusting,
+                gimbal_pitch_deg: hw.engine.gimbal_pitch as f32 * (360.0 / 3200.0),
+                gimbal_yaw_deg: hw.engine.gimbal_yaw as f32 * (360.0 / 3200.0),
+            };
+
+            render(out, (1, 1), &frame, Some(&prop), state.time.0 as u64, &status, flash_on)?;
             last_frame = Instant::now();
         }
 

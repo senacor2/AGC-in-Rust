@@ -34,8 +34,19 @@ impl SimTimers {
 pub struct SimDsky   { pub keys: std::collections::VecDeque<u8> }
 pub struct SimImu    { pub pipa: [i16; 3], pub cdu: [CduAngle; 3] }
 pub struct SimOptics { pub trunnion: CduAngle, pub shaft: CduAngle }
-pub struct SimEngine { pub thrusting: bool }
-pub struct SimRcs;
+pub struct SimEngine {
+    pub thrusting: bool,
+    pub gimbal_pitch: i16,
+    pub gimbal_yaw: i16,
+}
+pub struct SimRcs {
+    /// Current hardware jet state (cleared by quench_all).
+    pub sm_jets: u16,
+    pub cm_jets: u16,
+    /// Sticky visual accumulator — ORs in every firing between render frames.
+    pub visual_sm_jets: u16,
+    pub visual_cm_jets: u16,
+}
 pub struct SimUplink  { pub words: std::collections::VecDeque<u16> }
 pub struct SimTelemetry { pub log: Vec<u16> }
 
@@ -81,14 +92,39 @@ impl Optics for SimOptics {
 
 impl Engine for SimEngine {
     fn sps_enable(&mut self, on: bool) { self.thrusting = on; }
-    fn sps_gimbal(&mut self, _pitch: i16, _yaw: i16) {}
+    fn sps_gimbal(&mut self, pitch: i16, yaw: i16) {
+        self.gimbal_pitch = pitch;
+        self.gimbal_yaw = yaw;
+    }
     fn thrust_on(&self) -> bool { self.thrusting }
 }
 
 impl Rcs for SimRcs {
-    fn fire_sm_jets(&mut self, _a: u8, _b: u8) {}
-    fn fire_cm_jets(&mut self, _jets: u16) {}
-    fn quench_all(&mut self) {}
+    fn fire_sm_jets(&mut self, a: u8, b: u8) {
+        self.sm_jets = (b as u16) << 8 | (a as u16);
+        self.visual_sm_jets |= self.sm_jets;
+    }
+    fn fire_cm_jets(&mut self, jets: u16) {
+        self.cm_jets = jets & 0x0FFF;
+        self.visual_cm_jets |= self.cm_jets;
+    }
+    fn quench_all(&mut self) {
+        self.sm_jets = 0;
+        self.cm_jets = 0;
+    }
+}
+
+impl SimRcs {
+    /// Read and clear the visual jet accumulators. Call once per render frame.
+    /// Returns `(sm_jets, cm_jets)` representing all jets that fired since the
+    /// last drain, then resets the accumulators to the current hardware state.
+    pub fn drain_visual(&mut self) -> (u16, u16) {
+        let sm = self.visual_sm_jets;
+        let cm = self.visual_cm_jets;
+        self.visual_sm_jets = self.sm_jets;
+        self.visual_cm_jets = self.cm_jets;
+        (sm, cm)
+    }
 }
 
 impl Uplink for SimUplink {
@@ -119,8 +155,8 @@ impl SimHardware {
             dsky:      SimDsky   { keys: Default::default() },
             imu:       SimImu    { pipa: [0; 3], cdu: [CduAngle(0); 3] },
             optics:    SimOptics { trunnion: CduAngle(0), shaft: CduAngle(0) },
-            engine:    SimEngine { thrusting: false },
-            rcs:       SimRcs,
+            engine:    SimEngine { thrusting: false, gimbal_pitch: 0, gimbal_yaw: 0 },
+            rcs:       SimRcs { sm_jets: 0, cm_jets: 0, visual_sm_jets: 0, visual_cm_jets: 0 },
             uplink:    SimUplink  { words: Default::default() },
             telemetry: SimTelemetry { log: Vec::new() },
         }
@@ -293,6 +329,8 @@ mod tests {
     fn tc_engine_03_initial_state() {
         let hw = SimHardware::new();
         assert!(!hw.engine.thrusting);
+        assert_eq!(hw.engine.gimbal_pitch, 0);
+        assert_eq!(hw.engine.gimbal_yaw, 0);
     }
 
     // ── RCS (TC-RCS-01 through TC-RCS-03) ───────────────────────────────────

@@ -30,8 +30,8 @@ use crossterm::{
 /// Total rendered width in columns.
 pub const WIDTH: u16 = 66;
 
-/// Total rendered height in rows (display + keyboard + status).
-pub const HEIGHT: u16 = 29;
+/// Total rendered height in rows (display + keyboard + propulsion + status).
+pub const HEIGHT: u16 = 39;
 
 // ── Colours ───────────────────────────────────────────────────────────────────
 
@@ -41,6 +41,26 @@ const ACTIVE: Color = Color::White;
 const DIM: Color = Color::DarkGrey;
 /// Accent colour used for the MET counter.
 const ACCENT: Color = Color::Grey;
+/// Colour for firing RCS jets.
+const JET_FIRE: Color = Color::Green;
+/// Colour for SPS thrust indicator.
+const SPS_FIRE: Color = Color::Red;
+
+// ── Propulsion frame ─────────────────────────────────────────────────────────
+
+/// Snapshot of propulsion state for rendering.
+pub struct PropulsionFrame {
+    /// SM RCS jet bitmask (sticky visual — see `SimRcs::drain_visual`).
+    pub sm_jets: u16,
+    /// CM RCS jet bitmask (sticky visual).
+    pub cm_jets: u16,
+    /// SPS engine on/off.
+    pub sps_thrusting: bool,
+    /// SPS gimbal pitch in degrees.
+    pub gimbal_pitch_deg: f32,
+    /// SPS gimbal yaw in degrees.
+    pub gimbal_yaw_deg: f32,
+}
 
 // ── Public entry point ───────────────────────────────────────────────────────
 
@@ -49,10 +69,14 @@ const ACCENT: Color = Color::Grey;
 /// The caller is responsible for having placed the terminal in raw mode
 /// and, if desired, an alternate screen. `origin` is the top-left corner
 /// of the rendered panel.
+///
+/// When `propulsion` is `Some`, the propulsion panel is drawn below the
+/// keyboard and the status line is shifted down.
 pub fn render<W: Write>(
     out: &mut W,
     origin: (u16, u16),
     frame: &DskyFrame,
+    propulsion: Option<&PropulsionFrame>,
     met_cs: u64,
     status: &str,
     flash_on: bool,
@@ -62,7 +86,13 @@ pub fn render<W: Write>(
     draw_lamp_panel(out, ox, oy, &frame.lamps, frame.lamp_test)?;
     draw_display_panel(out, ox + 32, oy, frame, flash_on)?;
     draw_keyboard(out, ox, oy + 17)?;
-    draw_status(out, ox, oy + 27, met_cs, status)?;
+
+    if let Some(prop) = propulsion {
+        draw_propulsion_panel(out, ox, oy + 27, prop)?;
+        draw_status(out, ox, oy + 36, met_cs, status)?;
+    } else {
+        draw_status(out, ox, oy + 27, met_cs, status)?;
+    }
 
     queue!(out, ResetColor)?;
     out.flush()
@@ -230,6 +260,155 @@ fn draw_keyboard<W: Write>(out: &mut W, ox: u16, oy: u16) -> io::Result<()> {
     for (i, row) in rows.iter().enumerate() {
         queue!(out, MoveTo(ox, oy + i as u16), Print(*row))?;
     }
+    Ok(())
+}
+
+// ── Propulsion panel ─────────────────────────────────────────────────────────
+
+/// Jet indicator: `●` if firing, `○` if idle.
+fn jet_char(firing: bool) -> char {
+    if firing { '●' } else { '○' }
+}
+
+/// Return the colour for a jet indicator.
+fn jet_color(firing: bool) -> Color {
+    if firing { JET_FIRE } else { DIM }
+}
+
+/// Draw a single jet indicator at the given position.
+fn draw_jet<W: Write>(out: &mut W, x: u16, y: u16, label: &str, firing: bool) -> io::Result<()> {
+    queue!(out, SetForegroundColor(jet_color(firing)))?;
+    queue!(out, MoveTo(x, y), Print(label))?;
+    queue!(out, Print(jet_char(firing)))?;
+    Ok(())
+}
+
+/// Draw a single jet indicator with the label after the indicator.
+fn draw_jet_rev<W: Write>(out: &mut W, x: u16, y: u16, label: &str, firing: bool) -> io::Result<()> {
+    queue!(out, SetForegroundColor(jet_color(firing)))?;
+    queue!(out, MoveTo(x, y), Print(jet_char(firing)))?;
+    queue!(out, Print(label))?;
+    Ok(())
+}
+
+fn draw_propulsion_panel<W: Write>(
+    out: &mut W,
+    ox: u16,
+    oy: u16,
+    prop: &PropulsionFrame,
+) -> io::Result<()> {
+    let div = 31u16; // vertical divider column (relative to ox)
+
+    // ── Border ───────────────────────────────────────────────────────────────
+    queue!(out, SetForegroundColor(DIM))?;
+    // Top border with title
+    queue!(out, MoveTo(ox, oy), Print("┌─PROPULSION"))?;
+    for _ in 12..div { queue!(out, Print("─"))?; }
+    queue!(out, Print("┬"))?;
+    for _ in (div + 1)..65 { queue!(out, Print("─"))?; }
+    queue!(out, Print("┐"))?;
+
+    // Content rows (7 rows)
+    for row in 1..=7 {
+        let y = oy + row;
+        queue!(out, MoveTo(ox, y), Print("│"))?;
+        // Fill left half with spaces
+        for _ in 1..div { queue!(out, Print(" "))?; }
+        queue!(out, Print("│"))?;
+        // Fill right half with spaces
+        for _ in (div + 1)..65 { queue!(out, Print(" "))?; }
+        // Right edge is at column 65
+        queue!(out, MoveTo(ox + 65, y), Print("│"))?;
+    }
+
+    // Bottom border
+    queue!(out, MoveTo(ox, oy + 8))?;
+    queue!(out, Print("└"))?;
+    for _ in 1..div { queue!(out, Print("─"))?; }
+    queue!(out, Print("┴"))?;
+    for _ in (div + 1)..65 { queue!(out, Print("─"))?; }
+    queue!(out, Print("┘"))?;
+
+    // ── Left half: SM RCS diamond layout ─────────────────────────────────────
+    // Bit assignments (from rcs_logic.rs):
+    //  0=B4  1=B3  2=B2  3=B1  4=A4  5=A3  6=A2  7=A1
+    //  8=D4  9=D3  10=D2 11=D1 12=C4 13=C3 14=C2 15=C1
+    let j = |bit: u8| -> bool { prop.sm_jets & (1u16 << bit) != 0 };
+
+    // Quad A (top) — row 1-2
+    queue!(out, SetForegroundColor(DIM))?;
+    queue!(out, MoveTo(ox + 11, oy + 1), Print("[A]"))?;
+    // Row 2: A4 A2 · A1 A3
+    draw_jet(out, ox + 5, oy + 2, "A4", j(4))?;
+    draw_jet(out, ox + 9, oy + 2, "A2", j(6))?;
+    queue!(out, SetForegroundColor(DIM), MoveTo(ox + 12, oy + 2), Print("·"))?;
+    draw_jet_rev(out, ox + 14, oy + 2, "A1", j(7))?;
+    draw_jet_rev(out, ox + 18, oy + 2, "A3", j(5))?;
+
+    // Quad labels D and B — row 3
+    queue!(out, SetForegroundColor(DIM))?;
+    queue!(out, MoveTo(ox + 1, oy + 3), Print("[D]"))?;
+    queue!(out, MoveTo(ox + 21, oy + 3), Print("[B]"))?;
+
+    // Quad D (left) — row 4
+    draw_jet(out, ox + 1, oy + 4, "D4", j(8))?;
+    draw_jet(out, ox + 5, oy + 4, "D3", j(9))?;
+    queue!(out, SetForegroundColor(DIM), MoveTo(ox + 12, oy + 4), Print("·"))?;
+    draw_jet_rev(out, ox + 14, oy + 4, "D1", j(11))?;
+    draw_jet_rev(out, ox + 18, oy + 4, "D2", j(10))?;
+
+    // Quad B (right) — row 5
+    draw_jet(out, ox + 1, oy + 5, "B2", j(2))?;
+    draw_jet(out, ox + 5, oy + 5, "B1", j(3))?;
+    queue!(out, SetForegroundColor(DIM), MoveTo(ox + 12, oy + 5), Print("·"))?;
+    draw_jet_rev(out, ox + 14, oy + 5, "B3", j(1))?;
+    draw_jet_rev(out, ox + 18, oy + 5, "B4", j(0))?;
+
+    // Quad C (bottom) — row 6-7
+    draw_jet(out, ox + 5, oy + 6, "C4", j(12))?;
+    draw_jet(out, ox + 9, oy + 6, "C2", j(14))?;
+    queue!(out, SetForegroundColor(DIM), MoveTo(ox + 12, oy + 6), Print("·"))?;
+    draw_jet_rev(out, ox + 14, oy + 6, "C1", j(15))?;
+    draw_jet_rev(out, ox + 18, oy + 6, "C3", j(13))?;
+    queue!(out, SetForegroundColor(DIM))?;
+    queue!(out, MoveTo(ox + 11, oy + 7), Print("[C]"))?;
+
+    // ── Right half: SPS engine ───────────────────────────────────────────────
+    let rx = ox + div + 2; // right half starting x
+
+    // Row 1: SPS status
+    if prop.sps_thrusting {
+        queue!(out, SetForegroundColor(SPS_FIRE))?;
+        queue!(out, MoveTo(rx, oy + 1), Print("SPS: \u{2588}\u{2588} THRUST \u{2588}\u{2588}"))?;
+    } else {
+        queue!(out, SetForegroundColor(DIM))?;
+        queue!(out, MoveTo(rx, oy + 1), Print("SPS: OFF"))?;
+    }
+
+    // Row 2: Gimbal readout
+    queue!(out, SetForegroundColor(ACTIVE))?;
+    queue!(
+        out,
+        MoveTo(rx, oy + 2),
+        Print(format!(
+            "Gimbal P:{:+05.1}\u{00b0} Y:{:+05.1}\u{00b0}",
+            prop.gimbal_pitch_deg, prop.gimbal_yaw_deg
+        ))
+    )?;
+
+    // Rows 4-6: Nozzle glyph
+    if prop.sps_thrusting {
+        queue!(out, SetForegroundColor(SPS_FIRE))?;
+        queue!(out, MoveTo(rx + 5, oy + 4), Print("\u{2571}\u{2593}\u{2593}\u{2593}\u{2593}\u{2572}"))?;
+        queue!(out, MoveTo(rx + 4, oy + 5), Print("\u{2571}\u{2593}\u{2593}\u{2593}\u{2593}\u{2593}\u{2593}\u{2572}"))?;
+        queue!(out, MoveTo(rx + 3, oy + 6), Print("\u{2571}\u{2593}\u{2593}\u{2593}\u{2593}\u{2593}\u{2593}\u{2593}\u{2593}\u{2572}"))?;
+    } else {
+        queue!(out, SetForegroundColor(DIM))?;
+        queue!(out, MoveTo(rx + 5, oy + 4), Print("\u{2571}    \u{2572}"))?;
+        queue!(out, MoveTo(rx + 4, oy + 5), Print("\u{2571}      \u{2572}"))?;
+        queue!(out, MoveTo(rx + 3, oy + 6), Print("\u{2571}        \u{2572}"))?;
+    }
+
     Ok(())
 }
 
