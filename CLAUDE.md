@@ -21,7 +21,9 @@ Each agent reads outputs from the prior stage. The analyst's functional specs ar
 
 ## Key Reference Material
 
-- `docs/AGC Symbolic Listing.md` — markdown conversion of the formal AGC hardware/software specification (Block 2 AGC, Comanche/Colossus 2D for Apollo 13)
+- `input/AGC Symbolic Listing.md` — markdown conversion of the formal AGC hardware/software specification (Block 2 AGC, Comanche/Colossus 2D for Apollo 13)
+- `input/AGC Quick Reference.md` - a brief overview of the AGC machine
+and interpreter instructions, registers, interrupts and I/O ports.
 - `/Users/Juergen.Schiewe/Documents/Digital Editions/The Apollo Guidance Computer.pdf` — Frank O'Brien: *The Apollo Guidance Computer - Architecture and Operation*. Comprehensive reference on AGC hardware, software architecture, and mission operations. Use for understanding the Executive, Waitlist, interpreter, navigation algorithms, and DSKY interface in depth.
 - [Apollo-11 source on GitHub](https://github.com/chrislgarry/Apollo-11) — digitized AGC assembler source (Comanche055 = Command Module)
 - [AGC Assembly Language Manual](https://www.ibiblio.org/apollo/assembly_language_manual.html) — machine, interpreter, and pseudocode instruction descriptions
