@@ -22,7 +22,7 @@ use agc_core::hal::AgcHardware;
 
 use link::uart::UartLink;
 use local::imu::BoardImu;
-use local::timers::LocalTimers;
+use local::timers::{LocalTimers, TimerHandles};
 use remote::dsky::RemoteDsky;
 use remote::engine::RemoteEngine;
 use remote::optics::RemoteOptics;
@@ -47,6 +47,11 @@ pub static PLATFORM: Mutex<RefCell<agc_imu_platform::PlatformEmulator>> =
 
 /// BMI088 driver singleton; populated during init, read by TIM7 ISR.
 pub static BMI088: Mutex<RefCell<Option<local::imu::bmi088::Bmi088Driver>>> =
+    Mutex::new(RefCell::new(None));
+
+/// TIM2/3/4/5 peripheral handles. Populated by `LocalTimers::init`; accessed
+/// by the `Timers` trait impl and the TIM ISRs to clear the UIF flag.
+pub static TIMER_HANDLES: Mutex<RefCell<Option<TimerHandles>>> =
     Mutex::new(RefCell::new(None));
 
 // ── Convenience accessors ─────────────────────────────────────────────────────
@@ -74,6 +79,19 @@ where
 {
     cortex_m::interrupt::free(|cs| {
         f(&mut crate::PLATFORM.borrow(cs).borrow_mut());
+    });
+}
+
+/// Run `f` with a mutable reference to the `TimerHandles`.
+/// The closure is not called if `TIMER_HANDLES` is `None` (before init).
+pub fn with_timers<F>(f: F)
+where
+    F: FnOnce(&mut TimerHandles),
+{
+    cortex_m::interrupt::free(|cs| {
+        if let Some(h) = TIMER_HANDLES.borrow(cs).borrow_mut().as_mut() {
+            f(h);
+        }
     });
 }
 

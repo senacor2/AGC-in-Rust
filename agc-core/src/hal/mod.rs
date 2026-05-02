@@ -4,6 +4,7 @@ pub mod imu;
 pub mod interrupts;
 pub mod optics;
 pub mod rcs;
+pub mod runtime;
 pub mod telemetry;
 pub mod timers;
 pub mod uplink;

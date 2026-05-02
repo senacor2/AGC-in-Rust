@@ -5,15 +5,20 @@
 //!   2. Clocks are configured to 216 MHz (SYSCLK) / 54 MHz (APB1) / 108 MHz (APB2).
 //!   3. USART6 and IWDG are initialised.
 //!   4. SPI3 + BMI088 initialised; 100-sample bias calibration; platform uncaged.
-//!   5. TIM7 configured at 1 kHz; NVIC unmasked at priority 8.
-//!   6. `AgcState::new()` placed in `static mut`; `fresh_start` runs.
-//!   7. `HelloAck` sent to confirm the bridge link.
-//!   8. Idle loop pets watchdog and emits a 1 Hz liveness heartbeat with IMU data.
+//!   5. TIM7 configured at 1 kHz; NVIC unmasked at priority 0x80.
+//!   6. SysTick configured at 1 kHz.
+//!   7. TIM2/3/4/5 initialised; NVIC priorities set and unmasked.
+//!   8. TIM2 reconfigured to 1 Hz periodic for the Phase-3 demo.
+//!   9. Demo hook registered with agc-core::hal::runtime.
+//!  10. `AgcState::new()` placed in `static mut`; `fresh_start` runs.
+//!  11. `HelloAck` sent to confirm the bridge link.
+//!  12. `Executive::run` entered — never returns.
 
 #![no_std]
 #![no_main]
 
 use core::cell::RefCell;
+use core::sync::atomic::Ordering;
 
 use cortex_m::interrupt::Mutex;
 use cortex_m_rt::{entry, exception};
@@ -26,9 +31,14 @@ use stm32f7xx_hal::{pac, prelude::*, rcc::RccExt, spi};
 use agc_board_nucleo_f722::{
     link::{dispatch, uart::UartLink},
     local::{timers::MS_TICKS, watchdog::Watchdog},
-    register_watchdog_pet, BMI088, LINK, PLATFORM,
+    register_watchdog_pet, with_timers, BMI088, LINK, PLATFORM,
 };
-use agc_core::{services::fresh_start::fresh_start, AgcState};
+use agc_core::{
+    executive::scheduler::Executive,
+    hal::runtime::{T3_PENDING, T3_TICK_COUNT, T4_PENDING, T5_PENDING, T6_PENDING},
+    services::fresh_start::fresh_start,
+    AgcState,
+};
 use agc_imu_platform::UnitQuaternion;
 use agc_protocol::{Msg, PROTO_VERSION};
 
@@ -46,6 +56,18 @@ fn pet_wdg() {
             wdg.pet();
         }
     });
+}
+
+// ── Board-side demo tick callback ─────────────────────────────────────────────
+//
+// Registered with agc-core::hal::runtime::register_demo_hook at boot.
+// Called by `__demo_tick` (dispatched as an Executive job each time T3 fires).
+// Reads T3_TICK_COUNT (incremented by the drain loop before the job is created)
+// and emits a defmt log line. agc-core itself never imports defmt.
+
+fn board_demo_tick(state: &mut AgcState) {
+    let ticks = T3_TICK_COUNT.load(Ordering::Relaxed);
+    defmt::info!("agc: tick #{} MET={} cs", ticks, state.time.0);
 }
 
 // ── Entry ─────────────────────────────────────────────────────────────────────
@@ -142,8 +164,6 @@ fn main() -> ! {
     // Collect 100 samples at ~10 ms spacing.  Assume board is level on
     // power-up so gravity points along +Z.  Gyro mean = gyro zero-rate offset.
     // Accel bias = measured mean − [0, 0, g].
-    // Initial-attitude estimation from the gravity vector is a follow-on item
-    // (see tasks.md Phase 2 unchecked items).
     let mut bmi = bmi;
     let mut gyro_sum  = [0.0f64; 3];
     let mut accel_sum = [0.0f64; 3];
@@ -199,8 +219,7 @@ fn main() -> ! {
         // Start the counter.
         tim7.cr1.write(|w| w.cen().set_bit());
 
-        // Set TIM7 priority to 8 of 16 (0x80 in the 8-bit priority register;
-        // STM32F7 uses the upper 4 bits so 0x80 = priority group 8).
+        // TIM7 at priority 0x80 — below all AGC timer interrupts.
         cp.NVIC.set_priority(pac::Interrupt::TIM7, 0x80);
         cortex_m::peripheral::NVIC::unmask(pac::Interrupt::TIM7);
     }
@@ -215,13 +234,64 @@ fn main() -> ! {
     systick.enable_counter();
     systick.enable_interrupt();
 
+    // ── TIM2/3/4/5: AGC scheduling timers ────────────────────────────────────
+    use agc_board_nucleo_f722::local::timers::LocalTimers;
+    let _timers = LocalTimers::init(dp.TIM2, dp.TIM3, dp.TIM4, dp.TIM5);
+
+    // SAFETY: NVIC writes during single-threaded init before these ISRs fire.
+    unsafe {
+        // Priority order matches AGC Interrupt enum discriminants (ADR, plan D4):
+        //   T6RUPT (TIM5) = highest AGC priority → NVIC 0x10
+        //   T5RUPT (TIM4)                        → NVIC 0x20
+        //   T3RUPT (TIM2)                        → NVIC 0x30
+        //   T4RUPT (TIM3)                        → NVIC 0x40
+        cp.NVIC.set_priority(pac::Interrupt::TIM5, 0x10);
+        cp.NVIC.set_priority(pac::Interrupt::TIM4, 0x20);
+        cp.NVIC.set_priority(pac::Interrupt::TIM2, 0x30);
+        cp.NVIC.set_priority(pac::Interrupt::TIM3, 0x40);
+
+        cortex_m::peripheral::NVIC::unmask(pac::Interrupt::TIM5);
+        cortex_m::peripheral::NVIC::unmask(pac::Interrupt::TIM4);
+        cortex_m::peripheral::NVIC::unmask(pac::Interrupt::TIM2);
+        cortex_m::peripheral::NVIC::unmask(pac::Interrupt::TIM3);
+    }
+
+    // ── Phase-3 demo: TIM2 → periodic 1 Hz ───────────────────────────────────
+    // Override the one-shot OPM=1 set in LocalTimers::init with a periodic
+    // 1 Hz configuration so the demo fires every second without any waitlist
+    // involvement. arm_t3's one-shot semantics remain for the next milestone.
+    //
+    // PSC=10799 → 10 kHz timer clock; ARR=9999 → period = 10000/10000 = 1 s.
+    //
+    // SAFETY: TIM2 is fully configured and ISRs not yet fired (NVIC unmasked
+    // above but TIM2 CEN=0 until this block). Single-threaded init.
+    unsafe {
+        let tim2 = &*pac::TIM2::ptr();
+        tim2.cr1.modify(|_, w| w.cen().clear_bit());
+        tim2.psc.write(|w| w.psc().bits(10799)); // 10 kHz
+        tim2.arr.write(|w| w.bits(9999));         // 1 s period
+        tim2.cnt.write(|w| w.bits(0));
+        tim2.egr.write(|w| w.ug().set_bit());
+        tim2.sr.modify(|_, w| w.uif().clear_bit());
+        tim2.dier.write(|w| w.uie().set_bit());
+        // OPM=0 (periodic/auto-reload), ARPE=1, start counter.
+        tim2.cr1.write(|w| w.opm().clear_bit().arpe().set_bit().cen().set_bit());
+    }
+
+    defmt::info!("TIM2/3/4/5: AGC scheduling timers started (TIM2 demo 1 Hz periodic)");
+
     // ── FRESH START ───────────────────────────────────────────────────────────
     // SAFETY: `AGC_STATE` is a `static mut`. We obtain a raw pointer then
     // immediately reborrow as `&mut`.  Interrupt handlers access only the
-    // `BRIDGE`, `LINK`, `PLATFORM`, and `BMI088` statics — never `AGC_STATE`
-    // — so there is no aliased mutable access.
+    // `BRIDGE`, `LINK`, `PLATFORM`, `BMI088`, and `TIMER_HANDLES` statics —
+    // never `AGC_STATE` — so there is no aliased mutable access.
     let state: &mut AgcState = unsafe { &mut *core::ptr::addr_of_mut!(AGC_STATE) };
     fresh_start(state);
+
+    // ── Demo hook ──────────────────────────────────────────────────────────────
+    // Register the board-side logging callback. `__demo_tick` (dispatched as
+    // an Executive job by the T3 drain path) will call this each tick.
+    agc_core::hal::runtime::register_demo_hook(board_demo_tick);
 
     // ── Hello handshake ───────────────────────────────────────────────────────
     agc_board_nucleo_f722::with_bridge_and_link(|link, bridge| {
@@ -235,32 +305,12 @@ fn main() -> ! {
         );
     });
 
-    defmt::info!("agc: FRESH START complete, entering idle loop");
+    defmt::info!("agc: FRESH START complete, executive entering run loop");
 
-    // ── Idle loop ─────────────────────────────────────────────────────────────
-    let mut last_log_ms: u32 = 0;
-    loop {
-        pet_wdg();
-
-        let now_ms = MS_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-        if now_ms.wrapping_sub(last_log_ms) >= 1_000 {
-            last_log_ms = now_ms;
-
-            let cdu = cortex_m::interrupt::free(|cs| {
-                PLATFORM.borrow(cs).borrow().read_cdu()
-            });
-
-            defmt::info!(
-                "imu: cdu=[{}, {}, {}]  MET {} cs",
-                cdu[0],
-                cdu[1],
-                cdu[2],
-                state.time.0
-            );
-        }
-
-        cortex_m::asm::wfi();
-    }
+    // ── Executive run loop (never returns) ────────────────────────────────────
+    use agc_board_nucleo_f722::Board;
+    let mut board = Board::new();
+    Executive::run(state, &mut board)
 }
 
 // ── SysTick handler ───────────────────────────────────────────────────────────
@@ -286,7 +336,7 @@ fn USART6() {
 
 // ── TIM7 ISR: 1 kHz IMU sample loop ──────────────────────────────────────────
 //
-// Priority 8 (0x80) — lower than the future T6/T5/T3 ISRs.
+// Priority 0x80 — lower than the AGC T6/T5/T3/T4 ISRs (0x10–0x40).
 // The SPI reads are inside `interrupt::free` because the `Bmi088Driver` is
 // owned by the `BMI088` static which requires a `CriticalSection` token.
 // SPI transfer time for 7 + 8 bytes at 6.75 MHz ≈ 18 µs, well within 1 ms.
@@ -310,4 +360,47 @@ fn TIM7() {
                 .tick(gyro, accel, 0.001);
         }
     });
+}
+
+// ── AGC timer ISRs ────────────────────────────────────────────────────────────
+//
+// Each ISR: clear UIF to acknowledge the interrupt, then set the corresponding
+// pending flag. The Executive's main loop (foreground) drains the flags in
+// priority order and runs the associated action. ISRs are kept minimal — no
+// AgcState access — satisfying ADR-002 and ADR-008.
+
+/// TIM2 → T3RUPT (waitlist dispatch). Priority 0x30.
+#[interrupt]
+fn TIM2() {
+    with_timers(|h| {
+        h.tim2.sr.modify(|_, w| w.uif().clear_bit());
+    });
+    T3_PENDING.store(true, Ordering::Release);
+}
+
+/// TIM3 → T4RUPT (periodic I/O, 120 ms). Priority 0x40.
+#[interrupt]
+fn TIM3() {
+    with_timers(|h| {
+        h.tim3.sr.modify(|_, w| w.uif().clear_bit());
+    });
+    T4_PENDING.store(true, Ordering::Release);
+}
+
+/// TIM4 → T5RUPT (DAP cycle). Priority 0x20.
+#[interrupt]
+fn TIM4() {
+    with_timers(|h| {
+        h.tim4.sr.modify(|_, w| w.uif().clear_bit());
+    });
+    T5_PENDING.store(true, Ordering::Release);
+}
+
+/// TIM5 → T6RUPT (RCS jet pulse). Priority 0x10 (highest AGC priority).
+#[interrupt]
+fn TIM5() {
+    with_timers(|h| {
+        h.tim5.sr.modify(|_, w| w.uif().clear_bit());
+    });
+    T6_PENDING.store(true, Ordering::Release);
 }

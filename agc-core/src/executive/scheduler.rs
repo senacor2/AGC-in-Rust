@@ -1,4 +1,5 @@
-use crate::hal::AgcHardware;
+use crate::hal::{AgcHardware, rcs::Rcs};
+use crate::hal::runtime::{DEMO_HOOK, T3_PENDING, T3_TICK_COUNT, T4_PENDING, T5_PENDING, T6_PENDING};
 use super::job::{JobEntry, JobPriority, MAX_JOBS};
 
 /// The Executive — cooperative priority-based job scheduler.
@@ -40,28 +41,63 @@ impl Executive {
         }
     }
 
-    /// The main scheduling loop. Never returns in normal operation.
+    /// Main scheduler loop. Never returns.
     ///
-    /// Calls `hw.pet_watchdog()` on every iteration to reset the night-watchman
-    /// timer. If no jobs are ready, the loop spins (P00 idle).
-    pub fn run(&mut self, state: &mut crate::AgcState, hw: &mut impl AgcHardware) -> ! {
+    /// Drains the four AGC interrupt flags (T3/T4/T5/T6) in priority order,
+    /// then dispatches the highest-priority ready job. The watchdog is petted
+    /// at the top of every iteration so a hung job triggers a hardware restart
+    /// (night-watchman, ADR-009).
+    ///
+    /// Signature is a free associated function (not `&mut self`) so the caller
+    /// can pass the full `&mut AgcState` — `executive` lives inside `AgcState`,
+    /// and the previous `&mut self` receiver would have caused a split-borrow
+    /// conflict when dispatching a job that mutates other fields of `state`.
+    pub fn run<H: AgcHardware>(state: &mut crate::AgcState, hw: &mut H) -> ! {
+        use core::sync::atomic::Ordering;
+
         loop {
             hw.pet_watchdog();
 
-            if let Some(idx) = self.find_highest_priority_job() {
-                let entry = self.jobs[idx].entry;
-                self.current_priority = self.jobs[idx].priority;
+            // Drain ISR-posted flags in AGC priority order
+            // (lowest Interrupt discriminant = highest priority — see interrupts.rs).
+
+            // T6RUPT: RCS jet quench (highest AGC priority).
+            if T6_PENDING.swap(false, Ordering::Acquire) {
+                hw.rcs().quench_all();
+            }
+
+            // T5RUPT: DAP cycle wiring arrives in the next milestone.
+            if T5_PENDING.swap(false, Ordering::Acquire) {
+                // Placeholder — DAP/SERVICER wiring deferred.
+            }
+
+            // T3RUPT: For the Phase-3 demo, create a low-priority job that
+            // invokes the board-registered demo hook. Real Waitlist dispatch
+            // replaces this in the T3RUPT milestone.
+            if T3_PENDING.swap(false, Ordering::Acquire) {
+                T3_TICK_COUNT.fetch_add(1, Ordering::Relaxed);
+                let _ = state.executive.create_job(1, __demo_tick, 0, false);
+            }
+
+            // T4RUPT: periodic I/O wiring (DSKY refresh, gyro drift) deferred.
+            if T4_PENDING.swap(false, Ordering::Acquire) {
+                // Placeholder — T4 periodic I/O wiring deferred.
+            }
+
+            // Dispatch one job per iteration.
+            if let Some(idx) = state.executive.find_highest_priority_job() {
+                let entry = state.executive.jobs[idx].entry;
+                state.executive.current_priority = state.executive.jobs[idx].priority;
                 (entry)(state);
-                // Job returned normally — clear the slot.
-                self.jobs[idx] = JobEntry::EMPTY;
-                self.current_priority = 0;
+                state.executive.jobs[idx] = JobEntry::EMPTY;
+                state.executive.current_priority = 0;
             }
         }
     }
 
     /// Scan for the highest-priority occupied slot.
     /// Tie-breaking: on equal priority, the lower index wins (spec §5.1).
-    fn find_highest_priority_job(&self) -> Option<usize> {
+    pub(crate) fn find_highest_priority_job(&self) -> Option<usize> {
         let mut best: Option<usize> = None;
         let mut best_pri: JobPriority = 0;
         for (i, j) in self.jobs.iter().enumerate() {
@@ -76,6 +112,28 @@ impl Executive {
     /// Read the priority of the currently dispatched job (0 if idle).
     pub fn current_priority(&self) -> JobPriority {
         self.current_priority
+    }
+}
+
+/// Phase-3 demo job dispatched by the T3 drain path in `Executive::run`.
+///
+/// Reads the board-registered `DEMO_HOOK` function pointer and calls it if
+/// non-null. This keeps agc-core free of `defmt` and board-specific imports:
+/// the logging concern belongs in the board crate, not here.
+///
+/// Hidden from rustdoc; will be removed when real T3RUPT/Waitlist wiring
+/// replaces the demo in the next milestone.
+#[doc(hidden)]
+pub fn __demo_tick(state: &mut crate::AgcState) {
+    use core::sync::atomic::Ordering;
+    let raw = DEMO_HOOK.load(Ordering::Acquire);
+    if !raw.is_null() {
+        // SAFETY: `DEMO_HOOK` is only written by `register_demo_hook`, which
+        // requires the caller to pass a `fn(&mut AgcState)`. We transmute back
+        // to that type here. Function pointers on Cortex-M live in flash and
+        // cannot be invalidated; the pointer remains valid for program lifetime.
+        let f: fn(&mut crate::AgcState) = unsafe { core::mem::transmute(raw) };
+        f(state);
     }
 }
 

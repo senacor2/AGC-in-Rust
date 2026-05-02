@@ -25,7 +25,7 @@ use crate::AgcState;
 ///
 /// Zeroes everything: navigation state, scheduler, alarms, display, flags.
 /// Sets major mode to P00. The caller must enter the Executive loop
-/// (`state.executive.run(...)`) after this returns.
+/// (`Executive::run(state, hw)`) after this returns.
 pub fn fresh_start(state: &mut AgcState) {
     // Navigation state — zeroed (no valid data after power-on).
     state.csm_state = StateVector::ZERO;

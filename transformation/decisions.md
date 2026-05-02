@@ -243,6 +243,56 @@ Mitigation:
 
 ---
 
+## ADR-017: Executive runs on bare metal via foreground drain of ISR-posted atomic flags
+
+**Date**: 2026-05-02 | **Status**: Accepted
+
+**Decision**: The AGC's four scheduling interrupts (T3RUPT, T4RUPT, T5RUPT, T6RUPT) are
+serviced by four minimal ISRs that each: (1) clear the timer's UIF flag, and (2) set a
+`static AtomicBool` in `agc-core::hal::runtime`. The `Executive::run` loop drains these
+flags in priority order (T6 → T5 → T3 → T4) between job dispatches. `AgcState` is only
+ever mutated by foreground code.
+
+**Motivation**: The original signature `pub fn run(&mut self, state: &mut AgcState, ...)` caused a
+split-borrow conflict at the call site: `state.executive` is a field of `AgcState`, so holding
+`&mut state.executive` (the `&mut self` receiver) while also passing `&mut state` (required by
+every dispatched job) aliases `state`. Refactoring `run` to a free associated function
+(`pub fn run<H: AgcHardware>(state: &mut AgcState, hw: &mut H) -> !`) eliminates the conflict by
+taking `state` as an ordinary argument — the borrow checker sees `state.executive.*` as a brief
+internal borrow within a single iteration, with no overlap with the job dispatch call.
+
+**ISR design**: Putting `AgcState` mutations inside ISRs would require wrapping `AgcState` in a
+`Mutex<RefCell<T>>`, preventing the clean `&mut` threading that is the core discipline of ADR-002.
+Short ISRs that set `AtomicBool` flags avoid this: they execute in ≤ 5 µs, release the flag with
+`Ordering::Release`, and return immediately. The foreground loop drains flags with
+`swap(false, Acquire)`, forming a correct Release/Acquire pair.
+
+**Priority ordering**: The drain loop checks flags lowest-discriminant-first (T6=1, T5=2, T3=3,
+T4=4) to match the original AGC's interrupt priority. NVIC hardware priorities (0x10–0x40) ensure
+ISRs can also preempt each other at the same relative order.
+
+**Latency**: One Executive-loop iteration elapses between an ISR posting a flag and its foreground
+action executing. At > 10 kHz idle loop rate this is ≤ 100 µs — well below the T6 demand of
+0.625 ms and the T3 minimum of 10 ms.
+
+**AtomicBool vs `extern "Rust"` weak-link**: The original plan described a weak-link pattern
+(each `agc_drain_tN()` function implemented by the board crate). AtomicBool flags in
+`agc-core::hal::runtime` are simpler: they compile identically on host and bare metal, require no
+link-time glue, and are directly readable in unit tests without a mock board crate.
+
+**References**: ADR-002 (single `AgcState`), ADR-008 (`Mutex<RefCell<T>>` for ISR-shared state),
+ADR-010 (PAC-sourced `#[interrupt]`).
+
+**Affected files**:
+- `agc-core/src/executive/scheduler.rs` — `run` refactored to free associated function; drain loop added
+- `agc-core/src/hal/runtime.rs` — new module: T3/T4/T5/T6 `AtomicBool` flags, `T3_TICK_COUNT`, `DEMO_HOOK`
+- `agc-core/src/hal/mod.rs` — `pub mod runtime` added
+- `agc-board-nucleo-f722/src/local/timers.rs` — full rewrite with real TIM2/3/4/5 register access
+- `agc-board-nucleo-f722/src/lib.rs` — `TimerHandles`, `TIMER_HANDLES`, `with_timers` added
+- `agc-board-nucleo-f722/src/bin/agc.rs` — TIM ISRs, NVIC init, demo hook, `Executive::run` entry
+
+---
+
 ## Open / Proposed ADRs
 
 | ID | Topic | Status |

@@ -626,6 +626,36 @@ Read-only nouns (no commit handler needed): N40, N44, N45, N50, N63, N75, N76, N
 - [ ] **Phase 3 — Sequence gap detection**: Add application-level retransmission for safety-critical messages (SPS enable, RCS fire)
 - [ ] **Phase 3 — T4RUPT wiring**: DSKY display row sequencing (20 ms hold per row) driven by TIM4 at 120 ms base
 
+### Hardware Port — Phase 3: Executive on bare metal via timer interrupts
+
+**Milestone**: `agc-board-nucleo-f722` v0.3.0 (2026-05-02)
+
+#### Completed (this milestone)
+
+- [x] agc-core: refactor `Executive::run` to free associated function (split-borrow fix)
+- [x] agc-core: add `hal::runtime` module with T3/T4/T5/T6 `AtomicBool` pending flags
+- [x] agc-core: add `T3_TICK_COUNT` counter and `DEMO_HOOK` callback pointer to `hal::runtime`
+- [x] agc-core: `__demo_tick` — minimal demo job that calls board-registered hook (no `defmt` in agc-core)
+- [x] board: full `Timers` trait impl on TIM2 (T3, one-shot), TIM3 (T4, periodic 120 ms), TIM4 (T5, one-shot), TIM5 (T6, one-shot)
+- [x] board: `TimerHandles` struct + `TIMER_HANDLES` static + `with_timers` helper in `lib.rs`
+- [x] board: `#[interrupt]` ISRs for TIM2/3/4/5 setting the pending flags (ADR-010)
+- [x] board: NVIC priorities matching the AGC `Interrupt` enum (T6=0x10, T5=0x20, T3=0x30, T4=0x40)
+- [x] board: `bin/agc.rs` — TIM2 reconfigured to 1 Hz periodic for demo; demo hook registered; idle loop replaced with `Executive::run`
+- [x] ADR-017 recorded
+- [x] agc-core tests still pass: 397 passed, 0 failed, 0 ignored
+- [x] Bare-metal build clean: `cargo build --target thumbv7em-none-eabihf -p agc-board-nucleo-f722`
+- [x] Workspace build (excluding board crate) clean
+- [x] `agc-imu-platform` tests still pass (14/14)
+- [x] `agc-protocol` tests still pass (25/25)
+
+#### Follow-on items (next milestone)
+
+- [ ] T5RUPT path: read CDU/PIPA, run dap_step, fire jets, arm T6
+- [ ] T4RUPT path: advance MET, gyro drift compensation, DSKY refresh
+- [ ] T3RUPT path: replace demo with real `Waitlist::dispatch`
+- [ ] T6RUPT path: real RCS quench (foreground drain path calls `quench_all`; flight code doesn't fire jets yet)
+- [ ] Hardware-in-the-loop verification (manual `probe-rs cargo run` — expected: "tick #N MET=0 cs" once per second)
+
 ## Completed
 
 - [x] Architecture — `docs/architecture.md`
