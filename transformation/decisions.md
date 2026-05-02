@@ -228,7 +228,9 @@ Mitigation:
 
 **Date**: 2026-05-02 | **Status**: Accepted
 
-**Decision**: Use the Bosch BMI088 shuttle board (3.3 V, SPI) as the local IMU on the Nucleo-F722ZE. Map its strapdown samples to the AGC's gimballed-platform `Imu` trait by emulating a virtual stable platform inside the HAL — quaternion-integrated attitude, body-frame-to-platform-frame accelerometer rotation, PIPA pulse accumulation. The emulation lives in the new `agc-imu-platform` crate (no_std, host-tested).
+**Decision**: Use a Bosch BMI088 IMU (3.3 V, SPI) as the local IMU on the Nucleo-F722ZE; the bench reference module is the **Adafruit BMI088 breakout (#4836)** because its 2.54 mm headers and on-board 3.3 V regulator make breadboarding straightforward. The Bosch shuttle board is an interchangeable alternative — same silicon, same registers, same Rust driver — but requires a 1.27 mm pitch adapter.
+
+Map the BMI088's strapdown samples to the AGC's gimballed-platform `Imu` trait by emulating a virtual stable platform inside the HAL — quaternion-integrated attitude, body-frame-to-platform-frame accelerometer rotation, PIPA pulse accumulation. The emulation lives in the new `agc-imu-platform` crate (no_std, host-tested).
 
 **Rationale**: The Block-2 AGC's gimballed inertial platform is not commercially available. Modern strapdown IMUs are. The trait can either change (touching every flight-software call site and breaking parity with the AGC source) or the HAL can absorb the translation. The latter is correct because the AGC's gimbal abstractions encode physically-meaningful invariants (stable-member frame, CDU drive pulses, PIPA scale) that should remain visible to flight code regardless of how they are produced. The translation is small (~250 LOC of well-known quaternion math) and host-testable.
 

@@ -4,6 +4,10 @@
 //! accelerometer, PB12 for the gyroscope).  Each BMI088 die has its own
 //! CS line and register map.
 //!
+//! Bench-tested against the Adafruit BMI088 breakout (#4836). The Bosch
+//! shuttle board uses the same silicon and is wire-compatible with this
+//! driver via a 1.27→2.54 mm header adapter.
+//!
 //! ## SPI protocol notes
 //! - Mode 0, MSB first, 8-bit words.
 //! - Accel reads: assert CS_ACCEL, send address byte (bit 7 = 1 for read),
