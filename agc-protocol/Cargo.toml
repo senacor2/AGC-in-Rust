@@ -1,0 +1,8 @@
+[package]
+name = "agc-protocol"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "agc_protocol"
+path = "src/lib.rs"

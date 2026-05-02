@@ -157,9 +157,75 @@ This file is the index and status tracker.
 
 ---
 
+---
+
+## ADR-011: Hardware Target — Nucleo-F722ZE (Cortex-M7 @ 216 MHz)
+
+**Date**: 2026-05-02 | **Status**: Accepted
+
+**Decision**: Target the STM32F722ZE on the Nucleo-F722ZE development board.
+All bare-metal firmware lives in the `agc-board-nucleo-f722` crate;
+the target triple is `thumbv7em-none-eabihf`.
+
+**Rationale**:
+- The architecture.md §14.1 mandate requires hardware `f64` (FPU).  The
+  Cortex-M7 with double-precision FPU (STM32F7xx) meets this requirement
+  directly; the Cortex-M4F (STM32F3/F4) has a single-precision FPU only
+  and would require soft-float `f64`, violating the DAP timing budget.
+- The STM32F722ZE provides 512 KB flash / 256 KB RAM — sufficient for
+  the full `AgcState` (≈ 4 KB) plus the Executive, Waitlist, and navigation
+  tables.
+- The Nucleo-F722ZE carrier board exposes all required UART pins and has
+  a built-in ST-LINK v3 probe, simplifying the development workflow.
+
+**Trade-off**: Nucleo-F722ZE is not radiation-hardened.  For a real flight
+computer, a radiation-tolerant part (e.g. STM32H7A3 with ECC SRAM or a
+dedicated RHFL part) would be selected.  This is out of scope for this
+research implementation.
+
+**Rejected alternatives**:
+- STM32F405 / F4 Discovery: Cortex-M4F, single-precision FPU only.
+- STM32F3 Discovery: Cortex-M4F with FPU but only 64 KB RAM.
+- Generic qemu-cortex-m: no persistent state, unsuitable for integration tests.
+
+---
+
+## ADR-015: External Peripheral Bridge over UART
+
+**Date**: 2026-05-02 | **Status**: Accepted
+
+**Decision**: DSKY, sextant/optics, SPS engine, and RCS jets are located on a
+satellite "D1 mini" MCU connected to the Nucleo-F722ZE via USART6 at 460800
+baud using the `agc-protocol` framing.  The AGC firmware treats them as remote
+peripherals accessed through the bridge link.
+
+**Rationale**:
+- Keeps the AGC firmware focused on guidance and navigation.
+- The DSKY display relay matrix (20 ms per row) and RCS jet driver circuitry
+  require dedicated GPIO/PWM that the D1 mini handles without interfering with
+  the AGC scheduling loop.
+- Using `agc-protocol` (already implemented and tested) avoids a custom
+  wire protocol and enables host-side simulation with the same code path.
+- USART6 on PC6/PC7 is available on the Nucleo-F722ZE without conflicting
+  with the ST-LINK UART (USART3 on PD8/PD9).
+
+**Trade-off**: A byte equalling `0xFE` (STX) in any payload field causes the
+current frame to be dropped and the decoder to resynchronise on the next STX.
+Mitigation:
+1. CRC-16 on every frame detects corruption and partial drops.
+2. The bridge firmware implements a hardware-side 10 ms jet-quench timeout
+   independent of the link, so a dropped `RcsQuenchAll` does not leave jets
+   energised.
+3. For display updates the loss of a single frame is visually imperceptible.
+4. A future milestone may add sequence-number gap detection and
+   application-level retransmission for safety-critical messages.
+
+**Wire details**: See `docs/external-peripheral-protocol.md`.
+
+---
+
 ## Open / Proposed ADRs
 
 | ID | Topic | Status |
 |---|---|---|
-| ADR-011 | Specific MCU target (STM32F405 vs STM32F7 vs other) | Proposed — needs hardware decision |
 | ADR-012 | RTIC vs hand-rolled Executive for interrupt scheduling | Proposed — see `docs/optimization.md §1` |

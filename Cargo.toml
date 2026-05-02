@@ -1,5 +1,5 @@
 [workspace]
-members = ["agc-core", "agc-sim", "agc-test"]
+members = ["agc-core", "agc-sim", "agc-test", "agc-protocol", "agc-board-nucleo-f722"]
 resolver = "2"
 
 [profile.release]

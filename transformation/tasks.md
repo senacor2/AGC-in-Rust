@@ -566,6 +566,44 @@ Read-only nouns (no commit handler needed): N40, N44, N45, N50, N63, N75, N76, N
     status LED or a UART heartbeat) confirms the Executive/Waitlist
     plumbing is live on real hardware.
 
+### Hardware Port — Phase 1: Bridge & HAL Crate
+
+**Milestone**: `agc-board-nucleo-f722` v0.1.0 (2026-05-02)
+
+#### Completed (this milestone)
+
+- [x] **ADR-011**: Hardware target decision — Nucleo-F722ZE (Cortex-M7, hardware f64 FPU)
+- [x] **ADR-015**: External peripheral bridge over UART decision
+- [x] `agc-board-nucleo-f722` crate scaffolding (Cargo.toml, memory.x, build.rs, .cargo/config.toml)
+- [x] `state.rs` — `BridgeState` with `key_queue`, `optics_cdu_*`, `uplink_queue`, `tx_seq`, heartbeat field
+- [x] `link/uart.rs` — `UartLink` owning USART6; `init` (PC6/PC7 AF8, 460800 baud, RXNEIE), `send` (blocking TX), `poll_rx` (non-blocking RX → `FrameDecoder`), `free` (C-FREE)
+- [x] `link/dispatch.rs` — `handle(msg, cs)` dispatching inbound messages into `BridgeState`; EXTI0/EXTI1 software-pend for KeyRupt1/UplinkRupt
+- [x] `remote/dsky.rs` — `RemoteDsky` impl `Dsky` (write_row, clear_row, set_lamp, set_flash, read_key)
+- [x] `remote/optics.rs` — `RemoteOptics` impl `Optics` (trunnion/shaft read from cache, drive via link, mark_pressed sticky flag)
+- [x] `remote/engine.rs` — `RemoteEngine` impl `Engine` (sps_enable, sps_gimbal, thrust_on from cache)
+- [x] `remote/rcs.rs` — `RemoteRcs` impl `Rcs` (fire_sm_jets, fire_cm_jets, quench_all)
+- [x] `remote/uplink.rs` — `RemoteUplink` impl `Uplink` (read_word from queue)
+- [x] `remote/telemetry.rs` — `RemoteTelemetry` impl `Telemetry` (send_word via link)
+- [x] `local/imu.rs` — `LocalImu` stub; defmt one-time warning on first `read_pipa`
+- [x] `local/timers.rs` — `LocalTimers` stub; `mission_time` from SysTick `MS_TICKS` atomic; defmt warnings for arm/disarm stubs
+- [x] `local/watchdog.rs` — `Watchdog` wrapping IWDG at ≈1.5 s timeout; `init` + `pet`
+- [x] `lib.rs` — `Board` struct + `AgcHardware` impl; `BRIDGE`/`LINK` global statics; `with_bridge_and_link` helper; watchdog-shim
+- [x] `bin/agc.rs` — `#[entry]` with 216 MHz clocks, USART6 init, IWDG, SysTick 1 kHz, FRESH START, HelloAck, idle loop
+- [x] `docs/external-peripheral-protocol.md` — frame format, message table, STX caveat, heartbeat policy, jet-quench semantics, bridge quickref
+- [x] Bare-metal build clean: `cargo build --target thumbv7em-none-eabihf -p agc-board-nucleo-f722`
+- [x] `agc-protocol` tests still pass (25/25)
+- [x] Workspace build (excluding board crate) still clean
+
+#### Deferred to follow-on milestones
+
+- [ ] **Phase 2 — Timer wiring**: Wire TIM3/TIM5/TIM6 to T3RUPT/T5RUPT/T6RUPT NVIC lines; replace `LocalTimers` stubs with real MCU timer peripherals
+- [ ] **Phase 2 — IMU driver**: Add SPI driver for ICM-42688-P (or equivalent) IMU breakout; replace `LocalImu` stub with real PIPA/CDU readings
+- [ ] **Phase 2 — Executive loop**: Enter `state.executive.run(...)` after fresh_start once timer wiring is complete
+- [ ] **Phase 2 — Bridge firmware**: Write D1 mini firmware (MicroPython or C) implementing the bridge protocol quickref in `docs/external-peripheral-protocol.md`
+- [ ] **Phase 3 — DMA TX**: Replace blocking `UartLink::send` with DMA-backed TX ring buffer (current blocking TX ≈ 5.5 ms max is acceptable for Phase 1)
+- [ ] **Phase 3 — Sequence gap detection**: Add application-level retransmission for safety-critical messages (SPS enable, RCS fire)
+- [ ] **Phase 3 — T4RUPT wiring**: DSKY display row sequencing (20 ms hold per row) driven by TIM4 at 120 ms base
+
 ## Completed
 
 - [x] Architecture — `docs/architecture.md`
