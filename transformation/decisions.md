@@ -295,6 +295,33 @@ ADR-010 (PAC-sourced `#[interrupt]`).
 
 ---
 
+## ADR-018: Phase-5 Flight-Code Wiring Strategy
+
+**Date**: 2026-05-02 | **Status**: Accepted
+
+**Decision**: Wire the real flight code through the ISR-posted AtomicBool flags set up in Phase 3 (ADR-017). The `Executive::run` loop drains the flags in priority order and performs the following work per flag:
+
+- **T6** — `hw.rcs().quench_all()` (jet pulse terminated by hardware timer).
+- **T5** — No flight code uses T5 directly in this port; placeholder retained.
+- **T3** — Pre-read CDU into `state.current_cdu`, call `state.waitlist.pop_task()`, invoke the popped task, re-arm T3 with the next delta.
+- **T4** — Advance MET by 12 cs, compute and apply gyro drift compensation via `compute_gyro_drift` + `hw.imu().torque_gyro`.
+
+After the ISR drain loop, each iteration also: drains the DSKY key queue into `services::v_n::feed_key`, dispatches one Executive job, translates `rcs_commanded_jets`/`rcs_commanded_pulse_cs` staging fields to `hw.rcs().fire_sm_jets` + `hw.timers().arm_t6`, and translates `engine_thrusting`/`sps_gimbal_cmd` to `hw.engine().sps_enable`/`sps_gimbal`. T3 is re-armed lazily: the last-armed value is tracked in a local `Option<u16>`; `arm_t3` register writes are skipped when the waitlist front hasn't changed.
+
+**Why DAP runs on the waitlist (T3) rather than T5**: `dap_step` is a `fn(&mut AgcState)` Waitlist task that reschedules itself at `DAP_PERIOD_CS = 10 cs` on every invocation (ADR-017, Strategy D). T5 therefore has no flight code consumer in this port. Keeping DAP on the waitlist means T5 can be repurposed or retired in a future milestone without touching any DAP code.
+
+**Why PIPA/SERVICER stays out of scope**: `hw.imu().read_pipa()` is a destructive read — the hardware counters are zeroed on access. The SERVICER must accumulate PIPA counts over a precise 2-second window with software integration glue (`services/average_g.rs`). The cadence, accumulator reset, and integration ordering are a separate design concern that must be coordinated with the SERVICER cycle. Putting a destructive read in the T3 path with no accumulator would corrupt navigation.
+
+**Why DSKY display emission stays out of scope**: `services::pinball::decode_dsky` produces a `DskyFrame` (segment bitmasks), but the mapping from `DskyFrame` rows to `hw.dsky().write_row(row, data)` byte encoding is undefined: the row index convention, the GPIO bit ordering on the bridge, and the 20 ms relay hold sequencing are all unspecified. This is a separate milestone with its own design document.
+
+**Affected files**:
+- `agc-core/src/executive/scheduler.rs` — `run` rewritten; `process_rcs_staging`, `process_engine_staging` helpers added; HAL trait imports added.
+- `agc-core/src/executive/waitlist.rs` — `front_delta()` and `pop_task()` added.
+- `agc-core/src/hal/runtime.rs` — `T3_TICK_COUNT`, `DEMO_HOOK`, `register_demo_hook` removed.
+- `agc-board-nucleo-f722/src/bin/agc.rs` — `board_demo_tick` removed; TIM2 periodic override removed; DAP bootstrap with `dap_init(AttitudeHold)` added.
+
+---
+
 ## Open / Proposed ADRs
 
 | ID | Topic | Status |

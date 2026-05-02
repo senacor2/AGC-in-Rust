@@ -35,6 +35,7 @@ pub struct Waitlist {
 }
 
 impl Waitlist {
+    #[allow(clippy::new_without_default)]
     pub const fn new() -> Self {
         Self {
             entries: [None; MAX_WAITLIST_TASKS],
@@ -152,6 +153,45 @@ impl Waitlist {
             None
         }
     }
+
+    /// Centiseconds remaining until the earliest pending task fires, or `None` if empty.
+    ///
+    /// The returned value is the first entry's `delta_time`, which is already the
+    /// raw T3 reload count because the list head is always measured from "now".
+    pub fn front_delta(&self) -> Option<u16> {
+        self.entries[0].as_ref().map(|e| e.delta_time)
+    }
+
+    /// Remove the earliest pending task from the list and return it together
+    /// with the next entry's delta (for T3 reload), without calling the task.
+    ///
+    /// Used by `Executive::run` to avoid the split-borrow conflict that arises
+    /// when `dispatch` is called as `state.waitlist.dispatch(state)`: borrowing
+    /// the `waitlist` field mutably and then passing `&mut state` is rejected by
+    /// the borrow checker. Callers pop the task here, then call it with `state`.
+    ///
+    /// Returns `None` if the list is empty.
+    pub fn pop_task(&mut self) -> Option<(fn(&mut crate::AgcState), Option<u16>)> {
+        if self.count == 0 {
+            return None;
+        }
+
+        let entry = self.entries[0].take().unwrap();
+
+        for i in 0..self.count - 1 {
+            self.entries[i] = self.entries[i + 1];
+        }
+        self.entries[self.count - 1] = None;
+        self.count -= 1;
+
+        let next_delta = if self.count > 0 {
+            self.entries[0].map(|e| e.delta_time)
+        } else {
+            None
+        };
+
+        Some((entry.task, next_delta))
+    }
 }
 
 #[cfg(test)]
@@ -161,11 +201,22 @@ mod tests {
 
     static CALL_LOG: AtomicU8 = AtomicU8::new(0);
 
-    fn task_f(state: &mut crate::AgcState) { let _ = state; CALL_LOG.fetch_add(1, Ordering::Relaxed); }
-    fn task_g(state: &mut crate::AgcState) { let _ = state; CALL_LOG.fetch_add(10, Ordering::Relaxed); }
-    fn task_h(state: &mut crate::AgcState) { let _ = state; CALL_LOG.fetch_add(100, Ordering::Relaxed); }
+    fn task_f(state: &mut crate::AgcState) {
+        let _ = state;
+        CALL_LOG.fetch_add(1, Ordering::Relaxed);
+    }
+    fn task_g(state: &mut crate::AgcState) {
+        let _ = state;
+        CALL_LOG.fetch_add(10, Ordering::Relaxed);
+    }
+    fn task_h(state: &mut crate::AgcState) {
+        let _ = state;
+        CALL_LOG.fetch_add(100, Ordering::Relaxed);
+    }
 
-    fn reset_log() { CALL_LOG.store(0, Ordering::Relaxed); }
+    fn reset_log() {
+        CALL_LOG.store(0, Ordering::Relaxed);
+    }
 
     // TC-SC-1: schedule into empty list
     #[test]
@@ -197,8 +248,8 @@ mod tests {
         let result = wl.schedule(100, task_g);
         assert_eq!(result, ScheduleResult::Ok);
         assert_eq!(wl.len(), 2);
-        assert_eq!(wl.peek(0).unwrap().delta_time, 50);  // f at 50
-        assert_eq!(wl.peek(1).unwrap().delta_time, 50);  // g at 50+50=100
+        assert_eq!(wl.peek(0).unwrap().delta_time, 50); // f at 50
+        assert_eq!(wl.peek(1).unwrap().delta_time, 50); // g at 50+50=100
     }
 
     // TC-SC-4: schedule when full
@@ -222,8 +273,8 @@ mod tests {
         assert_eq!(result, ScheduleResult::Ok);
         assert_eq!(wl.len(), 3);
         assert_eq!(wl.peek(0).unwrap().delta_time, 100); // f at 100
-        assert_eq!(wl.peek(1).unwrap().delta_time, 50);  // h at 100+50=150
-        assert_eq!(wl.peek(2).unwrap().delta_time, 50);  // g at 150+50=200
+        assert_eq!(wl.peek(1).unwrap().delta_time, 50); // h at 100+50=150
+        assert_eq!(wl.peek(2).unwrap().delta_time, 50); // g at 150+50=200
     }
 
     // TC-DS-1: dispatch single entry
@@ -260,5 +311,29 @@ mod tests {
         let mut state = crate::AgcState::new();
         let next = wl.dispatch(&mut state);
         assert_eq!(next, None);
+    }
+
+    // TC-FD-1: front_delta on empty list returns None
+    #[test]
+    fn tc_front_delta_empty() {
+        let wl = Waitlist::new();
+        assert_eq!(wl.front_delta(), None);
+    }
+
+    // TC-FD-2: front_delta with a single entry returns that entry's delta
+    #[test]
+    fn tc_front_delta_single() {
+        let mut wl = Waitlist::new();
+        wl.schedule(42, task_f);
+        assert_eq!(wl.front_delta(), Some(42));
+    }
+
+    // TC-FD-3: front_delta with multiple entries returns the earliest delta
+    #[test]
+    fn tc_front_delta_multi() {
+        let mut wl = Waitlist::new();
+        wl.schedule(50, task_f); // delta[0] = 50
+        wl.schedule(150, task_g); // delta[1] = 100 (relative to first)
+        assert_eq!(wl.front_delta(), Some(50));
     }
 }

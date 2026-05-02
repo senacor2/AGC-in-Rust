@@ -8,11 +8,10 @@
 //!   5. TIM7 configured at 1 kHz; NVIC unmasked at priority 0x80.
 //!   6. SysTick configured at 1 kHz.
 //!   7. TIM2/3/4/5 initialised; NVIC priorities set and unmasked.
-//!   8. TIM2 reconfigured to 1 Hz periodic for the Phase-3 demo.
-//!   9. Demo hook registered with agc-core::hal::runtime.
-//!  10. `AgcState::new()` placed in `static mut`; `fresh_start` runs.
-//!  11. `HelloAck` sent to confirm the bridge link.
-//!  12. `Executive::run` entered — never returns.
+//!   8. `AgcState::new()` placed in `static mut`; `fresh_start` runs.
+//!   9. CDU pre-read; DAP brought up in AttitudeHold mode.
+//!  10. `HelloAck` sent to confirm the bridge link.
+//!  11. `Executive::run` entered — never returns.
 
 #![no_std]
 #![no_main]
@@ -35,7 +34,7 @@ use agc_board_nucleo_f722::{
 };
 use agc_core::{
     executive::scheduler::Executive,
-    hal::runtime::{T3_PENDING, T3_TICK_COUNT, T4_PENDING, T5_PENDING, T6_PENDING},
+    hal::runtime::{T3_PENDING, T4_PENDING, T5_PENDING, T6_PENDING},
     services::fresh_start::fresh_start,
     AgcState,
 };
@@ -56,18 +55,6 @@ fn pet_wdg() {
             wdg.pet();
         }
     });
-}
-
-// ── Board-side demo tick callback ─────────────────────────────────────────────
-//
-// Registered with agc-core::hal::runtime::register_demo_hook at boot.
-// Called by `__demo_tick` (dispatched as an Executive job each time T3 fires).
-// Reads T3_TICK_COUNT (incremented by the drain loop before the job is created)
-// and emits a defmt log line. agc-core itself never imports defmt.
-
-fn board_demo_tick(state: &mut AgcState) {
-    let ticks = T3_TICK_COUNT.load(Ordering::Relaxed);
-    defmt::info!("agc: tick #{} MET={} cs", ticks, state.time.0);
 }
 
 // ── Entry ─────────────────────────────────────────────────────────────────────
@@ -256,29 +243,7 @@ fn main() -> ! {
         cortex_m::peripheral::NVIC::unmask(pac::Interrupt::TIM3);
     }
 
-    // ── Phase-3 demo: TIM2 → periodic 1 Hz ───────────────────────────────────
-    // Override the one-shot OPM=1 set in LocalTimers::init with a periodic
-    // 1 Hz configuration so the demo fires every second without any waitlist
-    // involvement. arm_t3's one-shot semantics remain for the next milestone.
-    //
-    // PSC=10799 → 10 kHz timer clock; ARR=9999 → period = 10000/10000 = 1 s.
-    //
-    // SAFETY: TIM2 is fully configured and ISRs not yet fired (NVIC unmasked
-    // above but TIM2 CEN=0 until this block). Single-threaded init.
-    unsafe {
-        let tim2 = &*pac::TIM2::ptr();
-        tim2.cr1.modify(|_, w| w.cen().clear_bit());
-        tim2.psc.write(|w| w.psc().bits(10799)); // 10 kHz
-        tim2.arr.write(|w| w.bits(9999));         // 1 s period
-        tim2.cnt.write(|w| w.bits(0));
-        tim2.egr.write(|w| w.ug().set_bit());
-        tim2.sr.modify(|_, w| w.uif().clear_bit());
-        tim2.dier.write(|w| w.uie().set_bit());
-        // OPM=0 (periodic/auto-reload), ARPE=1, start counter.
-        tim2.cr1.write(|w| w.opm().clear_bit().arpe().set_bit().cen().set_bit());
-    }
-
-    defmt::info!("TIM2/3/4/5: AGC scheduling timers started (TIM2 demo 1 Hz periodic)");
+    defmt::info!("TIM2/3/4/5: AGC scheduling timers started (TIM2 one-shot, arm_t3 controlled)");
 
     // ── FRESH START ───────────────────────────────────────────────────────────
     // SAFETY: `AGC_STATE` is a `static mut`. We obtain a raw pointer then
@@ -288,10 +253,15 @@ fn main() -> ! {
     let state: &mut AgcState = unsafe { &mut *core::ptr::addr_of_mut!(AGC_STATE) };
     fresh_start(state);
 
-    // ── Demo hook ──────────────────────────────────────────────────────────────
-    // Register the board-side logging callback. `__demo_tick` (dispatched as
-    // an Executive job by the T3 drain path) will call this each tick.
-    agc_core::hal::runtime::register_demo_hook(board_demo_tick);
+    // ── DAP bootstrap ─────────────────────────────────────────────────────────
+    // Read CDU once so dap_init has a valid prev_cdu baseline (its contract).
+    // Board is a zero-sized type — constructing a temporary here is a no-op.
+    {
+        use agc_board_nucleo_f722::Board;
+        use agc_core::hal::imu::Imu;
+        state.current_cdu = Board::new().imu.read_cdu();
+    }
+    agc_core::control::dap::dap_init(state, agc_core::control::dap::DapMode::AttitudeHold);
 
     // ── Hello handshake ───────────────────────────────────────────────────────
     agc_board_nucleo_f722::with_bridge_and_link(|link, bridge| {
@@ -305,7 +275,7 @@ fn main() -> ! {
         );
     });
 
-    defmt::info!("agc: FRESH START complete, executive entering run loop");
+    defmt::info!("agc: FRESH START complete, DAP active, executive entering run loop");
 
     // ── Executive run loop (never returns) ────────────────────────────────────
     use agc_board_nucleo_f722::Board;

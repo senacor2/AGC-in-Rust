@@ -689,6 +689,29 @@ Read-only nouns (no commit handler needed): N40, N44, N45, N50, N63, N75, N76, N
 - [ ] Real optics CDU encoder input (replace synthetic drift)
 - [ ] Application-level retransmission for safety-critical frames (SPS enable, RCS fire)
 
+### Milestone 8 — Phase 5: Flight-Code Wiring (ISR Flags → Real Subsystems)
+
+**Completed 2026-05-02.** Wires the DAP, MET, gyro drift, RCS fire/quench, and DSKY
+keystrokes through the four AtomicBool ISR flags set up in Phase 3. After this
+milestone the AGC runs DAP every 10 ms on real silicon, jets fire and quench through
+the bridge, MET advances on T4, and V/N keystrokes from the Pico bridge drive the
+state machine.
+
+- [x] `Waitlist::front_delta()` helper: returns centiseconds to the earliest pending task, or `None` if empty. Three unit tests (tc_front_delta_empty / single / multi).
+- [x] `Waitlist::pop_task()` helper: pops the front task without calling it, returning the task function pointer and next delta. Avoids the split-borrow conflict in `Executive::run`.
+- [x] DEMO_HOOK / T3_TICK_COUNT / `register_demo_hook` / `__demo_tick` removed; `agc-core/src/hal/runtime.rs` trimmed to the four pending AtomicBool flags.
+- [x] `Executive::run` rewritten: initial T3 arm from waitlist front; pre-read CDU on T3; pop+dispatch one waitlist task; T4 advances MET by 12 cs and applies gyro drift via `compute_gyro_drift`; T6 quenches all jets; DSKY key queue drained into `feed_key`; one Executive job dispatched; RCS and engine staging fields translated to HAL calls; T3 re-armed lazily (last-armed value tracked; no register write if front unchanged). ADR-018 recorded.
+- [x] `bin/agc.rs` TIM2 periodic-mode override removed; `board_demo_tick` and demo hook registration removed; CDU pre-read + `dap_init(AttitudeHold)` bootstrap added before `Executive::run`.
+- [x] agc-core: 397 → 400 tests (+3 front_delta tests), 0 regressions.
+- [x] ADR-018 recorded.
+
+#### Deferred to next milestone
+
+- [ ] SERVICER/PIPA accumulation pipeline (`read_pipa` cadence, software accumulator, `average_g.rs` hardware wiring).
+- [ ] DSKY display emission via `hw.dsky().write_row` + `set_lamp` (needs row-encoding design).
+- [ ] Restart vs FRESH START differentiation from RCC reset cause.
+- [ ] T5 retire-or-repurpose decision.
+
 ## Completed
 
 - [x] Architecture — `docs/architecture.md`
