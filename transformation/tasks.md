@@ -656,6 +656,39 @@ Read-only nouns (no commit handler needed): N40, N44, N45, N50, N63, N75, N76, N
 - [ ] T6RUPT path: real RCS quench (foreground drain path calls `quench_all`; flight code doesn't fire jets yet)
 - [ ] Hardware-in-the-loop verification (manual `probe-rs cargo run` — expected: "tick #N MET=0 cs" once per second)
 
+---
+
+### Hardware Port — Phase 4: RP2040 Stub Bridge
+
+**Milestone**: `agc-bridge-pico` v0.1.0 (2026-05-02)
+
+#### Completed (this milestone)
+
+- [x] `agc-bridge-pico` crate scaffolding (Cargo.toml, memory.x, build.rs, .cargo/config.toml, README.md)
+- [x] `state.rs` — `BridgeState` with tx_seq, heartbeat_ms, CDU positions, handshake flag, hello-retry timer
+- [x] `keymap.rs` — ASCII → DSKY 5-bit code table, synchronized with `agc_core::services::v_n::Key::from_code`
+- [x] `link.rs` — `AgcLink<P>` owning a `rp2040_hal::uart::UartPeripheral`; `send` (blocking TX), `poll_rx` (non-blocking RX → `FrameDecoder`), `free` (C-FREE)
+- [x] `console.rs` — `UsbConsole` wrapping USB CDC-ACM via `usb-device 0.3` + `usbd-serial 0.2`; `poll`/`drain_rx`/`write`; `log_agc_msg` pretty-printer
+- [x] `main.rs` — `#[entry]`; 125 MHz clocks; UART0 @ 460800 baud; USB CDC; SysTick 1 kHz via `portable-atomic::AtomicU32`; Hello handshake; BridgeHeartbeat @ 200 ms; OpticsCdu @ 10 ms; LED heartbeat blink; keystroke forwarding
+- [x] `docs/external-peripheral-protocol.md` updated: `agc-bridge-pico` noted as reference implementation
+- [x] Bare-metal build clean: `cargo build --target thumbv6m-none-eabi -p agc-bridge-pico`
+- [x] `cargo clippy -- -D warnings` clean
+- [x] `agc-protocol` tests still pass (25/25)
+- [x] `agc-imu-platform` tests still pass (14/14)
+- [x] `agc-core` tests still pass (397/397)
+- [x] `agc-board-nucleo-f722` bare-metal build still clean
+
+#### Deferred (physical DSKY hardware — future milestone)
+
+- [ ] LED matrix driver for DSKY 7-segment display rows
+- [ ] Keypad scanning (row/column GPIO matrix)
+- [ ] Indicator-lamp shift register driver (UplinkActivity, NoAtt, Stby, …)
+- [ ] RCS jet hardware output (GPIO + 10 ms quench timeout safety)
+- [ ] SPS ignition relay driver (`EngineSpsEnable`)
+- [ ] TVC actuator driver (`EngineSpsGimbal`)
+- [ ] Real optics CDU encoder input (replace synthetic drift)
+- [ ] Application-level retransmission for safety-critical frames (SPS enable, RCS fire)
+
 ## Completed
 
 - [x] Architecture — `docs/architecture.md`

@@ -5,17 +5,24 @@
 Note: the IMU is local to the AGC MCU (BMI088 over SPI3) and is **not** routed through the bridge. All other peripherals are.
 
 The AGC firmware (`agc-board-nucleo-f722`) communicates with external
-peripherals (DSKY, sextant/optics, engines, RCS) through a satellite "D1 mini"
-bridge MCU over USART6.  The wire protocol is defined in the `agc-protocol`
-crate (`agc-protocol/src/`).
+peripherals (DSKY, sextant/optics, engines, RCS) through a bridge MCU over
+USART6.  The wire protocol is defined in the `agc-protocol` crate
+(`agc-protocol/src/`).
+
+**Reference bridge implementation**: `agc-bridge-pico` — an RP2040 (Raspberry
+Pi Pico) stub bridge that implements the full wire protocol, performs the
+Hello/HelloAck handshake, forwards USB-console keystrokes as DSKY keys, and
+emits synthetic heartbeat + OpticsCdu traffic.  See `agc-bridge-pico/README.md`
+for wiring and flash instructions.
 
 ```
-┌─────────────────┐  USART6 460800 8N1  ┌───────────────┐
-│ Nucleo-F722ZE   │◄──────────────────►│ D1 mini bridge │
-│ (AGC firmware)  │  PC6=TX / PC7=RX   │               │
-└─────────────────┘                    └───────────────┘
-                                              │
-                                 DSKY / optics / engines / RCS
+┌─────────────────┐  USART6 460800 8N1  ┌──────────────────────┐
+│ Nucleo-F722ZE   │◄──────────────────►│ Raspberry Pi Pico     │
+│ (AGC firmware)  │  PC6=TX / PC7=RX   │ (agc-bridge-pico)    │
+└─────────────────┘  GPIO0=TX/GPIO1=RX └──────────────────────┘
+                                                │  USB CDC-ACM
+                                          developer console
+                                     (future: DSKY / optics / engines / RCS)
 ```
 
 ---

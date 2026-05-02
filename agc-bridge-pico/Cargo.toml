@@ -1,0 +1,27 @@
+[package]
+name = "agc-bridge-pico"
+version = "0.1.0"
+edition = "2021"
+description = "RP2040 bridge firmware for AGC-in-Rust — stub side of the AGC↔bridge link"
+
+[dependencies]
+agc-protocol  = { path = "../agc-protocol" }
+cortex-m      = "0.7"
+cortex-m-rt   = "0.7"
+rp2040-hal    = { version = "0.10", features = ["rt", "critical-section-impl"] }
+rp2040-boot2  = "0.3"
+embedded-hal  = "1.0"
+embedded-hal-nb = "1.0"
+nb            = "1"
+fugit         = "0.3"
+heapless      = "0.8"
+portable-atomic = { version = "1", features = ["critical-section"] }
+usb-device    = "0.3"
+usbd-serial   = "0.2"
+panic-halt    = "1.0"
+
+[[bin]]
+name = "agc-bridge"
+path = "src/main.rs"
+test = false
+bench = false
