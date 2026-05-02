@@ -7,11 +7,13 @@ name = "agc-board-nucleo-f722"
 version = "0.1.0"
 dependencies = [
  "agc-core",
+ "agc-imu-platform",
  "agc-protocol",
  "cortex-m",
  "cortex-m-rt",
  "defmt 0.3.100",
  "defmt-rtt",
+ "embedded-hal 0.2.7",
  "embedded-hal 1.0.0",
  "heapless",
  "nb 1.1.0",
@@ -25,6 +27,13 @@ version = "0.1.0"
 dependencies = [
  "cortex-m",
  "cortex-m-rt",
+ "libm",
+]
+
+[[package]]
+name = "agc-imu-platform"
+version = "0.1.0"
+dependencies = [
  "libm",
 ]
 

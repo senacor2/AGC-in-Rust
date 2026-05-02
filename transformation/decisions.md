@@ -224,6 +224,25 @@ Mitigation:
 
 ---
 
+## ADR-016: BMI088 Strapdown IMU with Gimballed-Platform Emulation
+
+**Date**: 2026-05-02 | **Status**: Accepted
+
+**Decision**: Use the Bosch BMI088 shuttle board (3.3 V, SPI) as the local IMU on the Nucleo-F722ZE. Map its strapdown samples to the AGC's gimballed-platform `Imu` trait by emulating a virtual stable platform inside the HAL — quaternion-integrated attitude, body-frame-to-platform-frame accelerometer rotation, PIPA pulse accumulation. The emulation lives in the new `agc-imu-platform` crate (no_std, host-tested).
+
+**Rationale**: The Block-2 AGC's gimballed inertial platform is not commercially available. Modern strapdown IMUs are. The trait can either change (touching every flight-software call site and breaking parity with the AGC source) or the HAL can absorb the translation. The latter is correct because the AGC's gimbal abstractions encode physically-meaningful invariants (stable-member frame, CDU drive pulses, PIPA scale) that should remain visible to flight code regardless of how they are produced. The translation is small (~250 LOC of well-known quaternion math) and host-testable.
+
+**Trade-off**: The emulator's "platform" is virtual — there is no physical isolation between the body and the inertial reference, so disturbance torques on the spacecraft body do not torque the platform via its gimbals (because there are no gimbals). In practice this only changes the failure modes, not the math: gyro drift still translates to attitude error; gimbal-lock geometry is preserved through the Euler extraction; the AGC's NBD compensation works against the strapdown gyros via `Imu::torque_gyro` exactly as it would against the original gyros.
+
+**Affected files**:
+- `agc-imu-platform/` (new crate)
+- `agc-board-nucleo-f722/src/local/imu/` (BMI088 driver + Imu trait impl)
+- `agc-board-nucleo-f722/src/bin/agc.rs` (TIM7 ISR, init sequence)
+
+**References**: BMI088 datasheet rev 1.9 (Bosch document BST-BMI088-DS001-19); `specs/imu-control-spec.md` for the gimballed-platform behaviour the emulator preserves.
+
+---
+
 ## Open / Proposed ADRs
 
 | ID | Topic | Status |

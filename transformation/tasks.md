@@ -597,9 +597,31 @@ Read-only nouns (no commit handler needed): N40, N44, N45, N50, N63, N75, N76, N
 #### Deferred to follow-on milestones
 
 - [ ] **Phase 2 — Timer wiring**: Wire TIM3/TIM5/TIM6 to T3RUPT/T5RUPT/T6RUPT NVIC lines; replace `LocalTimers` stubs with real MCU timer peripherals
-- [ ] **Phase 2 — IMU driver**: Add SPI driver for ICM-42688-P (or equivalent) IMU breakout; replace `LocalImu` stub with real PIPA/CDU readings
+- [x] **Phase 2 — IMU driver**: BMI088 SPI3 driver + platform emulator (see Phase 2 below)
 - [ ] **Phase 2 — Executive loop**: Enter `state.executive.run(...)` after fresh_start once timer wiring is complete
 - [ ] **Phase 2 — Bridge firmware**: Write D1 mini firmware (MicroPython or C) implementing the bridge protocol quickref in `docs/external-peripheral-protocol.md`
+
+---
+
+### Hardware Port — Phase 2: BMI088 IMU + Platform Emulator
+
+**Milestone**: `agc-board-nucleo-f722` v0.2.0 (2026-05-02)
+
+#### Completed (this milestone)
+
+- [x] Spec + impl `agc-imu-platform` (quaternion + platform emulator, 14 tests)
+- [x] BMI088 SPI3 driver (`local/imu/bmi088.rs`): init, chip-ID verification, accel/gyro raw reads
+- [x] TIM7 1 kHz sample loop driving the platform emulator (`TIM7` ISR in `bin/agc.rs`)
+- [x] `BoardImu` trait impl wired via the `PLATFORM` mutex (`local/imu/mod.rs`)
+- [x] Bias calibration on init (100-sample mean; identity initial attitude; level-board assumption)
+- [x] ADR-016 recorded
+
+#### Follow-on items (not yet implemented)
+
+- [ ] Hardware-in-the-loop verification (manual `probe-rs cargo run`)
+- [ ] Initial-attitude estimation from gravity vector (currently identity)
+- [ ] Gyro bias temperature compensation
+- [ ] DRDY-line option in case TIM7-driven sampling proves insufficient
 - [ ] **Phase 3 — DMA TX**: Replace blocking `UartLink::send` with DMA-backed TX ring buffer (current blocking TX ≈ 5.5 ms max is acceptable for Phase 1)
 - [ ] **Phase 3 — Sequence gap detection**: Add application-level retransmission for safety-critical messages (SPS enable, RCS fire)
 - [ ] **Phase 3 — T4RUPT wiring**: DSKY display row sequencing (20 ms hold per row) driven by TIM4 at 120 ms base

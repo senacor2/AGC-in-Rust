@@ -1,0 +1,8 @@
+[package]
+name = "agc-imu-platform"
+version = "0.1.0"
+edition = "2021"
+description = "Strapdown→gimballed-platform emulation for AGC-in-Rust"
+
+[dependencies]
+libm = "0.2"

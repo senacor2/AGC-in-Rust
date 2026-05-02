@@ -3,8 +3,9 @@
 //! This crate provides a concrete [`AgcHardware`] implementation for the
 //! STM32F722ZE microcontroller.  External peripherals (DSKY, sextant, engines)
 //! are reached through a USART6 bridge link using the `agc-protocol` framing.
-//! The on-chip IMU and timer peripherals are local stubs pending Phase-2
-//! hardware integration.
+//! The BMI088 IMU over SPI3 is local (ADR-016); it drives the platform
+//! emulator in `agc_imu_platform` which implements the gimballed-platform
+//! abstraction expected by flight software.
 
 #![no_std]
 
@@ -20,7 +21,7 @@ use cortex_m::interrupt::Mutex;
 use agc_core::hal::AgcHardware;
 
 use link::uart::UartLink;
-use local::imu::LocalImu;
+use local::imu::BoardImu;
 use local::timers::LocalTimers;
 use remote::dsky::RemoteDsky;
 use remote::engine::RemoteEngine;
@@ -39,7 +40,16 @@ pub static BRIDGE: Mutex<RefCell<BridgeState>> = Mutex::new(RefCell::new(BridgeS
 /// The USART6 link, protected by a critical-section mutex.
 pub static LINK: Mutex<RefCell<Option<UartLink>>> = Mutex::new(RefCell::new(None));
 
-// ── Convenience accessor ──────────────────────────────────────────────────────
+/// Virtual stable platform emulator (ADR-016).
+/// Written by the TIM7 ISR; read by `BoardImu` trait methods.
+pub static PLATFORM: Mutex<RefCell<agc_imu_platform::PlatformEmulator>> =
+    Mutex::new(RefCell::new(agc_imu_platform::PlatformEmulator::caged()));
+
+/// BMI088 driver singleton; populated during init, read by TIM7 ISR.
+pub static BMI088: Mutex<RefCell<Option<local::imu::bmi088::Bmi088Driver>>> =
+    Mutex::new(RefCell::new(None));
+
+// ── Convenience accessors ─────────────────────────────────────────────────────
 
 /// Borrow both `LINK` and `BRIDGE` inside a single critical section and call
 /// `f(link, bridge_state)`.  The closure is not called if `LINK` is `None`
@@ -57,6 +67,16 @@ where
     });
 }
 
+/// Run `f` with a mutable reference to the platform emulator.
+pub fn with_platform<F>(f: F)
+where
+    F: FnOnce(&mut agc_imu_platform::PlatformEmulator),
+{
+    cortex_m::interrupt::free(|cs| {
+        f(&mut crate::PLATFORM.borrow(cs).borrow_mut());
+    });
+}
+
 // ── Board ─────────────────────────────────────────────────────────────────────
 
 /// Top-level board handle.  Zero-sized fields keep `Board` trivially copyable
@@ -64,7 +84,7 @@ where
 /// global statics above).
 pub struct Board {
     pub dsky: RemoteDsky,
-    pub imu: LocalImu,
+    pub imu: BoardImu,
     pub optics: RemoteOptics,
     pub engine: RemoteEngine,
     pub rcs: RemoteRcs,
@@ -80,7 +100,7 @@ impl Board {
     pub const fn new() -> Self {
         Self {
             dsky: RemoteDsky,
-            imu: LocalImu,
+            imu: BoardImu,
             optics: RemoteOptics,
             engine: RemoteEngine,
             rcs: RemoteRcs,
@@ -94,7 +114,7 @@ impl Board {
 impl AgcHardware for Board {
     type Timers = LocalTimers;
     type Dsky = RemoteDsky;
-    type Imu = LocalImu;
+    type Imu = BoardImu;
     type Optics = RemoteOptics;
     type Engine = RemoteEngine;
     type Rcs = RemoteRcs;
@@ -127,9 +147,6 @@ impl AgcHardware for Board {
     }
 
     fn pet_watchdog(&mut self) {
-        // The watchdog handle lives in `bin/agc.rs`; calling `pet()` through a
-        // global reference is the simplest approach for Phase 1.
-        // The static is set once during init and is only read here.
         crate::pet_watchdog_global();
     }
 
@@ -144,8 +161,6 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 static WDG_READY: AtomicBool = AtomicBool::new(false);
 
-// Function pointer stored as a static so `Board::pet_watchdog` can call it
-// without carrying a reference to the `Watchdog` struct.
 static WDG_PET: Mutex<RefCell<Option<fn()>>> = Mutex::new(RefCell::new(None));
 
 /// Register the watchdog pet function.  Called once from `bin/agc.rs` after
