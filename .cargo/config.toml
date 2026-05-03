@@ -1,0 +1,26 @@
+# Workspace-level cargo config.
+#
+# Cargo only loads `.cargo/config.toml` along the path from CWD up to root —
+# crate-level configs are NOT visited when invoking `cargo build -p <crate>`
+# from the workspace root. Linker rustflags therefore live here, keyed by
+# target triple, so they apply regardless of which directory cargo is run
+# from.
+#
+# The per-crate `.cargo/config.toml` files set `[build] target = "..."` so a
+# bare `cargo build` inside the crate picks the right target without a flag;
+# those files duplicate the rustflags below for the same reason. The two must
+# stay in sync — but in practice the workspace config is authoritative.
+
+[target.thumbv7em-none-eabihf]
+runner = "probe-rs run --chip STM32F722ZETx"
+rustflags = [
+  "-C", "link-arg=-Tlink.x",
+  "-C", "link-arg=-Tdefmt.x",
+]
+
+[target.thumbv6m-none-eabi]
+runner = "probe-rs run --chip RP2040"
+rustflags = [
+  "-C", "link-arg=--nmagic",
+  "-C", "link-arg=-Tlink.x",
+]
