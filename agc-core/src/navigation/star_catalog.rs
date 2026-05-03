@@ -56,7 +56,7 @@ pub struct StarEntry {
 /// - Star  5: Polaris   (α UMi) — Z ≈ +1.000 confirms near-NCP position
 /// - Star  7: Hamal     (α Ari)
 /// - Star 16: Pollux    (β Gem) — confirmed via direction vector analysis in
-///                                  specs/star-catalog-research.md §4.3.
+///   specs/star-catalog-research.md §4.3.
 /// - Star 25: Antares   (α Sco)
 /// - Star 30: Vega      (α Lyr)
 pub const STAR_CATALOG: [StarEntry; 37] = [

@@ -258,9 +258,11 @@ mod tests {
     fn tc_dsky_frame_equality() {
         use crate::services::display::DskyState;
         use crate::services::pinball::decode_dsky;
-        let mut s = DskyState::default();
-        s.verb = 6;
-        s.noun = 40;
+        let mut s = DskyState {
+            verb: 6,
+            noun: 40,
+            ..Default::default()
+        };
         let f1 = decode_dsky(&s);
         let f2 = decode_dsky(&s);
         assert_eq!(f1, f2, "identical state → identical frame");

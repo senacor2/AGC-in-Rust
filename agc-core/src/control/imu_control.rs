@@ -526,25 +526,23 @@ mod tests {
 
         // Orthonormality: R · R^T = I
         let product = mxm(refsmmat, transpose(refsmmat));
-        for i in 0..3 {
-            for j in 0..3 {
+        for (i, row) in product.iter().enumerate() {
+            for (j, &val) in row.iter().enumerate() {
                 let expected = if i == j { 1.0 } else { 0.0 };
                 assert!(
-                    (product[i][j] - expected).abs() < 1e-12,
-                    "TC-IMU-CTRL-5 orthonormality [{i}][{j}]: got {}, expected {expected}",
-                    product[i][j]
+                    (val - expected).abs() < 1e-12,
+                    "TC-IMU-CTRL-5 orthonormality [{i}][{j}]: got {val}, expected {expected}"
                 );
             }
         }
 
         // When platform = inertial, REFSMMAT should be identity
-        for i in 0..3 {
-            for j in 0..3 {
+        for (i, row) in refsmmat.iter().enumerate() {
+            for (j, &val) in row.iter().enumerate() {
                 let expected = if i == j { 1.0 } else { 0.0 };
                 assert!(
-                    (refsmmat[i][j] - expected).abs() < 1e-12,
-                    "TC-IMU-CTRL-5 identity [{i}][{j}]: got {}, expected {expected}",
-                    refsmmat[i][j]
+                    (val - expected).abs() < 1e-12,
+                    "TC-IMU-CTRL-5 identity [{i}][{j}]: got {val}, expected {expected}"
                 );
             }
         }

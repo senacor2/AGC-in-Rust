@@ -425,7 +425,7 @@ mod tests {
         filter.pitch.prev_input = 99.0;
         filter.pitch.prev_output = -42.0;
         filter.yaw.prev_input = 7.0;
-        filter.yaw.prev_output = 3.14;
+        filter.yaw.prev_output = 3.5;
 
         let initial_trim = (0.05, -0.03);
         tvc_init(&mut state, &mut filter, initial_trim);

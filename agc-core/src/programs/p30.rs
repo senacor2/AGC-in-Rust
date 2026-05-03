@@ -86,8 +86,8 @@ pub fn p30_init(state: &mut crate::AgcState) -> JobPriority {
 ///
 /// * `state`    — Mutable AGC state. Reads `csm_state`, `refsmmat`, `time`.
 /// * `tig`      — Time of Ignition as mission elapsed time in centiseconds.
-///               Must be >= `state.time`; if not, alarm 210 is raised and
-///               `pending_maneuver` is left unchanged.
+///   Must be >= `state.time`; if not, alarm 210 is raised and
+///   `pending_maneuver` is left unchanged.
 /// * `dv_crew`  — Delta-V as entered via N81 [X_along, Y_radial, Z_cross] (m/s).
 ///
 /// # Side effects
@@ -226,14 +226,12 @@ mod tests {
 
         // burn_attitude must be identity for zero delta-V.
         let id = [[1.0_f64, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
-        for i in 0..3 {
-            for j in 0..3 {
+        for (i, id_row) in id.iter().enumerate() {
+            for (j, &id_val) in id_row.iter().enumerate() {
+                let val = m.burn_attitude[i][j];
                 assert!(
-                    (m.burn_attitude[i][j] - id[i][j]).abs() < 1e-9,
-                    "burn_attitude[{}][{}] must be identity, got {}",
-                    i,
-                    j,
-                    m.burn_attitude[i][j]
+                    (val - id_val).abs() < 1e-9,
+                    "burn_attitude[{i}][{j}] must be identity, got {val}"
                 );
             }
         }

@@ -109,8 +109,8 @@ pub fn scalar_measurement_update(
     }
 
     // Step 7: Positive-definiteness check on diagonal.
-    for i in 0..6 {
-        if w[i][i] < 0.0 {
+    for (i, row) in w.iter().enumerate() {
+        if row[i] < 0.0 {
             return UpdateOutcome::AcceptedWOverflow;
         }
     }

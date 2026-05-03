@@ -205,7 +205,7 @@ mod tests {
 
         assert_eq!(state.major_mode, 37, "TC-P37-1: major_mode must be 37");
         assert_eq!(state.dsky.prog, 37, "TC-P37-1: dsky.prog must be 37");
-        assert!(PRIORITY > 0, "TC-P37-1: PRIORITY must be non-zero");
+        const _: () = assert!(PRIORITY > 0, "TC-P37-1: PRIORITY must be non-zero");
         assert_eq!(PRIORITY, 16, "TC-P37-1: PRIORITY must equal 16");
     }
 
@@ -252,14 +252,12 @@ mod tests {
         // burn_attitude must be orthonormal: M * M^T = I (within 1e-9)
         let mt = math::linalg::transpose(maneuver.burn_attitude);
         let mmt = math::linalg::mxm(maneuver.burn_attitude, mt);
-        for row in 0..3 {
-            for col in 0..3 {
+        for (row, mmt_row) in mmt.iter().enumerate() {
+            for (col, &val) in mmt_row.iter().enumerate() {
                 let expected = if row == col { 1.0 } else { 0.0 };
                 assert!(
-                    (mmt[row][col] - expected).abs() < 1e-9,
-                    "TC-P37-2: burn_attitude not orthonormal at [{row}][{col}]: {} != {}",
-                    mmt[row][col],
-                    expected
+                    (val - expected).abs() < 1e-9,
+                    "TC-P37-2: burn_attitude not orthonormal at [{row}][{col}]: {val} != {expected}"
                 );
             }
         }

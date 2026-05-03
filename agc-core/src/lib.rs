@@ -238,6 +238,12 @@ pub struct AgcState {
     pub tpi_arrival_epoch: Option<f64>,
 }
 
+impl Default for AgcState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AgcState {
     /// Construct a zeroed AgcState for use in FRESH START.
     pub const fn new() -> Self {

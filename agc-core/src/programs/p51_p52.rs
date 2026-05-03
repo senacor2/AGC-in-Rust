@@ -248,10 +248,7 @@ mod tests {
         // Orthonormality check R · Rᵀ = I.
         for i in 0..3 {
             for j in 0..3 {
-                let mut dot = 0.0;
-                for k in 0..3 {
-                    dot += r[i][k] * r[j][k];
-                }
+                let dot: f64 = r[i].iter().zip(r[j].iter()).map(|(a, b)| a * b).sum();
                 let expected = if i == j { 1.0 } else { 0.0 };
                 assert!(
                     (dot - expected).abs() < 1e-12,

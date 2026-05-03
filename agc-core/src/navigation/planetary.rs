@@ -435,7 +435,7 @@ mod tests {
         let dist_m = norm(pos);
         // Perigee ≈ 356,500 km, apogee ≈ 406,700 km (in metres).
         assert!(
-            dist_m >= 3.565e8 && dist_m <= 4.067e8,
+            (3.565e8..=4.067e8).contains(&dist_m),
             "Moon distance at launch = {:.0} km, expected [356_500, 406_700] km",
             dist_m / 1_000.0
         );
@@ -554,7 +554,7 @@ mod tests {
         let disp_m = libm::sqrt(dx * dx + dy * dy + dz * dz);
         let disp_km = disp_m / 1_000.0;
         assert!(
-            disp_km >= 1_000.0 && disp_km <= 10_000.0,
+            (1_000.0..=10_000.0).contains(&disp_km),
             "1-hour displacement = {disp_km:.1} km, expected [1000, 10000] km"
         );
     }

@@ -276,11 +276,10 @@ fn select_jets_generic<const N: usize>(
         let mut candidates: [(usize, f64); 16] = [(0, 0.0); 16];
         let mut n_cands = 0usize;
 
-        for i in 0..N {
+        for (i, &jet_torque) in torque_table.iter().enumerate().take(N) {
             if enable_mask & (1u16 << i) == 0 {
                 continue; // jet disabled
             }
-            let jet_torque = torque_table[i];
             // Only accept jets that contribute positively on this specific axis.
             let axis_contribution = jet_torque[axis] * torque_cmd[axis];
             if axis_contribution > 0.0 {
@@ -303,8 +302,8 @@ fn select_jets_generic<const N: usize>(
 
         // Select up to jets_per_axis jets.
         let count = n_cands.min(jets_per_axis);
-        for k in 0..count {
-            result |= 1u16 << candidates[k].0;
+        for cand in candidates.iter().take(count) {
+            result |= 1u16 << cand.0;
         }
     }
 
@@ -381,9 +380,8 @@ pub fn compute_pulse_duration(
     // Step 1: sum the effective torque produced by the selected jets.
     let sm_table = build_sm_torque_table(config);
     let mut tau_eff: Vec3 = [0.0; 3];
-    for i in 0..16 {
+    for (i, t) in sm_table.iter().enumerate() {
         if jet_mask & (1u16 << i) != 0 {
-            let t = sm_table[i];
             tau_eff[0] += t[0];
             tau_eff[1] += t[1];
             tau_eff[2] += t[2];
@@ -426,15 +424,13 @@ pub fn compute_pulse_duration(
         return 0; // discard — too short to fire
     }
 
-    let counts_u16 = if counts_rounded < config.min_pulse_counts as u64 {
+    if counts_rounded < config.min_pulse_counts as u64 {
         config.min_pulse_counts
     } else if counts_rounded > config.max_pulse_counts as u64 {
         config.max_pulse_counts
     } else {
         counts_rounded as u16
-    };
-
-    counts_u16
+    }
 }
 
 /// Arm T6 and fire the specified SM RCS jets as a single atomic sequence.
@@ -564,7 +560,7 @@ mod tests {
         // Disable +roll jet D1 (bit 11) and D3 (bit 9).
         // Only the redundant pair is available — but both are disabled too.
         // Actually let us disable only one: bit 11 (D1).
-        config.sm_jet_enable_mask = 0xFFFF & !(1u16 << 11);
+        config.sm_jet_enable_mask = !(1u16 << 11);
 
         let mask = select_jets_sm([1.0, 0.0, 0.0], &config);
         // Bit 11 (D1) must NOT be in the result.
@@ -586,7 +582,7 @@ mod tests {
     fn tc_rcs_3_all_roll_jets_disabled() {
         let mut config = RcsConfig::NOMINAL;
         // Disable all four roll jets (bits 8, 9, 10, 11).
-        config.sm_jet_enable_mask = 0xFFFF & !((1u16 << 8) | (1 << 9) | (1 << 10) | (1 << 11));
+        config.sm_jet_enable_mask = !((1u16 << 8) | (1 << 9) | (1 << 10) | (1 << 11));
 
         // Pure roll command — no jets can be selected.
         let mask = select_jets_sm([1.0, 0.0, 0.0], &config);
@@ -667,11 +663,10 @@ mod tests {
 
     #[test]
     fn tc_rcs_6_select_sm_mask_only_uses_16_bits() {
-        // select_jets_sm must never set bits above bit 15.
+        // select_jets_sm must never set bits above bit 15. The u16 return type
+        // enforces this structurally; this test exists to document the intent.
         let config = RcsConfig::NOMINAL;
-        let mask = select_jets_sm([1.0, 1.0, 1.0], &config);
-        // No bits above 15 should be set (u16 by type, but let us be explicit).
-        assert_eq!(mask & 0xFFFF, mask, "SM mask must fit in 16 bits");
+        let _: u16 = select_jets_sm([1.0, 1.0, 1.0], &config);
     }
 
     // ── TC-RCS-7: CM jet selection uses cm_jet_enable_mask, bits 15-12 = 0 ───

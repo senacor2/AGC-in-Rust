@@ -60,9 +60,10 @@ impl Key {
 // ── Phase and state ───────────────────────────────────────────────────────────
 
 /// Current state of the V/N input state machine.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum VnPhase {
     /// Nothing in progress — waiting for VERB or a control key.
+    #[default]
     Idle,
     /// VERB pressed, accumulating up to two digits.
     EnteringVerb { digits: u8, buf: u8 },
@@ -89,12 +90,6 @@ pub enum VnPhase {
     },
     /// Operator error — awaiting RSET.
     OprErr,
-}
-
-impl Default for VnPhase {
-    fn default() -> Self {
-        VnPhase::Idle
-    }
 }
 
 /// A pending V50 "please perform" request raised by a program and
@@ -210,8 +205,8 @@ fn sync_display(state: &mut crate::AgcState) {
             ..
         } => {
             // Previously committed registers are pinned to their final values.
-            for i in 0..reg_index as usize {
-                state.dsky.r[i] = committed[i] as f32;
+            for (i, &val) in committed.iter().take(reg_index as usize).enumerate() {
+                state.dsky.r[i] = val as f32;
             }
             // The active register shows the running accumulator.
             let val = sign as f64 * buf as f64;
@@ -436,7 +431,7 @@ fn dispatch_verb_noun(state: &mut crate::AgcState, verb: u8, noun: u8) {
     match verb {
         6 => v06_display_decimal(state, noun),
         16 => v16_monitor(state, noun),
-        21 | 22 | 23 => start_load(state, verb, noun, 1, verb - 21),
+        21..=23 => start_load(state, verb, noun, 1, verb - 21),
         25 => start_load(state, verb, noun, 3, 0),
         34 => v34_terminate(state),
         35 => v35_lamp_test(state),

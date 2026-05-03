@@ -183,7 +183,7 @@ pub fn is_burn_complete(state: &BurnState, cutoff_tolerance: f64) -> bool {
 /// - Returns a `Met` representing the estimated absolute cutoff time.
 /// - On the fallback path, returns `state.tig + MAX_BURN_DURATION_CS`.
 pub fn compute_cutoff_time(state: &BurnState, current_met: Met) -> Met {
-    let elapsed_cs = current_met.0.wrapping_sub(state.tig.0) as u32;
+    let elapsed_cs = current_met.0.wrapping_sub(state.tig.0);
     let elapsed_s = elapsed_cs as f64 / 100.0;
 
     if elapsed_s < 0.1 {

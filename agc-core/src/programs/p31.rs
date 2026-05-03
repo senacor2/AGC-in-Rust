@@ -328,6 +328,31 @@ pub fn compute_csi_delta_v(
     Err(CsiError::NotConverged)
 }
 
+// ── Shared propagation helper ─────────────────────────────────────────────────
+
+/// Propagate an inertial state vector from `epoch_met` to `tig_met`
+/// using `math::kepler::kepler_step`.
+///
+/// Returns `(pos_at_tig, vel_at_tig)`.
+///
+/// If `tig_met <= epoch_met` (no propagation needed, or targeting into the past),
+/// the input state is returned unchanged. Targeting into the past is not ideal,
+/// but guarding with a panic would break degenerate test cases; the caller is
+/// responsible for sensible TIGs.
+pub(crate) fn propagate_to_tig(
+    pos: Vec3,
+    vel: Vec3,
+    epoch_met: Met,
+    tig_met: Met,
+    mu: f64,
+) -> (Vec3, Vec3) {
+    let dt_s = tig_met.to_seconds() - epoch_met.to_seconds();
+    if dt_s <= 0.0 {
+        return (pos, vel);
+    }
+    kepler_step(pos, vel, dt_s, mu)
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -415,6 +440,7 @@ mod tests {
     /// the invariant "CSI never produces a W-axis ΔV" holds:
     /// - `Ok` case: `compute_csi_delta_v` step 3 hard-codes `dv_lvlh = [0, dv_s, 0]`.
     /// - `Err` case: no ΔV is produced at all.
+    ///
     /// This test verifies both branches respect the invariant. Out-of-plane
     /// corrections are a dedicated plane-change maneuver, not part of CSI.
     #[test]
@@ -528,29 +554,4 @@ mod tests {
         );
         assert!(state.alarm.lit, "alarm.lit must be true");
     }
-}
-
-// ── Shared propagation helper ─────────────────────────────────────────────────
-
-/// Propagate an inertial state vector from `epoch_met` to `tig_met`
-/// using `math::kepler::kepler_step`.
-///
-/// Returns `(pos_at_tig, vel_at_tig)`.
-///
-/// If `tig_met <= epoch_met` (no propagation needed, or targeting into the past),
-/// the input state is returned unchanged. Targeting into the past is not ideal,
-/// but guarding with a panic would break degenerate test cases; the caller is
-/// responsible for sensible TIGs.
-pub(crate) fn propagate_to_tig(
-    pos: Vec3,
-    vel: Vec3,
-    epoch_met: Met,
-    tig_met: Met,
-    mu: f64,
-) -> (Vec3, Vec3) {
-    let dt_s = tig_met.to_seconds() - epoch_met.to_seconds();
-    if dt_s <= 0.0 {
-        return (pos, vel);
-    }
-    kepler_step(pos, vel, dt_s, mu)
 }

@@ -577,13 +577,15 @@ mod tests {
     /// TC-PB-13: end-to-end `decode_dsky` composition.
     #[test]
     fn tc_pb_13_decode_dsky_end_to_end() {
-        let mut state = DskyState::default();
-        state.prog = 37;
-        state.verb = 6;
-        state.noun = 40;
-        state.r = [100.0, -2.5, 0.0];
-        state.opr_err = true;
-        state.flashing = true;
+        let state = DskyState {
+            prog: 37,
+            verb: 6,
+            noun: 40,
+            r: [100.0, -2.5, 0.0],
+            opr_err: true,
+            flashing: true,
+            ..Default::default()
+        };
 
         let frame = decode_dsky(&state);
 

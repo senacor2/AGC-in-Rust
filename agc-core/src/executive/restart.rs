@@ -49,6 +49,12 @@ pub struct RestartProtection {
     pub phases: [Phase; NUM_RESTART_GROUPS],
 }
 
+impl Default for RestartProtection {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RestartProtection {
     pub const fn new() -> Self {
         Self {

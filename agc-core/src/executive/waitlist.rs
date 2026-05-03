@@ -1,6 +1,9 @@
 /// Maximum number of concurrently pending waitlist tasks.
 pub const MAX_WAITLIST_TASKS: usize = 8;
 
+/// Function pointer signature for a Waitlist-scheduled task.
+pub type TaskFn = fn(&mut crate::AgcState);
+
 /// Result of a `Waitlist::schedule` call.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ScheduleResult {
@@ -21,7 +24,7 @@ pub struct WaitlistEntry {
     pub delta_time: u16,
     /// The task function to run when the timer expires.
     /// Tasks are short, run to completion, and must not block.
-    pub task: fn(&mut crate::AgcState),
+    pub task: TaskFn,
 }
 
 /// The Waitlist — a sorted delta-time chain of pending time-triggered tasks.
@@ -55,7 +58,7 @@ impl Waitlist {
     pub fn schedule(
         &mut self,
         centiseconds: u16,
-        task: fn(&mut crate::AgcState),
+        task: TaskFn,
     ) -> ScheduleResult {
         if self.count >= MAX_WAITLIST_TASKS {
             return ScheduleResult::Full;
@@ -171,7 +174,7 @@ impl Waitlist {
     /// the borrow checker. Callers pop the task here, then call it with `state`.
     ///
     /// Returns `None` if the list is empty.
-    pub fn pop_task(&mut self) -> Option<(fn(&mut crate::AgcState), Option<u16>)> {
+    pub fn pop_task(&mut self) -> Option<(TaskFn, Option<u16>)> {
         if self.count == 0 {
             return None;
         }

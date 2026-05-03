@@ -335,15 +335,13 @@ pub fn p20_init(state: &mut AgcState) -> JobPriority {
 
     // ── Install the periodic nav-cycle hook via the Waitlist ──────────────────
     // Override 1: use Waitlist, not servicer_exit.
-    match state
+    if state
         .waitlist
         .schedule(NAV_CYCLE_CS, p20_rendezvous_nav_cycle)
+        == ScheduleResult::Full
     {
-        ScheduleResult::Full => {
-            state.alarm.code = ALARM_WAITLIST_FULL;
-            state.alarm.lit = true;
-        }
-        _ => {}
+        state.alarm.code = ALARM_WAITLIST_FULL;
+        state.alarm.lit = true;
     }
 
     P20_PRIORITY
@@ -722,15 +720,13 @@ fn reschedule_if_active(state: &mut AgcState) {
     if state.major_mode != P20_MAJOR_MODE {
         return;
     }
-    match state
+    if state
         .waitlist
         .schedule(NAV_CYCLE_CS, p20_rendezvous_nav_cycle)
+        == ScheduleResult::Full
     {
-        ScheduleResult::Full => {
-            state.alarm.code = ALARM_WAITLIST_FULL;
-            state.alarm.lit = true;
-        }
-        _ => {}
+        state.alarm.code = ALARM_WAITLIST_FULL;
+        state.alarm.lit = true;
     }
 }
 
@@ -830,7 +826,7 @@ mod tests {
 
         // Nav cycle hook installed in waitlist (override 1: use Waitlist not servicer_exit)
         assert!(
-            state.waitlist.len() >= 1,
+            !state.waitlist.is_empty(),
             "waitlist must have at least one entry after p20_init"
         );
         let entry = state.waitlist.peek(0).expect("waitlist entry 0 must exist");
@@ -976,20 +972,17 @@ mod tests {
         p20_incorporate_radar_mark(&mut state, outlier);
 
         // State must be unchanged
-        for i in 0..3 {
+        for (i, &ref_val) in pos_after_mark2.iter().enumerate() {
             assert!(
-                libm::fabs(state.rendezvous_nav.target_pos[i] - pos_after_mark2[i]) < 1e-9,
-                "target_pos[{}] must not change after rejected mark",
-                i
+                libm::fabs(state.rendezvous_nav.target_pos[i] - ref_val) < 1e-9,
+                "target_pos[{i}] must not change after rejected mark"
             );
         }
-        for i in 0..6 {
-            for j in 0..6 {
+        for (i, ref_row) in w_after_mark2.iter().enumerate() {
+            for (j, &ref_val) in ref_row.iter().enumerate() {
                 assert!(
-                    libm::fabs(state.rendezvous_nav.w_matrix[i][j] - w_after_mark2[i][j]) < 1e-9,
-                    "w_matrix[{}][{}] must not change after rejected mark",
-                    i,
-                    j
+                    libm::fabs(state.rendezvous_nav.w_matrix[i][j] - ref_val) < 1e-9,
+                    "w_matrix[{i}][{j}] must not change after rejected mark"
                 );
             }
         }
@@ -1182,11 +1175,10 @@ mod tests {
         );
 
         // LVLH state should not have been updated
-        for i in 0..3 {
+        for (i, &ref_val) in lvlh_before.iter().enumerate() {
             assert_eq!(
-                state.rendezvous_nav.lvlh_state.rho[i], lvlh_before[i],
-                "lvlh_state.rho[{}] must not be updated on frame mismatch",
-                i
+                state.rendezvous_nav.lvlh_state.rho[i], ref_val,
+                "lvlh_state.rho[{i}] must not be updated on frame mismatch"
             );
         }
     }

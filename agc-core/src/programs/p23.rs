@@ -317,12 +317,9 @@ pub fn p23_init(state: &mut AgcState) -> JobPriority {
     state.dsky.r[2] = 0.0;
 
     // Install the periodic nav-cycle hook via the Waitlist.
-    match state.waitlist.schedule(P23_CYCLE_CS_U16, p23_cycle_task) {
-        ScheduleResult::Full => {
-            state.alarm.code = ALARM_WAITLIST_FULL;
-            state.alarm.lit = true;
-        }
-        _ => {}
+    if state.waitlist.schedule(P23_CYCLE_CS_U16, p23_cycle_task) == ScheduleResult::Full {
+        state.alarm.code = ALARM_WAITLIST_FULL;
+        state.alarm.lit = true;
     }
 
     P23_PRIORITY
@@ -341,7 +338,7 @@ pub fn p23_init(state: &mut AgcState) -> JobPriority {
 /// 3. Compute Δt = state.time.to_seconds() - state.csm_nav.last_mark_time.
 ///    If Δt > P23_MAX_PROCESS_NOISE_DT_S, call `p23_rectify_w_matrix`.
 ///    Otherwise grow W diagonal: W[i][i] += P23_Q_POS * Δt for i in 0..3,
-///                                          W[i][i] += P23_Q_VEL * Δt for i in 3..6.
+///    W[i][i] += P23_Q_VEL * Δt for i in 3..6.
 /// 4. Update DSKY: V16 N49 showing mark_count (R1) and reject_count (R2).
 /// 5. Re-schedule.
 ///
@@ -845,12 +842,9 @@ fn check_consecutive_rejects(state: &mut AgcState) {
 ///
 /// Separated from `p23_cycle_task` to keep the cycle function readable.
 fn reschedule(state: &mut AgcState) {
-    match state.waitlist.schedule(P23_CYCLE_CS_U16, p23_cycle_task) {
-        ScheduleResult::Full => {
-            state.alarm.code = ALARM_WAITLIST_FULL;
-            state.alarm.lit = true;
-        }
-        _ => {}
+    if state.waitlist.schedule(P23_CYCLE_CS_U16, p23_cycle_task) == ScheduleResult::Full {
+        state.alarm.code = ALARM_WAITLIST_FULL;
+        state.alarm.lit = true;
     }
 }
 
@@ -906,7 +900,7 @@ mod tests {
         );
         assert_eq!(state.alarm.code, 0, "alarm.code must be 0 on happy path");
         assert!(
-            state.waitlist.len() >= 1,
+            !state.waitlist.is_empty(),
             "waitlist must have at least one entry after p23_init"
         );
     }
@@ -1011,13 +1005,11 @@ mod tests {
         );
 
         // Near-zero residual → position changes by at most 1.0 m.
-        for i in 0..3 {
+        for (i, &before) in pos_before.iter().enumerate() {
+            let now = state.csm_state.position[i];
             assert!(
-                libm::fabs(state.csm_state.position[i] - pos_before[i]) < 1.0,
-                "csm_state.position[{}] must change by at most 1.0 m; was {}, now {}",
-                i,
-                pos_before[i],
-                state.csm_state.position[i]
+                libm::fabs(now - before) < 1.0,
+                "csm_state.position[{i}] must change by at most 1.0 m; was {before}, now {now}"
             );
         }
     }
@@ -1068,22 +1060,19 @@ mod tests {
         );
 
         // Position must be unchanged.
-        for i in 0..3 {
+        for (i, &ref_val) in pos_before.iter().enumerate() {
             assert!(
-                libm::fabs(state.csm_state.position[i] - pos_before[i]) < 1e-9,
-                "csm_state.position[{}] must be unchanged after rejected mark",
-                i
+                libm::fabs(state.csm_state.position[i] - ref_val) < 1e-9,
+                "csm_state.position[{i}] must be unchanged after rejected mark"
             );
         }
 
         // W-matrix must be unchanged.
-        for i in 0..6 {
-            for j in 0..6 {
+        for (i, ref_row) in w_before.iter().enumerate() {
+            for (j, &ref_val) in ref_row.iter().enumerate() {
                 assert!(
-                    libm::fabs(state.csm_nav.w_matrix[i][j] - w_before[i][j]) < 1e-9,
-                    "w_matrix[{}][{}] must be unchanged after rejected mark",
-                    i,
-                    j
+                    libm::fabs(state.csm_nav.w_matrix[i][j] - ref_val) < 1e-9,
+                    "w_matrix[{i}][{j}] must be unchanged after rejected mark"
                 );
             }
         }
@@ -1136,11 +1125,10 @@ mod tests {
         assert!(state.alarm.lit, "alarm.lit must be true");
 
         // All marks were rejected — position unchanged.
-        for i in 0..3 {
+        for (i, &ref_val) in pos_before.iter().enumerate() {
             assert!(
-                libm::fabs(state.csm_state.position[i] - pos_before[i]) < 1e-9,
-                "csm_state.position[{}] must be unchanged after 5 rejected marks",
-                i
+                libm::fabs(state.csm_state.position[i] - ref_val) < 1e-9,
+                "csm_state.position[{i}] must be unchanged after 5 rejected marks"
             );
         }
 
@@ -1214,11 +1202,10 @@ mod tests {
         );
 
         // Position must be unchanged.
-        for i in 0..3 {
+        for (i, &ref_val) in pos_before.iter().enumerate() {
             assert!(
-                libm::fabs(state.csm_state.position[i] - pos_before[i]) < 1e-9,
-                "csm_state.position[{}] must be unchanged after discarded mark",
-                i
+                libm::fabs(state.csm_state.position[i] - ref_val) < 1e-9,
+                "csm_state.position[{i}] must be unchanged after discarded mark"
             );
         }
     }
@@ -1278,13 +1265,11 @@ mod tests {
         );
 
         // Near-zero residual → position changes by at most 1.0 m.
-        for i in 0..3 {
+        for (i, &before) in pos_before.iter().enumerate() {
+            let now = state.csm_state.position[i];
             assert!(
-                libm::fabs(state.csm_state.position[i] - pos_before[i]) < 1.0,
-                "csm_state.position[{}] must change by at most 1.0 m; was {}, now {}",
-                i,
-                pos_before[i],
-                state.csm_state.position[i]
+                libm::fabs(now - before) < 1.0,
+                "csm_state.position[{i}] must change by at most 1.0 m; was {before}, now {now}"
             );
         }
     }

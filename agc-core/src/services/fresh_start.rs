@@ -160,14 +160,15 @@ pub fn restart(state: &mut AgcState) {
     // Alarm — preserve existing code but do not clear.
 
     // Re-dispatch active restart groups from their saved phases.
-    for group in 0..NUM_RESTART_GROUPS {
+    // Safety: single-threaded, interrupts disabled during restart, and we only
+    // take a shared reference for read-only iteration.
+    let table: &[RestartGroupEntry; NUM_RESTART_GROUPS] =
+        unsafe { &*core::ptr::addr_of!(RESTART_GROUP_TABLE) };
+    for (group, entry) in table.iter().enumerate() {
         let phase = state.restart.phase(group);
         if phase.is_idle() {
             continue;
         }
-
-        // Safety: single-threaded, interrupts disabled during restart.
-        let entry = unsafe { &RESTART_GROUP_TABLE[group] };
 
         if phase.is_job() {
             // Positive even phase → re-create as Executive job.

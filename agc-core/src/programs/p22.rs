@@ -346,12 +346,9 @@ pub fn p22_init(state: &mut AgcState) -> JobPriority {
     update_dsky_n43(state);
 
     // Install the periodic nav-cycle hook via the Waitlist.
-    match state.waitlist.schedule(P22_CYCLE_CS_U16, p22_cycle_task) {
-        ScheduleResult::Full => {
-            state.alarm.code = ALARM_WAITLIST_FULL;
-            state.alarm.lit = true;
-        }
-        _ => {}
+    if state.waitlist.schedule(P22_CYCLE_CS_U16, p22_cycle_task) == ScheduleResult::Full {
+        state.alarm.code = ALARM_WAITLIST_FULL;
+        state.alarm.lit = true;
     }
 
     P22_PRIORITY
@@ -649,13 +646,31 @@ fn reschedule_if_active(state: &mut AgcState) {
     if state.major_mode != P22_MAJOR_MODE {
         return;
     }
-    match state.waitlist.schedule(P22_CYCLE_CS_U16, p22_cycle_task) {
-        ScheduleResult::Full => {
-            state.alarm.code = ALARM_WAITLIST_FULL;
-            state.alarm.lit = true;
-        }
-        _ => {}
+    if state.waitlist.schedule(P22_CYCLE_CS_U16, p22_cycle_task) == ScheduleResult::Full {
+        state.alarm.code = ALARM_WAITLIST_FULL;
+        state.alarm.lit = true;
     }
+}
+
+/// Update DSKY with the current sub-satellite point (V16 N43).
+///
+/// Computes the ground track at `state.time` from `state.csm_state`.
+fn update_dsky_n43(state: &mut AgcState) {
+    let epoch_s = state.csm_state.epoch.to_seconds();
+    let now_s = state.time.to_seconds();
+    let csm_pos = state.csm_state.position;
+    let csm_vel = state.csm_state.velocity;
+    let gha_epoch = state.gha_epoch_rad;
+
+    let result = p21_compute_ground_track(csm_pos, csm_vel, epoch_s, now_s, gha_epoch);
+
+    const RAD_TO_DEG: f64 = 180.0 / core::f64::consts::PI;
+    state.dsky.verb = 16;
+    state.dsky.noun = 43;
+    state.dsky.r[0] = (result.lat_rad * RAD_TO_DEG * 100.0) as f32;
+    state.dsky.r[1] = (result.lon_rad * RAD_TO_DEG * 100.0) as f32;
+    state.dsky.r[2] = (result.alt_m / 100.0) as f32; // km × 10
+    state.dsky.flashing = false;
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -735,7 +750,7 @@ mod tests {
 
         // Waitlist entry installed
         assert!(
-            state.waitlist.len() >= 1,
+            !state.waitlist.is_empty(),
             "waitlist must have at least one entry after p22_init"
         );
         let entry = state.waitlist.peek(0).expect("waitlist entry 0 must exist");
@@ -754,7 +769,7 @@ mod tests {
         use crate::programs::p21::OMEGA_EARTH;
 
         let entry = LandmarkEntry {
-            lat_rad: 0.523_6, // 30° N
+            lat_rad: core::f64::consts::FRAC_PI_6, // 30° N
             lon_rad: 0.0,
             alt_m: 0.0,
         };
@@ -846,11 +861,10 @@ mod tests {
         );
 
         // Zero residual → position must be unchanged (exact or < 1e-9 m).
-        for i in 0..3 {
+        for (i, &ref_val) in pos_before.iter().enumerate() {
             assert!(
-                libm::fabs(state.csm_state.position[i] - pos_before[i]) < 1e-9,
-                "csm_state.position[{}] must be unchanged for zero-residual mark",
-                i
+                libm::fabs(state.csm_state.position[i] - ref_val) < 1e-9,
+                "csm_state.position[{i}] must be unchanged for zero-residual mark"
             );
         }
 
@@ -946,22 +960,19 @@ mod tests {
         );
 
         // Position must be unchanged.
-        for i in 0..3 {
+        for (i, &ref_val) in pos_before.iter().enumerate() {
             assert!(
-                libm::fabs(state.csm_state.position[i] - pos_before[i]) < 1e-9,
-                "csm_state.position[{}] must be unchanged after rejected mark",
-                i
+                libm::fabs(state.csm_state.position[i] - ref_val) < 1e-9,
+                "csm_state.position[{i}] must be unchanged after rejected mark"
             );
         }
 
         // W-matrix must be unchanged.
-        for i in 0..6 {
-            for j in 0..6 {
+        for (i, ref_row) in w_before.iter().enumerate() {
+            for (j, &ref_val) in ref_row.iter().enumerate() {
                 assert!(
-                    libm::fabs(state.csm_nav.w_matrix[i][j] - w_before[i][j]) < 1e-9,
-                    "w_matrix[{}][{}] must be unchanged after rejected mark",
-                    i,
-                    j
+                    libm::fabs(state.csm_nav.w_matrix[i][j] - ref_val) < 1e-9,
+                    "w_matrix[{i}][{j}] must be unchanged after rejected mark"
                 );
             }
         }
@@ -1144,7 +1155,7 @@ mod tests {
 
         // p22_cycle_task must re-schedule itself in the Waitlist.
         assert!(
-            state.waitlist.len() >= 1,
+            !state.waitlist.is_empty(),
             "waitlist must have at least one entry after p22_cycle_task"
         );
         // Find the p22_cycle_task entry.
@@ -1157,25 +1168,4 @@ mod tests {
         });
         assert!(found, "p22_cycle_task must be re-scheduled in the Waitlist");
     }
-}
-
-/// Update DSKY with the current sub-satellite point (V16 N43).
-///
-/// Computes the ground track at `state.time` from `state.csm_state`.
-fn update_dsky_n43(state: &mut AgcState) {
-    let epoch_s = state.csm_state.epoch.to_seconds();
-    let now_s = state.time.to_seconds();
-    let csm_pos = state.csm_state.position;
-    let csm_vel = state.csm_state.velocity;
-    let gha_epoch = state.gha_epoch_rad;
-
-    let result = p21_compute_ground_track(csm_pos, csm_vel, epoch_s, now_s, gha_epoch);
-
-    const RAD_TO_DEG: f64 = 180.0 / core::f64::consts::PI;
-    state.dsky.verb = 16;
-    state.dsky.noun = 43;
-    state.dsky.r[0] = (result.lat_rad * RAD_TO_DEG * 100.0) as f32;
-    state.dsky.r[1] = (result.lon_rad * RAD_TO_DEG * 100.0) as f32;
-    state.dsky.r[2] = (result.alt_m / 100.0) as f32; // km × 10
-    state.dsky.flashing = false;
 }
