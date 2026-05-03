@@ -45,6 +45,7 @@ impl Phase {
 /// to record which step is in progress. On completion, call `set_phase` with
 /// `Phase::IDLE`. After a restart, the `Executive` reads this table to
 /// re-dispatch any groups that were active.
+#[derive(Clone, Copy)]
 pub struct RestartProtection {
     pub phases: [Phase; NUM_RESTART_GROUPS],
 }
