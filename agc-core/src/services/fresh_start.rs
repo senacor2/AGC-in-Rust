@@ -55,9 +55,13 @@ pub fn fresh_start(state: &mut AgcState) {
 
 /// Restart group dispatch entry: a function pointer + default priority/delay.
 ///
-/// Programs register their restart handlers by populating this table. During
-/// development, all entries are `None` (no groups registered). As programs
-/// are implemented, they set their group's entry.
+/// Programs that need restart protection register their handlers as
+/// `pub const RESTART_ENTRY: RestartGroupEntry = ...` in their own module
+/// and the entry is wired into [`RESTART_GROUP_TABLE`] below by hand. The
+/// table is `const`: groups are known at compile time (there are only six,
+/// each tied to a specific program), so dynamic registration is unnecessary.
+/// This also lets RESTART avoid any `unsafe` access to mutable globals.
+#[derive(Clone, Copy)]
 pub struct RestartGroupEntry {
     /// Entry point for re-dispatching this group as a job.
     pub job_entry: Option<fn(&mut AgcState)>,
@@ -81,9 +85,17 @@ impl RestartGroupEntry {
     };
 }
 
-/// Restart group dispatch table. Indexed by GROUP_1..GROUP_6.
-/// Programs populate this at startup; the restart sequence reads it.
-pub static mut RESTART_GROUP_TABLE: [RestartGroupEntry; NUM_RESTART_GROUPS] = [
+/// Restart group dispatch table. Indexed by `GROUP_1..GROUP_6`.
+///
+/// All entries are currently `EMPTY` because no production program has
+/// registered restart-group handlers yet. As programs grow restart-aware
+/// code, replace the relevant entry with that program's `pub const`
+/// entry definition.
+///
+/// `const` rather than `static mut` (per `AGENTS.md` §20). Tests that need
+/// a populated table call [`restart_with_table`] directly with their own
+/// fixture instead of mutating a global.
+pub const RESTART_GROUP_TABLE: [RestartGroupEntry; NUM_RESTART_GROUPS] = [
     RestartGroupEntry::EMPTY,
     RestartGroupEntry::EMPTY,
     RestartGroupEntry::EMPTY,
@@ -97,13 +109,21 @@ pub static mut RESTART_GROUP_TABLE: [RestartGroupEntry; NUM_RESTART_GROUPS] = [
 ///
 /// Preserves: `csm_state`, `target_state`, `refsmmat`, `time`, `major_mode`.
 /// Clears: scheduler (executive + waitlist), then re-dispatches active restart
-/// groups based on their phase registers.
-///
-/// # Safety
-/// Reads `RESTART_GROUP_TABLE` which is `static mut`. Safe because the AGC
-/// is single-threaded and this function is called only from the reset vector
-/// with interrupts disabled.
+/// groups based on their phase registers, using [`RESTART_GROUP_TABLE`].
 pub fn restart(state: &mut AgcState) {
+    restart_with_table(state, &RESTART_GROUP_TABLE);
+}
+
+/// Perform a RESTART against a caller-supplied restart-group table.
+///
+/// This is the test-friendly form: callers supply the table directly so
+/// fixtures can populate entries without touching any global state.
+/// Production code calls [`restart`], which delegates here with the const
+/// [`RESTART_GROUP_TABLE`].
+pub fn restart_with_table(
+    state: &mut AgcState,
+    table: &[RestartGroupEntry; NUM_RESTART_GROUPS],
+) {
     // Navigation state is PRESERVED — do not touch csm_state, target_state,
     // refsmmat, or time.
 
@@ -123,10 +143,6 @@ pub fn restart(state: &mut AgcState) {
     // Alarm — preserve existing code but do not clear.
 
     // Re-dispatch active restart groups from their saved phases.
-    // Safety: single-threaded, interrupts disabled during restart, and we only
-    // take a shared reference for read-only iteration.
-    let table: &[RestartGroupEntry; NUM_RESTART_GROUPS] =
-        unsafe { &*core::ptr::addr_of!(RESTART_GROUP_TABLE) };
     for (group, entry) in table.iter().enumerate() {
         let phase = state.restart.phase(group);
         if phase.is_idle() {
@@ -381,7 +397,6 @@ mod tests {
     // TC-RS-4: restart re-dispatches active groups
     #[test]
     fn tc_rs_4_redispatch_groups() {
-        let mut state = AgcState::new();
         fn group3_job(state: &mut AgcState) {
             let _ = state;
         }
@@ -389,38 +404,32 @@ mod tests {
             let _ = state;
         }
 
-        // Set up restart group entries.
-        unsafe {
-            RESTART_GROUP_TABLE[GROUP_3] = RestartGroupEntry {
-                job_entry: Some(group3_job),
-                job_priority: 15,
-                task_entry: None,
-                task_delay: 1,
-                major_mode: 30,
-            };
-            RESTART_GROUP_TABLE[GROUP_5] = RestartGroupEntry {
-                job_entry: None,
-                job_priority: 0,
-                task_entry: Some(group5_task),
-                task_delay: 200,
-                major_mode: 40,
-            };
-        }
+        // Build a fixture table on the stack — no global state mutated.
+        let mut table = [RestartGroupEntry::EMPTY; NUM_RESTART_GROUPS];
+        table[GROUP_3] = RestartGroupEntry {
+            job_entry: Some(group3_job),
+            job_priority: 15,
+            task_entry: None,
+            task_delay: 1,
+            major_mode: 30,
+        };
+        table[GROUP_5] = RestartGroupEntry {
+            job_entry: None,
+            job_priority: 0,
+            task_entry: Some(group5_task),
+            task_delay: 200,
+            major_mode: 40,
+        };
 
+        let mut state = AgcState::new();
         // Set phases: GROUP_3 = positive even (job), GROUP_5 = positive odd (task).
         state.restart.set_phase(GROUP_3, Phase::new(2));
         state.restart.set_phase(GROUP_5, Phase::new(1));
 
-        restart(&mut state);
+        restart_with_table(&mut state, &table);
 
         // GROUP_3 should have created a job.
         // GROUP_5 should have scheduled a task.
         assert!(!state.waitlist.is_empty()); // task from GROUP_5
-
-        // Clean up static state for other tests.
-        unsafe {
-            RESTART_GROUP_TABLE[GROUP_3] = RestartGroupEntry::EMPTY;
-            RESTART_GROUP_TABLE[GROUP_5] = RestartGroupEntry::EMPTY;
-        }
     }
 }
