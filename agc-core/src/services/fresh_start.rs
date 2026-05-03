@@ -12,82 +12,45 @@
 //! See `specs/executive-spec.md` §5.4 for the full restart sequence and the
 //! FRESH START vs RESTART comparison table.
 
-use crate::executive::restart::{Phase, NUM_RESTART_GROUPS};
+use crate::executive::restart::NUM_RESTART_GROUPS;
 use crate::executive::scheduler::Executive;
 use crate::executive::waitlist::Waitlist;
-use crate::math::linalg::IDENTITY;
-use crate::navigation::state_vector::StateVector;
-use crate::services::alarm::AlarmState;
-use crate::services::display::DskyState;
 use crate::AgcState;
 
 /// Perform a FRESH START — complete re-initialisation.
 ///
-/// Zeroes everything: navigation state, scheduler, alarms, display, flags.
-/// Sets major mode to P00. The caller must enter the Executive loop
+/// Replaces every field of `state` with the canonical zero defaults from
+/// [`AgcState::new`], then re-injects the small set of fields documented to
+/// survive FRESH START. The caller must enter the Executive loop
 /// (`Executive::run(state, hw)`) after this returns.
+///
+/// # Survives FRESH START
+///
+/// The following fields are preserved across a FRESH START because they are
+/// uplink values from Mission Control that cannot be reconstructed on board
+/// (Override 2 in the spec). All other fields are zeroed unconditionally.
+///
+/// - `gha_epoch_rad` — Greenwich Hour Angle at the navigation epoch
+///   (AGC erasable `GHABASE`).
+///
+/// When adding a new field to `AgcState` that must also survive FRESH START,
+/// extend the save/restore block below AND add it to this list. Anything not
+/// listed here is wiped — that is the deliberate auditability property of
+/// this function. Field-by-field reset (the previous implementation) had a
+/// failure mode where new fields silently leaked stale state across a FRESH
+/// START until someone noticed in production.
 pub fn fresh_start(state: &mut AgcState) {
-    // Navigation state — zeroed (no valid data after power-on).
-    state.csm_state = StateVector::ZERO;
-    state.target_state = StateVector::ZERO;
-    state.refsmmat = IDENTITY;
-    state.time = crate::types::Met(0);
+    // Step 1: snapshot the survives-FRESH-START fields.
+    let saved_gha_epoch_rad = state.gha_epoch_rad;
 
-    // Scheduler — clear everything.
-    state.executive = Executive::new();
-    state.waitlist = Waitlist::new();
+    // Step 2: replace the entire state with canonical zero defaults. This
+    // guarantees no field is forgotten; new fields added to AgcState
+    // automatically get scrubbed unless the author adds them to the survive
+    // list above.
+    *state = AgcState::new();
 
-    // Restart groups — all idle (nothing to re-dispatch on a fresh start).
-    state.restart = crate::executive::RestartProtection::new();
-
-    // Guidance and control — off.
-    state.major_mode = 0; // P00
-    state.dap_state = Default::default();
-    state.tvc_state = Default::default();
-
-    // Display — reset.
-    state.dsky = DskyState {
-        prog: 0,
-        verb: 0,
-        noun: 0,
-        r: [0.0; 3],
-        flashing: false,
-        uplink_activity: false,
-        no_att: false,
-        stby: false,
-        key_rel: false,
-        opr_err: false,
-        restart_flag: false,
-        gimbal_lock: false,
-        temp: false,
-        prog_alarm: false,
-        comp_acty: false,
-        tracker: false,
-        lamp_test_active: false,
-    };
-
-    // Alarms — cleared.
-    state.alarm = AlarmState {
-        code: 0,
-        code2: 0,
-        lit: false,
-    };
-
-    // Flags — all cleared.
-    state.flagwords = [0u16; 12];
-
-    // Rendezvous navigation state — reset.
-    state.rendezvous_nav = Default::default();
-
-    // Landmark tracking navigation state — reset.
-    state.csm_nav = Default::default();
-
-    // gha_epoch_rad is intentionally NOT reset here.
-    // It is an uplink value set by Mission Control prior to orbital insertion
-    // and must survive FRESH START (Override 2).
-
-    // TPI/TPM arrival epoch — reset on FRESH START (no active rendezvous).
-    state.tpi_arrival_epoch = None;
+    // Step 3: re-inject the saved fields.
+    state.gha_epoch_rad = saved_gha_epoch_rad;
 }
 
 /// Restart group dispatch entry: a function pointer + default priority/delay.
@@ -199,7 +162,7 @@ pub fn restart(state: &mut AgcState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::executive::restart::{GROUP_1, GROUP_3, GROUP_5};
+    use crate::executive::restart::{Phase, GROUP_1, GROUP_3, GROUP_5};
     use crate::navigation::state_vector::{Frame, StateVector};
     use crate::types::Met;
 
@@ -244,6 +207,126 @@ mod tests {
 
         assert_eq!(state.alarm.code, 0);
         assert!(!state.alarm.lit);
+    }
+
+    // TC-FS-4: fresh_start clears burn / engine / TVC staging fields.
+    //
+    // These were silently leaking before the audit-driven rewrite. A stale
+    // `engine_thrusting = true` after FRESH START would leave SPS commanded
+    // on; a stale `servicer_exit` would let the previous burn's exit hook
+    // fire on the next SERVICER cycle.
+    #[test]
+    fn tc_fs_4_clears_burn_and_engine_staging() {
+        fn dummy_exit(_: &mut AgcState) {}
+
+        let mut state = AgcState::new();
+        state.burn.burn_active = true;
+        state.burn.target_dv_inertial = [10.0, 20.0, 30.0];
+        state.engine_thrusting = true;
+        state.servicer_exit = Some(dummy_exit);
+        state.sps_gimbal_cmd = (123, -456);
+        state.rcs_commanded_jets = 0xDEAD;
+        state.rcs_commanded_pulse_cs = 99;
+
+        fresh_start(&mut state);
+
+        assert!(!state.burn.burn_active, "burn_active must be cleared");
+        assert_eq!(state.burn.target_dv_inertial, [0.0; 3]);
+        assert!(
+            !state.engine_thrusting,
+            "engine_thrusting must be cleared (otherwise SPS stays armed)"
+        );
+        assert!(
+            state.servicer_exit.is_none(),
+            "servicer_exit must be cleared (otherwise stale callback fires)"
+        );
+        assert_eq!(state.sps_gimbal_cmd, (0, 0));
+        assert_eq!(state.rcs_commanded_jets, 0);
+        assert_eq!(state.rcs_commanded_pulse_cs, 0);
+    }
+
+    // TC-FS-5: fresh_start clears crew-input + entry-phase state.
+    //
+    // A leftover `pending_v50` would leave a "press PROCEED" prompt armed
+    // for an action belonging to a previous mission phase; a leftover
+    // entry phase would mis-cue P61–P67.
+    #[test]
+    fn tc_fs_5_clears_vn_and_entry() {
+        use crate::programs::p61_p67::EntryPhase;
+        use crate::services::v_n::Pending50;
+
+        fn dummy_proceed(_: &mut AgcState) {}
+
+        let mut state = AgcState::new();
+        state.vn.pending_v50 = Some(Pending50 {
+            noun: 33,
+            on_proceed: dummy_proceed,
+        });
+        state.entry.phase = EntryPhase::Entry;
+        state.entry.drogue_deployed = true;
+        state.entry.roll_command_rad = 0.5;
+
+        fresh_start(&mut state);
+
+        assert!(
+            state.vn.pending_v50.is_none(),
+            "pending_v50 must be cleared (no stale PROCEED prompt)"
+        );
+        assert_eq!(
+            state.entry.phase,
+            EntryPhase::Idle,
+            "entry phase must reset to Idle"
+        );
+        assert!(!state.entry.drogue_deployed);
+        assert_eq!(state.entry.roll_command_rad, 0.0);
+    }
+
+    // TC-FS-6: fresh_start clears IMU alignment + PIPA staging.
+    #[test]
+    fn tc_fs_6_clears_imu_and_pipa_staging() {
+        use crate::control::imu_control::ImuAlignmentState;
+
+        let mut state = AgcState::new();
+        state.imu_alignment_state = ImuAlignmentState::FineAligned;
+        state.pipa_counts = [123, -456, 789];
+        state.servicer_last_dv_inertial = [1.0, 2.0, 3.0];
+        state.last_drift_comp_time = Met(50_000);
+
+        fresh_start(&mut state);
+
+        assert_eq!(
+            state.imu_alignment_state,
+            ImuAlignmentState::Caged,
+            "IMU alignment must reset to Caged after FRESH START"
+        );
+        assert_eq!(state.pipa_counts, [0; 3]);
+        assert_eq!(state.servicer_last_dv_inertial, [0.0; 3]);
+        assert_eq!(state.last_drift_comp_time, Met(0));
+    }
+
+    // TC-FS-7: fresh_start preserves the documented "survives" set.
+    //
+    // The only field currently documented to survive FRESH START is
+    // `gha_epoch_rad` (Greenwich Hour Angle uplink — Mission Control sets
+    // it once before orbital insertion). If this list grows in the future,
+    // extend both `fresh_start()` and this test together.
+    #[test]
+    fn tc_fs_7_preserves_gha_epoch_rad() {
+        let mut state = AgcState::new();
+        state.gha_epoch_rad = 1.234_567_8;
+        // Pollute the rest so we can be sure they were scrubbed.
+        state.csm_state.position = [9e6, 9e6, 9e6];
+        state.major_mode = 40;
+
+        fresh_start(&mut state);
+
+        assert_eq!(
+            state.gha_epoch_rad, 1.234_567_8,
+            "gha_epoch_rad (uplink value) must survive FRESH START"
+        );
+        // Sanity: other state was scrubbed.
+        assert_eq!(state.csm_state.position, [0.0; 3]);
+        assert_eq!(state.major_mode, 0);
     }
 
     // TC-RS-1: restart preserves navigation state
