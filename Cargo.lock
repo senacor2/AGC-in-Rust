@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "agc-board-nucleo-f722"
+name = "agc-board-nucleo-f767"
 version = "0.1.0"
 dependencies = [
  "agc-core",
@@ -864,6 +864,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
+name = "stm32-fmc"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7f0639399e2307c2446c54d91d4f1596343a1e1d5cab605b9cce11d0ab3858c"
+dependencies = [
+ "embedded-hal 0.2.7",
+]
+
+[[package]]
 name = "stm32f7"
 version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -894,6 +903,7 @@ dependencies = [
  "micromath",
  "nb 1.1.0",
  "rand_core",
+ "stm32-fmc",
  "stm32f7",
  "time",
  "void",

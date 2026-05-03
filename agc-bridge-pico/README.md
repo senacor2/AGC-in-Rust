@@ -2,7 +2,7 @@
 
 RP2040 (Raspberry Pi Pico) bridge firmware for AGC-in-Rust.
 
-Sits between the AGC (Nucleo-F722ZE running `agc-board-nucleo-f722`) and the
+Sits between the AGC (Nucleo-F767ZI running `agc-board-nucleo-f767`) and the
 absent physical peripherals (DSKY, sextant/optics, engines, RCS).  Phase 4
 scope: stub bridge that:
 
@@ -18,7 +18,7 @@ scope: stub bridge that:
 ## Wiring
 
 ```
-Nucleo-F722ZE               Raspberry Pi Pico
+Nucleo-F767ZI               Raspberry Pi Pico
 ─────────────────           ─────────────────
 PC6 (USART6 TX) ──────────> GPIO1 (UART0 RX)
 PC7 (USART6 RX) <────────── GPIO0 (UART0 TX)

@@ -4,7 +4,7 @@
 
 Note: the IMU is local to the AGC MCU (BMI088 over SPI3) and is **not** routed through the bridge. All other peripherals are.
 
-The AGC firmware (`agc-board-nucleo-f722`) communicates with external
+The AGC firmware (`agc-board-nucleo-f767`) communicates with external
 peripherals (DSKY, sextant/optics, engines, RCS) through a bridge MCU over
 USART6.  The wire protocol is defined in the `agc-protocol` crate
 (`agc-protocol/src/`).
@@ -17,7 +17,7 @@ for wiring and flash instructions.
 
 ```
 ┌─────────────────┐  USART6 460800 8N1  ┌──────────────────────┐
-│ Nucleo-F722ZE   │◄──────────────────►│ Raspberry Pi Pico     │
+│ Nucleo-F767ZI   │◄──────────────────►│ Raspberry Pi Pico     │
 │ (AGC firmware)  │  PC6=TX / PC7=RX   │ (agc-bridge-pico)    │
 └─────────────────┘  GPIO0=TX/GPIO1=RX └──────────────────────┘
                                                 │  USB CDC-ACM

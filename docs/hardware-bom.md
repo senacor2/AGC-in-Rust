@@ -1,7 +1,7 @@
 # Hardware Bill of Materials
 
 Reference list for building the bench setup that runs the bare-metal
-AGC firmware (`agc-board-nucleo-f722`) plus the Pico stub bridge
+AGC firmware (`agc-board-nucleo-f767`) plus the Pico stub bridge
 (`agc-bridge-pico`).
 
 Prices are typical retail in EUR (early 2026, German retailers — Reichelt,
@@ -20,10 +20,10 @@ stub bridge.
 
 | # | Part | Notes | ~€ |
 |---|---|---|---|
-| 1 | **STM32 Nucleo-F722ZE** (`NUCLEO-F722ZE`) | The AGC. Cortex-M7 @ 216 MHz, 512 KB flash, 256 KB RAM. On-board ST-LINK/V2-1 over a single USB micro-B — no separate debugger needed. Pre-soldered morpho headers. ADR-011. | 28 |
+| 1 | **STM32 Nucleo-F767ZI** (`NUCLEO-F767ZI`) | The AGC. Cortex-M7 @ 216 MHz **with hardware double-precision FPU**, 2 MB flash, 512 KB RAM. On-board ST-LINK/V2-1 over a single USB micro-B — no separate debugger needed. Pre-soldered morpho headers. Same MB1137 carrier as the F722ZE so all pinouts/solder bridges from UM1974 carry over. ADR-021 (supersedes ADR-011). | 33 |
 | 2 | **Raspberry Pi Pico** with pre-soldered headers ("Pico H") | The bridge MCU running `agc-bridge-pico`. RP2040 only (Cortex-M0+); the Pico 2 (RP2350) is a different chip and not supported by our firmware. ADR-015. | 6 |
 | 3 | **Adafruit BMI088 breakout (#4836)** | Local IMU. 6-axis strapdown, 3.3 V regulator on board (5 V tolerant), 2.54 mm headers — breadboard-ready. ADR-016. | 17 |
-| 4 | USB-A↔micro-B cable (Nucleo) | Often included with the Nucleo-F722ZE; verify before ordering. | 3 |
+| 4 | USB-A↔micro-B cable (Nucleo) | Often included with the Nucleo-F767ZI; verify before ordering. | 3 |
 | 5 | USB-A↔micro-B cable (Pico) | Data-capable, not a charge-only cable. | 3 |
 | 6 | Half-size breadboard (≥400 tie points) | Or perfboard if you prefer permanent wiring. | 6 |
 | 7 | Dupont jumper wire kit | 40 each of M-M, M-F, F-F, mixed lengths. ~12 wires used in the bench setup. | 6 |
@@ -32,7 +32,7 @@ stub bridge.
 ### Wiring summary (11 wires + grounds)
 
 ```
-Nucleo-F722ZE                      Adafruit BMI088 (#4836)
+Nucleo-F767ZI                      Adafruit BMI088 (#4836)
 ─────────────                      ───────────────────────
 PB3   (SPI3 SCK,    CN7-15)  ───►  SCL
 PB4   (SPI3 MISO,   CN7-19)  ◄──   SDO   (combined SDO1/SDO2 on the board)
@@ -42,7 +42,7 @@ PB12  (CS_GYRO,     CN10-16) ───►  CSG   (gyroscope CS)
 3V3   (CN8-7)                ───►  VIN   (3.3 V; module also accepts 5 V)
 GND   (CN8-11)               ───   GND
 
-Nucleo-F722ZE                      Raspberry Pi Pico
+Nucleo-F767ZI                      Raspberry Pi Pico
 ─────────────                      ─────────────────
 PC6   (USART6 TX,   CN7-1)   ───►  GP1   (UART0 RX)
 PC7   (USART6 RX,   CN7-11)  ◄──   GP0   (UART0 TX)
@@ -51,7 +51,7 @@ GND                          ───   GND
 
 The Adafruit board labels MISO as `SDO`; both gyro and accel SDO pins
 are tied together on the breakout, matching the SPI 3-wire convention
-expected by `agc-board-nucleo-f722/src/local/imu/bmi088.rs`. The
+expected by `agc-board-nucleo-f767/src/local/imu/bmi088.rs`. The
 accelerometer needs a CS toggle on first access to enter SPI mode — the
 driver handles this in `Bmi088Driver::init`.
 

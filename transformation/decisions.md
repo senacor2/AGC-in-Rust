@@ -161,7 +161,12 @@ This file is the index and status tracker.
 
 ## ADR-011: Hardware Target — Nucleo-F722ZE (Cortex-M7 @ 216 MHz)
 
-**Date**: 2026-05-02 | **Status**: Accepted
+**Date**: 2026-05-02 | **Status**: **Superseded by ADR-021 on 2026-05-03**
+
+> **Note**: The "Rationale" below is preserved as the historical record of
+> the original 2026-05-02 decision. It contains a factual error about the
+> Cortex-M7 floating-point unit on the STM32F722xx family that ADR-021
+> corrects. Read ADR-021 for the current hardware target (Nucleo-F767ZI).
 
 **Decision**: Target the STM32F722ZE on the Nucleo-F722ZE development board.
 All bare-metal firmware lives in the `agc-board-nucleo-f722` crate;
@@ -374,6 +379,101 @@ After the ISR drain loop, each iteration also: drains the DSKY key queue into `s
 - `agc-core/src/executive/scheduler.rs` — T5_PENDING drain removed; DSKY rate-limit added
 - `agc-imu-platform/src/quat.rs` — `from_two_unit_vectors` constructor added
 - `agc-imu-platform/tests/quat.rs` — 4 new unit tests for `from_two_unit_vectors`
+
+---
+
+## ADR-021: Hardware Target Revision — Nucleo-F767ZI (Cortex-M7 with double-precision FPU)
+
+**Date**: 2026-05-03 | **Status**: Accepted (supersedes ADR-011)
+
+**Decision**: Switch the bare-metal target from the Nucleo-F722ZE to the
+**Nucleo-F767ZI** (STM32F767ZIT6, Cortex-M7 @ 216 MHz with hardware
+double-precision FPU). The board crate is renamed
+`agc-board-nucleo-f722` → `agc-board-nucleo-f767`. Target triple is
+unchanged: `thumbv7em-none-eabihf`.
+
+**Why ADR-011 was wrong**: ADR-011 claimed that "the Cortex-M7 with
+double-precision FPU (STM32F7xx)" describes the F722. Direct
+verification against **DS11853 Rev 9 (July 2022) §2 Description, p.14**
+contradicts this:
+
+> "The Cortex®-M7 core features a single floating point unit (SFPU)
+> precision which supports Arm® single-precision data-processing
+> instructions and data types."
+
+The F722/F723/F730/F732/F733 sub-family ships the
+**single-precision-only** Cortex-M7 variant. The SP+DP-FPU variant
+("Cortex-M7F-DP") is found on F745/F746/F756/F765/**F767**/F777/F779
+and the entire H7 series. `docs/architecture.md` §14.1 (line 1182–1184)
+correctly listed STM32F767 and STM32H743 as the DPFPU exemplars from
+the start; ADR-011 misread "STM32F7xx" as a uniform DPFPU family.
+
+The original DAP-timing-budget rationale therefore stands but the chip
+choice did not honour it: every `f64` op on F722 would have gone through
+the `compiler-builtins` soft-float path (the same one we rejected for
+the Cortex-M4F), defeating the entire purpose of picking Cortex-M7.
+
+**Why F767ZI specifically**:
+- **Cortex-M7 with DP-FPU** — the architecture mandate is met without
+  soft-float fallbacks. `f64` math runs at 5–20 cycles per op
+  (architecture.md §14 Table 5).
+- **Same MB1137 carrier board family** as F722ZE — UM1974 Table 12
+  (solder bridges) and Table 21 (ST morpho pinout) both cover F722ZE
+  and F767ZI in the *same row*. SB156, CN11 V_BAT pin (pin 33), and
+  every BKPSRAM/battery-backup detail from the earlier work
+  (project memory `project_battery_backed_bkpsram.md`) carries over
+  verbatim. No board-design rework.
+- **Headroom**: 2 MB flash (4× F722) and 512 KB system SRAM (2× F722).
+  The full `AgcState` fits in either; F767 leaves room for future
+  growth without a second migration.
+- **probe-rs / stm32f7xx-hal / cortex-m-rt support** all already
+  available; only the chip ID and PAC feature flag change.
+- **Price delta**: ~€5–10 above F722ZE. Negligible against a months-long
+  research effort.
+
+**Rejected alternatives at the revision point**:
+- **Stay on F722, accept soft-float `f64`**: contradicts the original
+  DAP-budget rationale; would invalidate the headline claim that
+  Cortex-M7 was chosen for hardware `f64`. Rejected.
+- **Jump to NUCLEO-H743ZI** (Cortex-M7 @ 480 MHz, DPFPU, 2 MB flash,
+  1 MB RAM): future-proofs more aggressively but is overkill for a
+  research port. The H7 series is also a different reference manual
+  (RM0433) with different power architecture and a more complex
+  cache-coherency story for DTCM. Rejected as YAGNI; could be revisited
+  if a later milestone (e.g. higher-rate guidance loop, full mission
+  replay) needs the headroom.
+
+**Migration scope** (this commit):
+- `Cargo.toml` workspace member rename
+- `agc-board-nucleo-f767/Cargo.toml`: `package.name`,
+  `stm32f7xx-hal` feature `stm32f722` → `stm32f767`
+- `.cargo/config.toml` (workspace + crate): probe-rs chip ID
+  `STM32F722ZETx` → `STM32F767ZITx`
+- `agc-board-nucleo-f767/memory.x`: FLASH 512K → 2048K, RAM 256K → 512K
+  (both regions are contiguous on F767ZI: SRAM = DTCM 128K + SRAM1 368K
+  + SRAM2 16K = 512K starting at `0x2000_0000`)
+- All `agc_board_nucleo_f722::` Rust paths in
+  `agc-board-nucleo-f767/src/bin/agc.rs` rewritten to `f767`
+- Doc-comment references in `src/lib.rs` and `src/link/dispatch.rs`
+- README.md, docs/hardware-bom.md, docs/external-peripheral-protocol.md,
+  agc-bridge-pico/README.md
+- ADR-011 marked Superseded with an in-place note (text preserved as
+  historical record)
+- Memory entries `project_hardware_target.md`,
+  `project_battery_backed_bkpsram.md`, `project_hardware_port_paused.md`,
+  `MEMORY.md` index
+
+**Out of scope** (deliberately):
+- `transformation/tasks.md` historical milestone records that say
+  "agc-board-nucleo-f722 v0.x.0 — 2026-05-02" stay as written. Those
+  document past work under its actual name. Active build/run
+  instructions in the same file are updated.
+- ADR-015, 016, 017, 018, 019, 020 are NOT rewritten — their text
+  references the F722-era crate name as a matter of historical record.
+  When those ADRs are revisited for unrelated reasons, the names will
+  be brought current then.
+
+**Affected files**: see commit message of the migration commit.
 
 ---
 

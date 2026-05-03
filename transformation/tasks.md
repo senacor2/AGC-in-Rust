@@ -784,7 +784,7 @@ hardware-validated yet.
    cargo test  -p agc-core            # expect 405+
    cargo test  -p agc-imu-platform    # expect 18+
    cargo test  -p agc-protocol        # expect 25+
-   cargo build --target thumbv7em-none-eabihf -p agc-board-nucleo-f722
+   cargo build --target thumbv7em-none-eabihf -p agc-board-nucleo-f767
    cargo build --target thumbv6m-none-eabi    -p agc-bridge-pico
    ```
 
@@ -802,7 +802,7 @@ hardware-validated yet.
 
 4. **Nucleo AGC**:
    ```sh
-   cargo run -p agc-board-nucleo-f722 --bin agc  # via on-board ST-LINK
+   cargo run -p agc-board-nucleo-f767 --bin agc  # via on-board ST-LINK
    ```
    Expected defmt RTT output (from probe-rs):
    - `agc: COLD BOOT — running FRESH START`
