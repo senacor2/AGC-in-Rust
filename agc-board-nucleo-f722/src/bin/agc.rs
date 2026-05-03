@@ -4,14 +4,18 @@
 //!   1. `cortex-m-rt` sets up the stack and zero-initialises BSS.
 //!   2. Clocks are configured to 216 MHz (SYSCLK) / 54 MHz (APB1) / 108 MHz (APB2).
 //!   3. USART6 and IWDG are initialised.
-//!   4. SPI3 + BMI088 initialised; 100-sample bias calibration; platform uncaged.
-//!   5. TIM7 configured at 1 kHz; NVIC unmasked at priority 0x80.
-//!   6. SysTick configured at 1 kHz.
-//!   7. TIM2/3/4/5 initialised; NVIC priorities set and unmasked.
-//!   8. `AgcState::new()` placed in `static mut`; `fresh_start` runs.
+//!   4. RCC CSR reset-cause flags examined: cold POR/BOR → `fresh_start`;
+//!      any warm reset (IWDG, software, pin) → `restart` (preserves nav state).
+//!   5. SPI3 + BMI088 initialised; 100-sample bias calibration; initial attitude
+//!      derived from the measured gravity vector; platform uncaged.
+//!   6. TIM7 configured at 1 kHz; NVIC unmasked at priority 0x80.
+//!   7. SysTick configured at 1 kHz.
+//!   8. TIM2/3/4/5 initialised; NVIC priorities set and unmasked (TIM4 configured
+//!      but interrupt not enabled — T5 path retired per ADR-020).
 //!   9. CDU pre-read; DAP brought up in AttitudeHold mode.
 //!  10. `HelloAck` sent to confirm the bridge link.
-//!  11. `Executive::run` entered — never returns.
+//!  11. Memory layout logged via defmt.
+//!  12. `Executive::run` entered — never returns.
 
 #![no_std]
 #![no_main]
@@ -34,7 +38,7 @@ use agc_board_nucleo_f722::{
 };
 use agc_core::{
     executive::scheduler::Executive,
-    hal::runtime::{T3_PENDING, T4_PENDING, T5_PENDING, T6_PENDING},
+    hal::runtime::{T3_PENDING, T4_PENDING, T6_PENDING},
     services::fresh_start::fresh_start,
     AgcState,
 };
@@ -55,6 +59,61 @@ fn pet_wdg() {
             wdg.pet();
         }
     });
+}
+
+// ── Linker-script symbols (cortex-m-rt 0.7) ──────────────────────────────────
+
+extern "C" {
+    static _stack_start: u32;
+    static _stack_end: u32;
+    static __sdata: u32;
+    static __edata: u32;
+    static __sbss: u32;
+    static __ebss: u32;
+}
+
+// ── RCC reset-cause detection (ADR-020) ──────────────────────────────────────
+
+/// Returns `true` if this boot was a cold power-on or brown-out reset.
+///
+/// Cold boots should run `fresh_start` (all state zeroed). Warm boots
+/// (IWDG expiry, software reset, NRST pin, low-power wakeup) should run
+/// `restart` so navigation state is preserved.
+///
+/// # Safety
+/// RCC CSR is read and then RMVF is written once during single-threaded
+/// init before any ISR touches RCC. No aliased access.
+fn was_cold_boot() -> bool {
+    // SAFETY: RCC CSR is a single read/modify; no aliasing. Performed
+    // exactly once at boot before any other code touches RCC.
+    let rcc = unsafe { &*pac::RCC::ptr() };
+    let csr = rcc.csr.read();
+    let cold = csr.porrstf().is_reset() || csr.borrstf().is_reset();
+    // Clear all reset flags so the next boot sees only what just happened.
+    rcc.csr.modify(|_, w| w.rmvf().clear());
+    cold
+}
+
+// ── Memory layout report ──────────────────────────────────────────────────────
+
+/// Log stack / BSS / data sizes via defmt at boot.
+///
+/// # Safety
+/// Only reads the numeric values of linker-script-defined addresses; no
+/// pointer is dereferenced as data. Called once before `Executive::run`.
+unsafe fn report_memory() {
+    let stack_top = &_stack_start as *const _ as usize;
+    let stack_bot = &_stack_end as *const _ as usize;
+    let bss_size = (&__ebss as *const _ as usize) - (&__sbss as *const _ as usize);
+    let data_size = (&__edata as *const _ as usize) - (&__sdata as *const _ as usize);
+    defmt::info!(
+        "memory: stack {}..{} ({} B), .bss={} B, .data={} B",
+        stack_bot,
+        stack_top,
+        stack_top.saturating_sub(stack_bot),
+        bss_size,
+        data_size
+    );
 }
 
 // ── Entry ─────────────────────────────────────────────────────────────────────
@@ -85,7 +144,7 @@ fn main() -> ! {
         cortex_m::peripheral::NVIC::unmask(pac::Interrupt::USART6);
     }
 
-    // ── Watchdog (≈1.5 s timeout) ─────────────────────────────────────────────
+    // ── Watchdog (≈1.024 s timeout, AGC spec window 0.64–1.92 s) ─────────────
     let wdg = Watchdog::init(dp.IWDG);
     cortex_m::interrupt::free(|cs| {
         *WDG.borrow(cs).borrow_mut() = Some(wdg);
@@ -147,10 +206,10 @@ fn main() -> ! {
         }
     };
 
-    // ── Bias calibration ──────────────────────────────────────────────────────
-    // Collect 100 samples at ~10 ms spacing.  Assume board is level on
-    // power-up so gravity points along +Z.  Gyro mean = gyro zero-rate offset.
-    // Accel bias = measured mean − [0, 0, g].
+    // ── Bias calibration + initial attitude ───────────────────────────────────
+    // Collect 100 samples at ~10 ms spacing.
+    // Gyro mean = gyro zero-rate offset.
+    // Accel mean direction = gravity body-frame direction.
     let mut bmi = bmi;
     let mut gyro_sum = [0.0f64; 3];
     let mut accel_sum = [0.0f64; 3];
@@ -167,19 +226,46 @@ fn main() -> ! {
     let n = CAL_SAMPLES as f64;
     let gyro_bias = [gyro_sum[0] / n, gyro_sum[1] / n, gyro_sum[2] / n];
     let accel_mean = [accel_sum[0] / n, accel_sum[1] / n, accel_sum[2] / n];
-    let accel_bias = [accel_mean[0], accel_mean[1], accel_mean[2] - 9.806_65];
 
-    defmt::info!("BMI088 bias cal complete (identity initial attitude, level-board assumption)");
+    // Derive initial platform attitude from the measured gravity direction rather
+    // than assuming +Z alignment (identity attitude). This makes the platform
+    // "level" in inertial space regardless of board mounting tilt.
+    let mag = libm::sqrt(
+        accel_mean[0] * accel_mean[0]
+            + accel_mean[1] * accel_mean[1]
+            + accel_mean[2] * accel_mean[2],
+    );
+    let initial_attitude = if mag > 1.0 {
+        let g_unit = [
+            accel_mean[0] / mag,
+            accel_mean[1] / mag,
+            accel_mean[2] / mag,
+        ];
+        UnitQuaternion::from_two_unit_vectors(g_unit, [0.0, 0.0, 1.0])
+    } else {
+        // Sensor failure or near-weightless environment — fall back to identity.
+        UnitQuaternion::IDENTITY
+    };
+    // With gravity rotated into +Z by attitude, no accel bias correction is needed.
+    let accel_bias = [0.0, 0.0, 0.0];
 
-    // Store BMI088 and uncage the platform with identity attitude.
+    defmt::info!(
+        "imu: initial attitude q=({},{},{},{})",
+        initial_attitude.w,
+        initial_attitude.x,
+        initial_attitude.y,
+        initial_attitude.z
+    );
+
+    // Store BMI088 and uncage the platform with the gravity-derived attitude.
     cortex_m::interrupt::free(|cs| {
         *BMI088.borrow(cs).borrow_mut() = Some(bmi);
         let mut platform = PLATFORM.borrow(cs).borrow_mut();
         platform.set_bias(gyro_bias, accel_bias);
-        platform.uncage(UnitQuaternion::IDENTITY);
+        platform.uncage(initial_attitude);
     });
 
-    defmt::info!("BMI088: platform uncaged");
+    defmt::info!("BMI088: platform uncaged (gravity-vector initial attitude)");
 
     // ── TIM7 at 1 kHz ────────────────────────────────────────────────────────
     // APB1 timer clock = 108 MHz (2 × PCLK1 because APB1 prescaler ≠ 1,
@@ -226,32 +312,37 @@ fn main() -> ! {
     let _timers = LocalTimers::init(dp.TIM2, dp.TIM3, dp.TIM4, dp.TIM5);
 
     // SAFETY: NVIC writes during single-threaded init before these ISRs fire.
+    // TIM4 (T5RUPT) is configured in LocalTimers::init but its interrupt is NOT
+    // unmasked here — the T5 path is retired per ADR-020.
     unsafe {
-        // Priority order matches AGC Interrupt enum discriminants (ADR, plan D4):
+        // Priority order matches AGC Interrupt enum discriminants:
         //   T6RUPT (TIM5) = highest AGC priority → NVIC 0x10
-        //   T5RUPT (TIM4)                        → NVIC 0x20
         //   T3RUPT (TIM2)                        → NVIC 0x30
         //   T4RUPT (TIM3)                        → NVIC 0x40
         cp.NVIC.set_priority(pac::Interrupt::TIM5, 0x10);
-        cp.NVIC.set_priority(pac::Interrupt::TIM4, 0x20);
         cp.NVIC.set_priority(pac::Interrupt::TIM2, 0x30);
         cp.NVIC.set_priority(pac::Interrupt::TIM3, 0x40);
 
         cortex_m::peripheral::NVIC::unmask(pac::Interrupt::TIM5);
-        cortex_m::peripheral::NVIC::unmask(pac::Interrupt::TIM4);
         cortex_m::peripheral::NVIC::unmask(pac::Interrupt::TIM2);
         cortex_m::peripheral::NVIC::unmask(pac::Interrupt::TIM3);
     }
 
-    defmt::info!("TIM2/3/4/5: AGC scheduling timers started (TIM2 one-shot, arm_t3 controlled)");
+    defmt::info!("TIM2/3/5: AGC scheduling timers started (TIM4/T5 retired per ADR-020)");
 
-    // ── FRESH START ───────────────────────────────────────────────────────────
+    // ── FRESH START or RESTART ────────────────────────────────────────────────
     // SAFETY: `AGC_STATE` is a `static mut`. We obtain a raw pointer then
     // immediately reborrow as `&mut`.  Interrupt handlers access only the
     // `BRIDGE`, `LINK`, `PLATFORM`, `BMI088`, and `TIMER_HANDLES` statics —
     // never `AGC_STATE` — so there is no aliased mutable access.
     let state: &mut AgcState = unsafe { &mut *core::ptr::addr_of_mut!(AGC_STATE) };
-    fresh_start(state);
+    if was_cold_boot() {
+        defmt::info!("agc: COLD BOOT — running FRESH START");
+        fresh_start(state);
+    } else {
+        defmt::info!("agc: WARM BOOT — running RESTART (nav state preserved)");
+        agc_core::services::fresh_start::restart(state);
+    }
 
     // ── DAP bootstrap ─────────────────────────────────────────────────────────
     // Read CDU once so dap_init has a valid prev_cdu baseline (its contract).
@@ -276,7 +367,12 @@ fn main() -> ! {
         );
     });
 
-    defmt::info!("agc: FRESH START complete, DAP active, executive entering run loop");
+    // ── Memory layout report ─────────────────────────────────────────────────
+    // SAFETY: report_memory reads only the addresses of linker-defined symbols;
+    // it does not dereference them as data.
+    unsafe { report_memory() };
+
+    defmt::info!("agc: init complete, DAP active, executive entering run loop");
 
     // ── Executive run loop (never returns) ────────────────────────────────────
     use agc_board_nucleo_f722::Board;
@@ -307,7 +403,7 @@ fn USART6() {
 
 // ── TIM7 ISR: 1 kHz IMU sample loop ──────────────────────────────────────────
 //
-// Priority 0x80 — lower than the AGC T6/T5/T3/T4 ISRs (0x10–0x40).
+// Priority 0x80 — lower than the AGC T6/T3/T4 ISRs (0x10–0x40).
 // The SPI reads are inside `interrupt::free` because the `Bmi088Driver` is
 // owned by the `BMI088` static which requires a `CriticalSection` token.
 // SPI transfer time for 7 + 8 bytes at 6.75 MHz ≈ 18 µs, well within 1 ms.
@@ -353,15 +449,6 @@ fn TIM3() {
         h.tim3.sr.modify(|_, w| w.uif().clear_bit());
     });
     T4_PENDING.store(true, Ordering::Release);
-}
-
-/// TIM4 → T5RUPT (DAP cycle). Priority 0x20.
-#[interrupt]
-fn TIM4() {
-    with_timers(|h| {
-        h.tim4.sr.modify(|_, w| w.uif().clear_bit());
-    });
-    T5_PENDING.store(true, Ordering::Release);
 }
 
 /// TIM5 → T6RUPT (RCS jet pulse). Priority 0x10 (highest AGC priority).

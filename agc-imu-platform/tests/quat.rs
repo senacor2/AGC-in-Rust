@@ -152,3 +152,54 @@ fn gimbal_lock_singularity() {
     // while the original quaternion encodes pitch slightly above π/2.
     assert_vec_near(v1, v2, 1e-7, "gimbal_lock rotation preserved");
 }
+
+// ── from_two_unit_vectors tests ───────────────────────────────────────────────
+
+/// from == to → IDENTITY (within 1e-12).
+#[test]
+fn from_two_unit_vectors_identity() {
+    let v = [1.0_f64, 0.0, 0.0];
+    let q = UnitQuaternion::from_two_unit_vectors(v, v);
+    quat_is_identity(q, EPS12, "from_two_unit_vectors_identity");
+}
+
+/// (1,0,0) → (0,1,0): 90° rotation about Z.
+#[test]
+fn from_two_unit_vectors_orthogonal() {
+    let from = [1.0_f64, 0.0, 0.0];
+    let to = [0.0_f64, 1.0, 0.0];
+    let q = UnitQuaternion::from_two_unit_vectors(from, to);
+    // q applied to `from` should give `to`.
+    let result = q.rotate_vec(from);
+    assert_vec_near(result, to, EPS9, "from_two_unit_vectors_orthogonal");
+    // Must be a 90° rotation about Z: w = cos(45°), z = sin(45°), x = y = 0.
+    let half_sqrt2 = (0.5_f64).sqrt();
+    assert_near(q.w, half_sqrt2, EPS9, "orthogonal q.w");
+    assert_near(q.x, 0.0, EPS9, "orthogonal q.x");
+    assert_near(q.y, 0.0, EPS9, "orthogonal q.y");
+    assert_near(q.z, half_sqrt2, EPS9, "orthogonal q.z");
+}
+
+/// (1,0,0) → (-1,0,0): antiparallel — rotated `from` lands on `to` within 1e-9.
+#[test]
+fn from_two_unit_vectors_antiparallel() {
+    let from = [1.0_f64, 0.0, 0.0];
+    let to = [-1.0_f64, 0.0, 0.0];
+    let q = UnitQuaternion::from_two_unit_vectors(from, to);
+    let result = q.rotate_vec(from);
+    assert_vec_near(result, to, EPS9, "from_two_unit_vectors_antiparallel");
+}
+
+/// Arbitrary unit vectors: rotated `from` matches `to` to 1e-9.
+#[test]
+fn from_two_unit_vectors_arbitrary() {
+    // from = normalise(1, 2, 3)
+    let mag_f = (1.0_f64 + 4.0 + 9.0_f64).sqrt();
+    let from = [1.0 / mag_f, 2.0 / mag_f, 3.0 / mag_f];
+    // to = normalise(-3, 1, -1)
+    let mag_t = (9.0_f64 + 1.0 + 1.0_f64).sqrt();
+    let to = [-3.0 / mag_t, 1.0 / mag_t, -1.0 / mag_t];
+    let q = UnitQuaternion::from_two_unit_vectors(from, to);
+    let result = q.rotate_vec(from);
+    assert_vec_near(result, to, EPS9, "from_two_unit_vectors_arbitrary");
+}

@@ -118,6 +118,45 @@ impl UnitQuaternion {
         ]
     }
 
+    /// Quaternion that rotates unit vector `from` onto unit vector `to`.
+    ///
+    /// Returns `IDENTITY` when `from` and `to` are already aligned (dot > 1 − 1e-12).
+    /// For the antiparallel case (`from` ≈ `−to`), returns a 180° rotation about
+    /// the standard basis axis least aligned with `from`, so the result maps
+    /// `from` to `to` within 1e-9.
+    pub fn from_two_unit_vectors(from: [f64; 3], to: [f64; 3]) -> Self {
+        let dot = from[0] * to[0] + from[1] * to[1] + from[2] * to[2];
+        if dot > 1.0 - 1e-12 {
+            return Self::IDENTITY;
+        }
+        if dot < -1.0 + 1e-12 {
+            // Antiparallel: pick any axis perpendicular to `from`.
+            let axis = if from[0].abs() < 0.9 {
+                [1.0, 0.0, 0.0]
+            } else {
+                [0.0, 1.0, 0.0]
+            };
+            let cross = [
+                from[1] * axis[2] - from[2] * axis[1],
+                from[2] * axis[0] - from[0] * axis[2],
+                from[0] * axis[1] - from[1] * axis[0],
+            ];
+            return Self::from_axis_angle(cross, core::f64::consts::PI);
+        }
+        let cross = [
+            from[1] * to[2] - from[2] * to[1],
+            from[2] * to[0] - from[0] * to[2],
+            from[0] * to[1] - from[1] * to[0],
+        ];
+        let s = sqrt((1.0 + dot) * 2.0);
+        Self {
+            w: 0.5 * s,
+            x: cross[0] / s,
+            y: cross[1] / s,
+            z: cross[2] / s,
+        }
+    }
+
     /// Body-rate integration: `q_new = (q ⊗ from_rotation_vector(ω * dt)).normalise()`.
     pub fn integrate(self, omega: [f64; 3], dt: f64) -> Self {
         let rv = [omega[0] * dt, omega[1] * dt, omega[2] * dt];

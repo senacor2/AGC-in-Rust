@@ -16,6 +16,7 @@ dependencies = [
  "embedded-hal 0.2.7",
  "embedded-hal 1.0.0",
  "heapless",
+ "libm",
  "nb 1.1.0",
  "panic-probe",
  "stm32f7xx-hal",

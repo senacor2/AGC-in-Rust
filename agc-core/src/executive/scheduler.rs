@@ -74,7 +74,8 @@ impl Executive {
     /// and a `&mut self` receiver would cause a split-borrow conflict when
     /// dispatching a job that mutates other fields of `state`.
     pub fn run<H: AgcHardware>(state: &mut crate::AgcState, hw: &mut H) -> ! {
-        use crate::hal::runtime::{T3_PENDING, T4_PENDING, T5_PENDING, T6_PENDING};
+        use crate::hal::runtime::{T3_PENDING, T4_PENDING, T6_PENDING};
+        use crate::services::pinball::DskyFrame;
         use core::sync::atomic::Ordering;
 
         // Arm T3 for any tasks already on the waitlist (e.g. from dap_init).
@@ -86,6 +87,9 @@ impl Executive {
         // writes when the waitlist front hasn't changed since the last arm.
         let mut last_armed_t3: Option<u16> = state.waitlist.front_delta();
 
+        // Rate-limit DSKY emission: only push to hardware when the frame changes.
+        let mut last_dsky_frame: Option<DskyFrame> = None;
+
         loop {
             hw.pet_watchdog();
 
@@ -95,11 +99,6 @@ impl Executive {
             // T6RUPT: RCS jet quench (highest AGC priority).
             if T6_PENDING.swap(false, Ordering::Acquire) {
                 hw.rcs().quench_all();
-            }
-
-            // T5RUPT: DAP runs via the waitlist on T3 in this port (ADR-018).
-            if T5_PENDING.swap(false, Ordering::Acquire) {
-                // No flight code uses T5 directly — placeholder for future use.
             }
 
             // T3RUPT: pre-read CDU, dispatch one waitlist task, re-arm T3.
@@ -145,12 +144,15 @@ impl Executive {
                     state.last_drift_comp_time = state.time;
                 }
 
-                // Emit the full DSKY row stream (21 rows + 10 lamps) every
-                // 120 ms. decode_dsky is pure-computation; emit_dsky_to_hw
+                // Emit the DSKY frame only when it has changed since the last
+                // T4 tick. decode_dsky is pure computation; emit_dsky_to_hw
                 // issues write_row / set_lamp calls to the bridge via UART.
                 let frame = crate::services::pinball::decode_dsky(&state.dsky);
-                crate::services::pinball::emit_dsky_to_hw(&frame, hw.dsky());
-                hw.dsky().set_flash(state.dsky.flashing);
+                if last_dsky_frame.as_ref() != Some(&frame) {
+                    crate::services::pinball::emit_dsky_to_hw(&frame, hw.dsky());
+                    hw.dsky().set_flash(state.dsky.flashing);
+                    last_dsky_frame = Some(frame);
+                }
             }
 
             // ── Drain DSKY keyqueue → V/N state machine ───────────────────────
@@ -250,6 +252,22 @@ mod tests {
 
     fn dummy_job(_state: &mut crate::AgcState) {}
     fn dummy_job_b(_state: &mut crate::AgcState) {}
+
+    // TC-DSKY-EQ: two identical DskyFrames compare equal; a changed frame compares unequal.
+    #[test]
+    fn tc_dsky_frame_equality() {
+        use crate::services::display::DskyState;
+        use crate::services::pinball::decode_dsky;
+        let mut s = DskyState::default();
+        s.verb = 6;
+        s.noun = 40;
+        let f1 = decode_dsky(&s);
+        let f2 = decode_dsky(&s);
+        assert_eq!(f1, f2, "identical state → identical frame");
+        s.verb = 16;
+        let f3 = decode_dsky(&s);
+        assert_ne!(f1, f3, "changed state → different frame");
+    }
 
     // TC-CJ-1: create_job into empty table
     #[test]

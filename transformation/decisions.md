@@ -349,6 +349,34 @@ After the ISR drain loop, each iteration also: drains the DSKY key queue into `s
 
 ---
 
+## ADR-020: Phase-7 Operational Polish
+
+**Date**: 2026-05-03 | **Status**: Accepted
+
+**Decision**: Six targeted hardening items for the Nucleo-F722ZE firmware:
+
+1. **RCC reset-cause detection** — On every boot, `was_cold_boot()` reads RCC CSR before `dp.RCC.constrain()` consumes the peripheral. PORRSTF or BORRSTF set → cold power-on, call `fresh_start` (all state zeroed). Any other reset (IWDG timeout, software `sys_reset()`, NRST pin, low-power wakeup) → warm restart, call `restart` (navigation state preserved). RMVF written after reading to clear flags for the next boot. This implements the GOPROG behaviour described in `services/fresh_start.rs`.
+
+2. **IWDG timeout** — Changed from prescaler /256, reload 187 (≈ 1.496 s) to prescaler /64, reload 512 (1.024 s). New value is comfortably centred in the 0.64–1.92 s AGC spec window from `specs/hal-spec.md §4.3`, giving more margin against WDT false trips from brief processing spikes without risking watchdog misses.
+
+3. **Gravity-vector initial attitude** — The identity-attitude bootstrap assumed the board was mounted with its Z axis pointing up. Any tilt produced wrong accel bias (the subtracted `−g` was mis-projected). Replacing with `UnitQuaternion::from_two_unit_vectors(g_body_unit, [0,0,1])` derived from the 100-sample gravity mean rotates the platform so +Z aligns with the measured gravity direction, eliminating the tilt-induced bias entirely. Accel bias is then zero. The new `from_two_unit_vectors` constructor is unit-tested with identity, orthogonal, antiparallel, and arbitrary cases.
+
+4. **DSKY refresh rate-limiting** — The T4 drain emitted all 21 rows + 10 lamps + 1 flash every 120 ms regardless of whether anything changed. A `last_dsky_frame: Option<DskyFrame>` local in `Executive::run` caches the last emission; the frame is only pushed to hardware when it differs. This reduces UART traffic by ~90 % in steady state. Trade-off: bridge consumers no longer receive a heartbeat from DSKY rows; `BridgeHeartbeat` (every 200 ms, already implemented) fills that role.
+
+5. **T5/TIM4 retirement** — No flight code uses T5 directly. The `T5_PENDING` AtomicBool and the `arm_t5` trait method are retained at zero cost for future use, but TIM4's update interrupt is no longer enabled in `LocalTimers::init`, the TIM4 ISR is removed from `bin/agc.rs`, and TIM4's NVIC priority and unmask calls are removed. This simplifies the interrupt table and removes a redundant path that duplicates the Waitlist's T3-based dispatch.
+
+6. **Memory layout defmt log** — A one-time `defmt::info!` at boot reports stack region (base, top, size), `.bss` size, and `.data` size using cortex-m-rt linker symbols (`_stack_start`, `_stack_end`, `__sbss`, `__ebss`, `__sdata`, `__edata`). Helps detect linker-script misconfiguration without attaching a debugger.
+
+**Affected files**:
+- `agc-board-nucleo-f722/src/bin/agc.rs` — reset-cause dispatch, gravity attitude, memory log, T5 removal
+- `agc-board-nucleo-f722/src/local/watchdog.rs` — prescaler/reload corrected to 1.024 s
+- `agc-board-nucleo-f722/src/local/timers.rs` — TIM4 UIE not set; ADR-020 comment
+- `agc-core/src/executive/scheduler.rs` — T5_PENDING drain removed; DSKY rate-limit added
+- `agc-imu-platform/src/quat.rs` — `from_two_unit_vectors` constructor added
+- `agc-imu-platform/tests/quat.rs` — 4 new unit tests for `from_two_unit_vectors`
+
+---
+
 ## Open / Proposed ADRs
 
 | ID | Topic | Status |

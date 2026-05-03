@@ -732,9 +732,34 @@ state machine.
 
 #### Follow-on (not yet implemented)
 
-- [ ] DSKY refresh rate-limiting (re-emit only if the frame changed since the last T4 tick)
-- [ ] Restart vs FRESH START differentiation from RCC reset cause register
-- [ ] HIL automated test harness (Phase 7)
+- [x] DSKY refresh rate-limiting (re-emit only if the frame changed since the last T4 tick)
+- [x] Restart vs FRESH START differentiation from RCC reset cause register
+
+---
+
+### Hardware Port — Phase 7: Operational Polish
+
+**Milestone**: `agc-board-nucleo-f722` v0.7.0 (2026-05-03)
+
+Turns the bench-demo firmware into a robust operational system.
+
+#### Completed (this milestone)
+
+- [x] RCC reset-cause detection → `fresh_start` on cold POR/BOR, `restart` on warm reset
+- [x] IWDG timeout verified and adjusted to 1.024 s (prescaler /64, reload 512; AGC spec window 0.64–1.92 s)
+- [x] `UnitQuaternion::from_two_unit_vectors` added to `agc-imu-platform` + 4 unit tests
+- [x] `bin/agc.rs` bootstraps platform attitude from measured gravity vector (replaces identity assumption)
+- [x] defmt log line at boot reports stack / BSS / data sizes (linker-symbol derived)
+- [x] DSKY refresh rate-limited: T4 drain only calls `emit_dsky_to_hw` when the frame has changed
+- [x] T5/TIM4 path retired: UIE not set in `LocalTimers::init`, TIM4 ISR removed, NVIC unmask removed
+- [x] ADR-020 recorded
+
+#### Follow-on items
+
+- [ ] Gyro temperature/bias drift compensation (needs hardware experimentation)
+- [ ] Stack high-watermark via flip-link (Phase 8 — HIL territory)
+- [ ] Reset-cause logging granularity (currently just COLD vs WARM — could distinguish IWDG vs software vs pin reset)
+- [ ] HIL automated test harness (Phase 8)
 
 ---
 
