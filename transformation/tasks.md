@@ -756,10 +756,122 @@ Turns the bench-demo firmware into a robust operational system.
 
 #### Follow-on items
 
-- [ ] Gyro temperature/bias drift compensation (needs hardware experimentation)
-- [ ] Stack high-watermark via flip-link (Phase 8 — HIL territory)
-- [ ] Reset-cause logging granularity (currently just COLD vs WARM — could distinguish IWDG vs software vs pin reset)
-- [ ] HIL automated test harness (Phase 8)
+- [ ] Reset-cause logging granularity (currently just COLD vs WARM — could distinguish IWDG vs software vs pin reset). **Code-only, not blocked on hardware.**
+- [ ] Gyro temperature/bias drift compensation. **Blocked on hardware** — needs long bench runs to characterise drift.
+- [ ] Stack high-watermark via `flip-link`. **Blocked on hardware** — only meaningful once the binary actually runs.
+- [ ] HIL automated test harness (Phase 8).
+
+---
+
+## ⏸ Hardware Port — Paused Pending Hardware Acquisition (2026-05-03)
+
+The bench bring-up is complete in code. Both binaries (`agc-board-nucleo-f722`
+on `thumbv7em-none-eabihf` ≈ 140 KB, `agc-bridge-pico` on `thumbv6m-none-eabi`
+≈ 29 KB) build clean and contain real flight code. **Nothing is currently
+flashable because the hardware has not yet been ordered.**
+
+The full BOM is in `docs/hardware-bom.md` (~€69 essentials, ~€33 quality-of-life
+add-ons). When the hardware arrives, resume here.
+
+### Resumption checklist (run before any new work)
+
+When the hardware is on the bench, run through this in order. Each step
+should pass cleanly; failures point to bit-rot in code that has not been
+hardware-validated yet.
+
+1. **Build sanity** (no hardware needed; verify the codebase still builds):
+   ```sh
+   cargo test  -p agc-core            # expect 405+
+   cargo test  -p agc-imu-platform    # expect 18+
+   cargo test  -p agc-protocol        # expect 25+
+   cargo build --target thumbv7em-none-eabihf -p agc-board-nucleo-f722
+   cargo build --target thumbv6m-none-eabi    -p agc-bridge-pico
+   ```
+
+2. **Wiring** per `docs/hardware-bom.md` §"Wiring summary" — 8 SPI wires for
+   the BMI088 (Adafruit #4836 to PB3/PB4/PB5 + PA15/PB12 + 3V3/GND), 3 UART
+   wires Nucleo↔Pico (cross PC6/PC7 ↔ GP0/GP1 + GND).
+
+3. **Pico bridge first** (it has fewer failure modes):
+   ```sh
+   cargo run -p agc-bridge-pico                  # via probe-rs SWD
+   # OR drag-and-drop UF2 in BOOTSEL mode
+   ```
+   Connect a USB serial console to the Pico. On power-up: `bridge: hello,
+   awaiting AGC handshake…`. LED on GP25 should toggle every 200 ms.
+
+4. **Nucleo AGC**:
+   ```sh
+   cargo run -p agc-board-nucleo-f722 --bin agc  # via on-board ST-LINK
+   ```
+   Expected defmt RTT output (from probe-rs):
+   - `agc: COLD BOOT — running FRESH START`
+   - `BMI088: accel chip_id=0x1E gyro chip_id=0x0F`
+   - `imu: initial attitude q=(…)` reflecting the board's mounting tilt
+   - `memory: stack ... .bss=… .data=…`
+   - `agc: FRESH START complete, DAP active, executive entering run loop`
+
+5. **End-to-end keystroke test**: type `v37e` into the Pico's USB console.
+   The Nucleo should receive the four `DskyKey` frames, the V/N state machine
+   should transition into program-select, and the bridge console should show
+   the resulting DSKY frame updates (`AGC→ DSKY row=1 VERB=37` etc.).
+
+6. **Periodic activity check**: with the BMI088 stationary, expect occasional
+   `RCS_FIRE_SM` / `RCS_QUENCH_ALL` traffic on the bridge console as gyro
+   bias drifts past the DAP deadband — this is the AGC actively maintaining
+   attitude.
+
+If any of steps 3–6 fails, the relevant phase's `transformation/decisions.md`
+ADR section names the design intent for that subsystem.
+
+### Hardware-blocked items (deferred until hardware is on the bench)
+
+These cannot be completed without flashing real silicon and observing
+real-world behaviour.
+
+- [ ] **Phase 8 — Hardware-in-the-loop test harness**
+  - `flip-link` integration to detect stack overflows at link time
+  - DWT cycle-counter instrumentation around T3 dispatch / `dap_step`
+    with defmt logging of min/avg/max per second
+  - Stack high-watermark via cortex-m-rt's pre-init pattern
+  - Boot smoke-test scenario runnable as `cargo run -p agc-board-nucleo-f722`
+    that asserts on expected defmt markers via probe-rs RTT capture
+  - `docs/hil-testing.md` describing the workflow
+  - Optional: probe-rs CI integration on a self-hosted runner
+
+- [ ] **Phase 9 — Physical DSKY hardware** (optional, cosmetic)
+  - 6× cascaded MAX7219 LED modules driving the 21-digit display per
+    the row encoding in ADR-019
+  - 4×5 momentary-button matrix scanned on the Pico for the 19 keys
+    (key codes already mapped in `agc-bridge-pico/src/keymap.rs`)
+  - 2× 74HC595 shift registers + LEDs for the indicator-lamp panel
+  - Optional: optical encoders for sextant trunnion/shaft → upstream
+    `OpticsCdu` frames at higher rate than the current synthetic drift
+  - BOM line items in `docs/hardware-bom.md` §Optional
+
+- [ ] **Phase 7 follow-ons (hardware-blocked subset)**
+  - Gyro temperature/bias drift compensation (needs long bench runs)
+  - Stack high-watermark instrumentation (needs running binary)
+  - Initial-attitude-from-gravity validation against a tilted bench setup
+
+- [ ] **Bridge firmware extensions** (Phase 4 follow-ons)
+  - `OpticsMark`, `EngineThrustOn`, `UplinkWord` emission from the bridge
+  - Pico-side defmt over a second UART (currently USB CDC is the only
+    debug channel)
+
+### Code-only items that do NOT need hardware
+
+These are still doable while waiting for parts. Each is small and self-contained.
+
+- [ ] Reset-cause logging granularity — distinguish IWDG / software / pin
+  reset paths in the WARM-boot defmt line. ~20 LOC in `bin/agc.rs`.
+- [ ] Pre-existing clippy warnings cleanup in `agc-core` (~24 lints in
+  older modules). Cosmetic but unblocks `cargo clippy -- -D warnings` in CI.
+- [ ] DSKY display row-decoder unit tests on the Pico side (round-trip
+  check that `decode_dsky_row` matches `emit_dsky_to_hw`'s encoding).
+- [ ] Optional QEMU `lm3s6965evb` smoke-test crate (`agc-emu-demo` or
+  similar) producing a binary that exits 0 on success in QEMU — useful
+  CI gate for Cortex-M codegen regressions without a board.
 
 ---
 
