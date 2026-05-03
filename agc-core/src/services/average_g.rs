@@ -26,6 +26,7 @@ use crate::executive::restart::Phase;
 use crate::executive::{ScheduleResult, GROUP_2};
 use crate::math::linalg::mxv;
 use crate::navigation::integration::average_g_step;
+use crate::tables::alarm_codes::WAITLIST_OVERFLOW;
 use crate::types::Vec3;
 use crate::AgcState;
 
@@ -122,8 +123,13 @@ pub fn start_servicer(state: &mut AgcState) {
 
     // Schedule the first cycle. The T3RUPT handler must arm TIME3 if OkReloadT3.
     // In the simulation / test environment the caller handles the arm_t3 call.
-    let _result = state.waitlist.schedule(200, servicer_task);
-    // In a real system: match _result { OkReloadT3(d) => hw.timers().arm_t3(d), _ => {} }
+    // Saturated waitlist: roll back the active flag and raise alarm 1211 so the
+    // crew sees the failure instead of a silently inactive SERVICER.
+    if state.waitlist.schedule(200, servicer_task) == ScheduleResult::Full {
+        set_servicer_active(state, false);
+        state.restart.set_phase(GROUP_2, Phase::IDLE);
+        state.alarm.raise(WAITLIST_OVERFLOW);
+    }
 }
 
 /// Cancel the SERVICER (Average-G) task.
@@ -236,10 +242,10 @@ pub fn servicer_task(state: &mut AgcState) {
             }
             ScheduleResult::Ok => {}
             ScheduleResult::Full => {
-                // Waitlist full — stop the SERVICER (alarm 1211 would be raised
-                // by the real system; omitted here as services::alarm depends on hw).
+                // Waitlist full — stop the SERVICER and raise alarm 1211.
                 set_servicer_active(state, false);
                 state.restart.set_phase(GROUP_2, Phase::IDLE);
+                state.alarm.raise(WAITLIST_OVERFLOW);
             }
         }
     } else {
@@ -494,5 +500,85 @@ mod tests {
             len_before,
             "inactive servicer must not add a new entry"
         );
+    }
+
+    // ── TC-AG-FULL-1: start_servicer alarms 1211 on saturated waitlist ───────
+
+    /// When the waitlist is saturated, `start_servicer` must roll back the
+    /// active flag, set GROUP_2 to IDLE, and raise alarm 1211 — silent failure
+    /// would leave navigation un-integrated.
+    #[test]
+    fn tc_ag_full_1_start_servicer_alarms_on_full_waitlist() {
+        use crate::executive::waitlist::MAX_WAITLIST_TASKS;
+
+        fn nop(_: &mut AgcState) {}
+
+        let mut state = AgcState::new();
+        for i in 0..MAX_WAITLIST_TASKS {
+            assert_ne!(
+                state.waitlist.schedule((i + 1) as u16, nop),
+                ScheduleResult::Full,
+                "fixture: pre-fill of slot {i} must succeed"
+            );
+        }
+
+        start_servicer(&mut state);
+
+        assert!(
+            !is_servicer_active(&state),
+            "saturated start must roll back the active flag"
+        );
+        assert_eq!(
+            state.restart.phase(GROUP_2),
+            Phase::IDLE,
+            "saturated start must clear GROUP_2 to IDLE"
+        );
+        assert_eq!(
+            state.alarm.code, WAITLIST_OVERFLOW,
+            "alarm code must be 1211 (WAITLIST_OVERFLOW)"
+        );
+        assert!(state.alarm.lit, "alarm.lit must be true");
+    }
+
+    // ── TC-AG-FULL-2: servicer_task alarms 1211 on reschedule failure ────────
+
+    /// When `servicer_task` cannot re-schedule itself (waitlist full), it must
+    /// shut down (active flag cleared, GROUP_2 → IDLE) and raise alarm 1211.
+    #[test]
+    fn tc_ag_full_2_servicer_task_alarms_on_reschedule_failure() {
+        use crate::executive::waitlist::MAX_WAITLIST_TASKS;
+
+        fn nop(_: &mut AgcState) {}
+
+        let mut state = AgcState::new();
+        // Pretend we're already an active SERVICER cycle.
+        set_servicer_active(&mut state, true);
+        state.csm_state = StateVector {
+            position: [6_771_000.0, 0.0, 0.0],
+            velocity: [0.0, 7_672.0, 0.0],
+            epoch: Met(0),
+            frame: Frame::EarthInertial,
+        };
+        // Fill the waitlist before servicer_task runs its reschedule.
+        for i in 0..MAX_WAITLIST_TASKS {
+            state.waitlist.schedule((i + 1) as u16, nop);
+        }
+
+        servicer_task(&mut state);
+
+        assert!(
+            !is_servicer_active(&state),
+            "saturated reschedule must clear the active flag"
+        );
+        assert_eq!(
+            state.restart.phase(GROUP_2),
+            Phase::IDLE,
+            "saturated reschedule must clear GROUP_2 to IDLE"
+        );
+        assert_eq!(
+            state.alarm.code, WAITLIST_OVERFLOW,
+            "alarm code must be 1211 (WAITLIST_OVERFLOW)"
+        );
+        assert!(state.alarm.lit, "alarm.lit must be true");
     }
 }

@@ -163,7 +163,9 @@ const DEFAULT_INERTIA: Vec3 = [120_000.0, 120_000.0, 100_000.0];
 /// AGC source: Comanche055/RCS-CSM_DAP_EXECUTIVE_PROGRAMS.agc — DAPINIT routine.
 pub fn dap_init(state: &mut crate::AgcState, initial_mode: DapMode) {
     use crate::control::tvc::tvc_init;
+    use crate::executive::waitlist::ScheduleResult;
     use crate::executive::{Phase, GROUP_6};
+    use crate::tables::alarm_codes::WAITLIST_OVERFLOW;
 
     debug_assert!(
         initial_mode != DapMode::Off,
@@ -198,7 +200,13 @@ pub fn dap_init(state: &mut crate::AgcState, initial_mode: DapMode) {
     state.restart.set_phase(GROUP_6, Phase::new(1));
 
     // Schedule the first dap_step — caller's T5 ISR shim arms TIME5 if needed.
-    let _ = state.waitlist.schedule(DAP_PERIOD_CS, dap_step);
+    if state.waitlist.schedule(DAP_PERIOD_CS, dap_step) == ScheduleResult::Full {
+        // Waitlist saturated: DAP cannot start. Roll back to a safe state and
+        // raise alarm 1211 (WAITLIST_OVERFLOW).
+        state.dap_state.mode = DapMode::Off;
+        state.restart.set_phase(GROUP_6, Phase::IDLE);
+        state.alarm.raise(WAITLIST_OVERFLOW);
+    }
 }
 
 /// Stop the DAP (flag-then-exit pattern, AD-6).
@@ -232,7 +240,9 @@ pub fn dap_stop(state: &mut crate::AgcState) {
 /// AGC source: Comanche055/RCS-CSM_DIGITAL_AUTOPILOT.agc — T5RUPT handler / DAPIDLER.
 pub fn dap_step(state: &mut crate::AgcState) {
     use crate::control::attitude::compute_body_rates;
+    use crate::executive::waitlist::ScheduleResult;
     use crate::executive::{Phase, GROUP_6};
+    use crate::tables::alarm_codes::WAITLIST_OVERFLOW;
 
     // CI-9: flag-then-exit — Off mode terminates without rescheduling.
     if state.dap_state.mode == DapMode::Off {
@@ -283,7 +293,16 @@ pub fn dap_step(state: &mut crate::AgcState) {
 
     // ── Reschedule self ───────────────────────────────────────────────────
     // If the result is OkReloadT3(delta) the T5 ISR shim arms TIME5 externally.
-    let _ = state.waitlist.schedule(DAP_PERIOD_CS, dap_step);
+    // Saturated waitlist: shut the DAP down and raise alarm 1211 — silent
+    // termination would leave attitude control floating without warning.
+    if state.waitlist.schedule(DAP_PERIOD_CS, dap_step) == ScheduleResult::Full {
+        state.dap_state.mode = DapMode::Off;
+        state.rcs_commanded_jets = 0;
+        state.rcs_commanded_pulse_cs = 0;
+        state.sps_gimbal_cmd = (0, 0);
+        state.restart.set_phase(GROUP_6, Phase::IDLE);
+        state.alarm.raise(WAITLIST_OVERFLOW);
+    }
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
@@ -624,5 +643,103 @@ mod tests {
             mr[2] * DAP_PERIOD_S,
             ca[2]
         );
+    }
+
+    // ── TC-DAP-08: dap_init alarms 1211 when waitlist is saturated ────────
+
+    /// When the waitlist is full at the moment `dap_init` runs, the function
+    /// must roll back: mode → Off, GROUP_6 → IDLE, alarm 1211 raised and lit.
+    #[test]
+    fn tc_dap_08_init_alarms_on_full_waitlist() {
+        use crate::executive::waitlist::MAX_WAITLIST_TASKS;
+        use crate::executive::{Phase, ScheduleResult, GROUP_6};
+        use crate::tables::alarm_codes::WAITLIST_OVERFLOW;
+
+        fn nop(_: &mut crate::AgcState) {}
+
+        let mut state = make_state();
+        // Saturate the waitlist before dap_init runs.
+        for i in 0..MAX_WAITLIST_TASKS {
+            assert_ne!(
+                state.waitlist.schedule((i + 1) as u16, nop),
+                ScheduleResult::Full,
+                "fixture: pre-fill of slot {i} must succeed"
+            );
+        }
+
+        dap_init(&mut state, DapMode::AttitudeHold);
+
+        assert_eq!(
+            state.dap_state.mode,
+            DapMode::Off,
+            "saturated init must roll mode back to Off"
+        );
+        assert_eq!(
+            state.restart.phase(GROUP_6),
+            Phase::IDLE,
+            "saturated init must clear GROUP_6 to IDLE"
+        );
+        assert_eq!(
+            state.alarm.code, WAITLIST_OVERFLOW,
+            "alarm code must be 1211 (WAITLIST_OVERFLOW)"
+        );
+        assert!(state.alarm.lit, "alarm.lit must be true");
+    }
+
+    // ── TC-DAP-09: dap_step alarms 1211 + IDLE on reschedule failure ──────
+
+    /// When `dap_step` runs with a saturated waitlist, the self-reschedule
+    /// fails. The DAP must shut down (mode → Off, staging cleared,
+    /// GROUP_6 → IDLE) and alarm 1211 must be raised — silent termination
+    /// would leave attitude control floating without crew warning.
+    #[test]
+    fn tc_dap_09_step_alarms_on_reschedule_failure() {
+        use crate::executive::waitlist::MAX_WAITLIST_TASKS;
+        use crate::executive::{Phase, GROUP_6};
+        use crate::tables::alarm_codes::WAITLIST_OVERFLOW;
+
+        fn nop(_: &mut crate::AgcState) {}
+
+        let mut state = make_state();
+        state.dap_state.mode = DapMode::AttitudeHold;
+        state.dap_state.deadband = 1000.0; // suppress jet output noise
+        state.current_cdu = [CduAngle(0), CduAngle(0), CduAngle(0)];
+        state.dap_state.prev_cdu = [CduAngle(0), CduAngle(0), CduAngle(0)];
+
+        // Saturate the waitlist after the DAP would have wanted to reschedule.
+        for i in 0..MAX_WAITLIST_TASKS {
+            state.waitlist.schedule((i + 1) as u16, nop);
+        }
+
+        dap_step(&mut state);
+
+        assert_eq!(
+            state.dap_state.mode,
+            DapMode::Off,
+            "saturated reschedule must shut DAP down (mode → Off)"
+        );
+        assert_eq!(
+            state.rcs_commanded_jets, 0,
+            "saturated reschedule must clear rcs_commanded_jets"
+        );
+        assert_eq!(
+            state.rcs_commanded_pulse_cs, 0,
+            "saturated reschedule must clear rcs_commanded_pulse_cs"
+        );
+        assert_eq!(
+            state.sps_gimbal_cmd,
+            (0, 0),
+            "saturated reschedule must clear sps_gimbal_cmd"
+        );
+        assert_eq!(
+            state.restart.phase(GROUP_6),
+            Phase::IDLE,
+            "saturated reschedule must clear GROUP_6 to IDLE"
+        );
+        assert_eq!(
+            state.alarm.code, WAITLIST_OVERFLOW,
+            "alarm code must be 1211 (WAITLIST_OVERFLOW)"
+        );
+        assert!(state.alarm.lit, "alarm.lit must be true");
     }
 }

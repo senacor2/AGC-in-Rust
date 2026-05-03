@@ -436,15 +436,21 @@ pub fn p20_rendezvous_nav_cycle(state: &mut AgcState) {
     // R2: range-rate, **positive = closing** (O'Brien p. 329 N54 convention,
     //     opposite to range_rate sign, hence the negation).
     // R3: elevation angle (rad) from LVLH local horizontal to LOS.
-    let rdot = range_rate(csm_pos, csm_vel, tgt_pos, tgt_vel);
-    let los = los_angles_lvlh(&state.rendezvous_nav.lvlh_state);
-
-    state.dsky.verb = 16;
-    state.dsky.noun = 54;
-    state.dsky.r[0] = rng as f32;
-    state.dsky.r[1] = (-rdot) as f32; // positive = closing per N54 convention
-    state.dsky.r[2] = los.elevation as f32;
-    state.dsky.flashing = false;
+    //
+    // Defensive: rng > MIN_TRACKING_RANGE_M is already enforced above, so the
+    // helpers should always return Some. If the upstream guard is ever loosened,
+    // skip the DSKY update for this cycle rather than displaying NaN/garbage.
+    if let (Some(rdot), Some(los)) = (
+        range_rate(csm_pos, csm_vel, tgt_pos, tgt_vel),
+        los_angles_lvlh(&state.rendezvous_nav.lvlh_state),
+    ) {
+        state.dsky.verb = 16;
+        state.dsky.noun = 54;
+        state.dsky.r[0] = rng as f32;
+        state.dsky.r[1] = (-rdot) as f32; // positive = closing per N54 convention
+        state.dsky.r[2] = los.elevation as f32;
+        state.dsky.flashing = false;
+    }
 
     // ── Step 5: Re-schedule if still in P20 ───────────────────────────────────
     reschedule_if_active(state);

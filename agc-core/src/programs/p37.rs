@@ -19,6 +19,13 @@ use crate::types::Met;
 /// Job priority for P37 (background computation, same tier as P30/P31).
 pub const PRIORITY: JobPriority = 16;
 
+/// Alarm raised when P37 receives a TOF outside `[MIN_TEI_TOF_S, MAX_TEI_TOF_S]`.
+pub const ALARM_P37_BAD_TOF: u16 = 1410;
+
+/// Alarm raised when P37 is invoked with a CSM state vector that is not in
+/// `Frame::MoonInertial`.
+pub const ALARM_P37_WRONG_FRAME: u16 = 1411;
+
 /// Default TIG offset: 30 minutes from current MET (centiseconds).
 pub const DEFAULT_TEI_TIG_OFFSET_CS: u32 = 180_000;
 
@@ -44,16 +51,13 @@ pub const NOMINAL_CSM_MASS_KG: f64 = 20_000.0;
 /// Sets `major_mode = 37`, computes the default TIG from the current MET,
 /// and calls `p37_compute_tei` with the default parameters.
 ///
-/// # Panics
-///
-/// Panics if `state.csm_state.frame != Frame::MoonInertial`.
+/// If the CSM state vector is not in `Frame::MoonInertial`, raises alarm
+/// 1411 (`ALARM_P37_WRONG_FRAME`) and returns without entering P37.
 pub fn p37_init(state: &mut crate::AgcState) -> JobPriority {
-    assert_eq!(
-        state.csm_state.frame,
-        Frame::MoonInertial,
-        "P37 requires MoonInertial frame (current: {:?})",
-        state.csm_state.frame
-    );
+    if state.csm_state.frame != Frame::MoonInertial {
+        state.alarm.raise(ALARM_P37_WRONG_FRAME);
+        return PRIORITY;
+    }
 
     state.major_mode = 37;
     state.dsky.prog = 37;
@@ -76,29 +80,19 @@ pub fn init(state: &mut crate::AgcState) -> JobPriority {
 /// to the TIG, calls `return_to_earth`, and stores the result in
 /// `state.pending_maneuver`.
 ///
-/// # Panics
-///
-/// Panics if `tof` is outside `[MIN_TEI_TOF_S, MAX_TEI_TOF_S]` or if
-/// `state.csm_state.frame != Frame::MoonInertial`.
+/// On invalid input the function leaves `state.pending_maneuver` unchanged and
+/// raises a program alarm:
+/// - TOF outside `[MIN_TEI_TOF_S, MAX_TEI_TOF_S]` → alarm 1410 (`ALARM_P37_BAD_TOF`).
+/// - `state.csm_state.frame != Frame::MoonInertial` → alarm 1411 (`ALARM_P37_WRONG_FRAME`).
 pub fn p37_compute_tei(state: &mut crate::AgcState, tig: Met, tof: f64) {
-    assert!(
-        tof >= MIN_TEI_TOF_S,
-        "TEI TOF too short: {} < {}",
-        tof,
-        MIN_TEI_TOF_S
-    );
-    assert!(
-        tof <= MAX_TEI_TOF_S,
-        "TEI TOF too long: {} > {}",
-        tof,
-        MAX_TEI_TOF_S
-    );
-    assert_eq!(
-        state.csm_state.frame,
-        Frame::MoonInertial,
-        "p37_compute_tei requires MoonInertial frame (current: {:?})",
-        state.csm_state.frame
-    );
+    if !(MIN_TEI_TOF_S..=MAX_TEI_TOF_S).contains(&tof) {
+        state.alarm.raise(ALARM_P37_BAD_TOF);
+        return;
+    }
+    if state.csm_state.frame != Frame::MoonInertial {
+        state.alarm.raise(ALARM_P37_WRONG_FRAME);
+        return;
+    }
 
     // Entry target in MCI.
     // Earth centre: approximately at [-D_EARTH_MOON_M, 0, 0] in MCI.
@@ -279,10 +273,10 @@ mod tests {
         }
     }
 
-    /// TC-P37-3: `init` with `Frame::EarthInertial` state panics.
+    /// TC-P37-3: `init` with `Frame::EarthInertial` state raises alarm 1411
+    /// and does not enter P37 (no `pending_maneuver`, `major_mode` unchanged).
     #[test]
-    #[should_panic]
-    fn tc_p37_3_wrong_frame_panics() {
+    fn tc_p37_3_wrong_frame_alarms_1411() {
         let mut state = AgcState::new();
         let r_leo = R_EARTH + 400_000.0;
         let v_circ = libm::sqrt(MU_EARTH / r_leo);
@@ -293,7 +287,23 @@ mod tests {
             frame: Frame::EarthInertial,
         };
         state.time = Met(0);
+        let major_mode_before = state.major_mode;
+
         let _ = p37_init(&mut state);
+
+        assert_eq!(
+            state.alarm.code, ALARM_P37_WRONG_FRAME,
+            "wrong frame must raise alarm 1411"
+        );
+        assert!(state.alarm.lit, "alarm.lit must be true");
+        assert!(
+            state.pending_maneuver.is_none(),
+            "wrong frame must not set pending_maneuver"
+        );
+        assert_eq!(
+            state.major_mode, major_mode_before,
+            "wrong frame must not promote major_mode to 37"
+        );
     }
 
     /// TC-P37-4: After `p37_compute_tei`, `state.pending_maneuver` is `Some(_)`.
@@ -343,25 +353,47 @@ mod tests {
         );
     }
 
-    /// TC-P37-5: `p37_compute_tei` with TOF < MIN_TEI_TOF_S panics.
+    /// TC-P37-5a: `p37_compute_tei` with TOF < MIN_TEI_TOF_S raises alarm 1410
+    /// and leaves `pending_maneuver` unchanged.
     #[test]
-    #[should_panic]
-    fn tc_p37_5a_tof_too_short_panics() {
+    fn tc_p37_5a_tof_too_short_alarms_1410() {
         let mut state = AgcState::new();
         state.csm_state = llo_state();
         state.time = Met(0);
+
         // 6 hours — below MIN_TEI_TOF_S (24 hours)
         p37_compute_tei(&mut state, Met(DEFAULT_TEI_TIG_OFFSET_CS), 21_600.0);
+
+        assert_eq!(
+            state.alarm.code, ALARM_P37_BAD_TOF,
+            "TOF below MIN must raise alarm 1410"
+        );
+        assert!(state.alarm.lit, "alarm.lit must be true");
+        assert!(
+            state.pending_maneuver.is_none(),
+            "bad TOF must not set pending_maneuver"
+        );
     }
 
-    /// TC-P37-5b: `p37_compute_tei` with TOF > MAX_TEI_TOF_S panics.
+    /// TC-P37-5b: `p37_compute_tei` with TOF > MAX_TEI_TOF_S raises alarm 1410
+    /// and leaves `pending_maneuver` unchanged.
     #[test]
-    #[should_panic]
-    fn tc_p37_5b_tof_too_long_panics() {
+    fn tc_p37_5b_tof_too_long_alarms_1410() {
         let mut state = AgcState::new();
         state.csm_state = llo_state();
         state.time = Met(0);
+
         // 200 hours — above MAX_TEI_TOF_S (120 hours)
         p37_compute_tei(&mut state, Met(DEFAULT_TEI_TIG_OFFSET_CS), 720_000.0);
+
+        assert_eq!(
+            state.alarm.code, ALARM_P37_BAD_TOF,
+            "TOF above MAX must raise alarm 1410"
+        );
+        assert!(state.alarm.lit, "alarm.lit must be true");
+        assert!(
+            state.pending_maneuver.is_none(),
+            "bad TOF must not set pending_maneuver"
+        );
     }
 }

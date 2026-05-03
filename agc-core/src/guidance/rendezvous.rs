@@ -188,8 +188,11 @@ pub fn range(r_active: Vec3, r_target: Vec3) -> f64 {
 ///   Positive  => vehicles are separating (range increasing).
 ///   Negative  => vehicles are closing    (range decreasing).
 ///
-/// # Preconditions
-/// - `range(r_active, r_target)` must be > 0.0.  Panics if zero (see §8).
+/// # Domain
+/// - Returns `Some(rate)` when `range(r_active, r_target) > 0.0`.
+/// - Returns `None` when the two vehicles are at the same inertial position
+///   (range == 0); range-rate is undefined and the caller should skip the
+///   measurement for this cycle rather than treat NaN as a valid sample.
 ///
 /// # Postconditions
 /// - result == 0.0 when rho_dot is perpendicular to rho (instantaneous closest
@@ -201,15 +204,19 @@ pub fn range(r_active: Vec3, r_target: Vec3) -> f64 {
 /// (O'Brien p. 316).  The AGC stored `RDOT` at scale B+7 m/s in erasable.
 ///
 /// Spec: rendezvous-spec.md §6.4
-pub fn range_rate(r_active: Vec3, v_active: Vec3, r_target: Vec3, v_target: Vec3) -> f64 {
+pub fn range_rate(
+    r_active: Vec3,
+    v_active: Vec3,
+    r_target: Vec3,
+    v_target: Vec3,
+) -> Option<f64> {
     let rho = vsub(r_active, r_target);
     let rho_dot = vsub(v_active, v_target);
     let rng = norm(rho);
-    assert!(
-        rng != 0.0,
-        "range_rate: vehicles are at the same inertial position (range == 0)"
-    );
-    dot(rho, rho_dot) / rng
+    if rng == 0.0 {
+        return None;
+    }
+    Some(dot(rho, rho_dot) / rng)
 }
 
 /// Compute the line-of-sight elevation and azimuth from the active vehicle to
@@ -223,8 +230,10 @@ pub fn range_rate(r_active: Vec3, v_active: Vec3, r_target: Vec3, v_target: Vec3
 ///   azimuth   = atan2(y_lvlh, x_lvlh)
 ///               (0 when target is directly ahead along-track)
 ///
-/// # Preconditions
-/// - `lvlh.rho` must be non-zero; panics if `norm(lvlh.rho) == 0.0` (zero range).
+/// # Domain
+/// - Returns `Some(angles)` when `norm(lvlh.rho) > 0.0`.
+/// - Returns `None` when `lvlh.rho` is the zero vector — LOS angles are
+///   undefined and the caller should skip this cycle.
 ///
 /// # Postconditions
 /// - elevation ∈ [-π/2, +π/2]
@@ -242,16 +251,15 @@ pub fn range_rate(r_active: Vec3, v_active: Vec3, r_target: Vec3, v_target: Vec3
 /// the equivalent geometric angles without the optics CDU encoding.
 ///
 /// Spec: rendezvous-spec.md §6.5
-pub fn los_angles_lvlh(lvlh: &LvlhState) -> LosAngles {
+pub fn los_angles_lvlh(lvlh: &LvlhState) -> Option<LosAngles> {
     let [x, y, z] = lvlh.rho;
-    assert!(
-        norm(lvlh.rho) != 0.0,
-        "los_angles_lvlh: relative position (rho) is zero; LOS angles undefined"
-    );
+    if norm(lvlh.rho) == 0.0 {
+        return None;
+    }
     let horizontal_range = libm::sqrt(x * x + y * y);
     let elevation = atan2(-z, horizontal_range);
     let azimuth = atan2(y, x);
-    LosAngles { elevation, azimuth }
+    Some(LosAngles { elevation, azimuth })
 }
 
 /// Approximate time to closest approach (TCA) by linear extrapolation of the
@@ -269,13 +277,15 @@ pub fn los_angles_lvlh(lvlh: &LvlhState) -> LosAngles {
 ///   TCA < 0  => closest approach was in the past (vehicles are already diverging).
 ///   TCA = 0  => currently at closest approach (range_rate == 0).
 ///
-/// # Preconditions
-/// - `dot(rho_dot_vec, rho_dot_vec)` must be > 0.0; i.e. relative velocity is
-///   non-zero.  Panics if relative velocity is zero (see §8).
+/// # Domain
+/// - Returns `Some(tca)` when `dot(rho_dot, rho_dot) > 0.0` (relative velocity
+///   is non-zero).
+/// - Returns `None` when relative velocity is exactly zero — TCA is undefined
+///   (the vehicles are stationary relative to each other).
 ///
 /// # Postconditions
-/// - When `range_rate(r_active, v_active, r_target, v_target) == 0.0`,
-///   `time_to_closest_approach` returns 0.0.
+/// - When the relative velocity is perpendicular to the relative position,
+///   `time_to_closest_approach` returns `Some(0.0)`.
 /// - When the active vehicle is on a pure closing trajectory (range_rate < 0) and
 ///   no orbital curvature, TCA > 0.
 ///
@@ -296,15 +306,14 @@ pub fn time_to_closest_approach(
     v_active: Vec3,
     r_target: Vec3,
     v_target: Vec3,
-) -> f64 {
+) -> Option<f64> {
     let rho = vsub(r_active, r_target);
     let rho_dot = vsub(v_active, v_target);
     let speed2 = dot(rho_dot, rho_dot);
-    assert!(
-        speed2 != 0.0,
-        "time_to_closest_approach: relative velocity is zero; TCA is undefined"
-    );
-    -dot(rho, rho_dot) / speed2
+    if speed2 == 0.0 {
+        return None;
+    }
+    Some(-dot(rho, rho_dot) / speed2)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -389,7 +398,7 @@ mod tests {
         let v_a: Vec3 = v_t;
 
         let rng = range(r_a, r_t);
-        let rdot = range_rate(r_a, v_a, r_t, v_t);
+        let rdot = range_rate(r_a, v_a, r_t, v_t).expect("TC-REND-2: range > 0");
 
         assert!(
             (rng - 2000.0).abs() < 1.0,
@@ -414,7 +423,7 @@ mod tests {
         let r_a: Vec3 = [7_010_000.0, 0.0, 0.0]; // 10 km radially outside
         let v_a: Vec3 = [-20.0, 7500.0, 0.0]; // −20 m/s radially inward
 
-        let rdot = range_rate(r_a, v_a, r_t, v_t);
+        let rdot = range_rate(r_a, v_a, r_t, v_t).expect("TC-REND-3: range > 0");
 
         assert!(
             (rdot - (-20.0)).abs() < 0.01,
@@ -434,7 +443,7 @@ mod tests {
             rho_dot: [0.0, 0.0, 0.0],
         };
 
-        let los = los_angles_lvlh(&lvlh);
+        let los = los_angles_lvlh(&lvlh).expect("TC-REND-4: rho non-zero");
 
         assert!(
             los.elevation.abs() < 1e-12,
@@ -459,7 +468,7 @@ mod tests {
             rho_dot: [0.0, 0.0, 0.0],
         };
 
-        let los = los_angles_lvlh(&lvlh);
+        let los = los_angles_lvlh(&lvlh).expect("TC-REND-5: rho non-zero");
 
         let pi_half = core::f64::consts::FRAC_PI_2;
         assert!(
@@ -486,7 +495,7 @@ mod tests {
             rho_dot: [0.0, 0.0, 0.0],
         };
 
-        let los = los_angles_lvlh(&lvlh);
+        let los = los_angles_lvlh(&lvlh).expect("TC-REND-6: rho non-zero");
 
         // elevation = atan2(-1000, sqrt(1000^2 + 1000^2))
         let expected_el = libm::atan2(
@@ -520,7 +529,8 @@ mod tests {
         let r_a: Vec3 = [7_000_000.0, 10_000.0, 0.0]; // 10 km ahead in-track
         let v_a: Vec3 = [0.0, 7490.0, 0.0]; // 10 m/s slower → closing
 
-        let tca = time_to_closest_approach(r_a, v_a, r_t, v_t);
+        let tca = time_to_closest_approach(r_a, v_a, r_t, v_t)
+            .expect("TC-REND-7: relative velocity non-zero");
 
         assert!(
             (tca - 1000.0).abs() < 0.01,
@@ -529,18 +539,53 @@ mod tests {
         );
     }
 
-    // ── TC-REND-8: TCA — zero relative velocity panics ───────────────────────
+    // ── TC-REND-8: TCA — zero relative velocity returns None ────────────────
 
-    /// TC-REND-8: Identical velocities make relative speed zero; TCA must panic.
+    /// TC-REND-8: Identical velocities make relative speed zero; TCA is
+    /// undefined and the function must return `None` (formerly panicked).
     #[test]
-    #[should_panic(expected = "relative velocity is zero")]
-    fn tc_rend_8_tca_zero_relative_velocity_panics() {
+    fn tc_rend_8_tca_zero_relative_velocity_returns_none() {
         let r_t: Vec3 = [7_000_000.0, 0.0, 0.0];
         let v_t: Vec3 = [0.0, 7500.0, 0.0];
         let r_a: Vec3 = [r_t[0] + 100.0, 0.0, 0.0]; // displaced, but same velocity
         let v_a: Vec3 = v_t;
 
-        let _ = time_to_closest_approach(r_a, v_a, r_t, v_t);
+        assert!(
+            time_to_closest_approach(r_a, v_a, r_t, v_t).is_none(),
+            "TC-REND-8: zero relative velocity must return None"
+        );
+    }
+
+    // ── TC-REND-8b: range_rate — zero relative position returns None ────────
+
+    /// Vehicles at the exact same inertial position make range == 0; range-rate
+    /// is undefined and the function must return `None`.
+    #[test]
+    fn tc_rend_8b_range_rate_zero_range_returns_none() {
+        let r: Vec3 = [7_000_000.0, 0.0, 0.0];
+        let v_t: Vec3 = [0.0, 7500.0, 0.0];
+        let v_a: Vec3 = [10.0, 7500.0, 0.0];
+
+        assert!(
+            range_rate(r, v_a, r, v_t).is_none(),
+            "TC-REND-8b: zero range must return None"
+        );
+    }
+
+    // ── TC-REND-8c: los_angles_lvlh — zero rho returns None ─────────────────
+
+    /// LVLH state with zero relative position vector means LOS is undefined;
+    /// `los_angles_lvlh` must return `None`.
+    #[test]
+    fn tc_rend_8c_los_angles_zero_rho_returns_none() {
+        let lvlh = LvlhState {
+            rho: [0.0, 0.0, 0.0],
+            rho_dot: [0.0, 0.0, 0.0],
+        };
+        assert!(
+            los_angles_lvlh(&lvlh).is_none(),
+            "TC-REND-8c: zero rho must return None"
+        );
     }
 
     // ── TC-REND-9: lvlh_matrix orthonormality ────────────────────────────────
@@ -635,8 +680,10 @@ mod tests {
         // Flipped: separating at +20 m/s radially.
         let v_a_separating: Vec3 = [20.0, 7500.0, 0.0];
 
-        let rdot_closing = range_rate(r_a, v_a_closing, r_t, v_t);
-        let rdot_separating = range_rate(r_a, v_a_separating, r_t, v_t);
+        let rdot_closing =
+            range_rate(r_a, v_a_closing, r_t, v_t).expect("TC-REND-I2: range > 0");
+        let rdot_separating =
+            range_rate(r_a, v_a_separating, r_t, v_t).expect("TC-REND-I2: range > 0");
 
         assert!(
             rdot_closing < 0.0,
