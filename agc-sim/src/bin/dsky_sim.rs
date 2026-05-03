@@ -26,9 +26,7 @@ use crossterm::{
     cursor::{Hide, Show},
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
-    terminal::{
-        disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
-    },
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 
 /// Render cadence (approximately 20 Hz).
@@ -114,7 +112,15 @@ fn run<W: Write>(out: &mut W) -> io::Result<()> {
                 gimbal_yaw_deg: hw.engine.gimbal_yaw as f32 * (360.0 / 3200.0),
             };
 
-            render(out, (1, 1), &frame, Some(&prop), state.time.0 as u64, &status, flash_on)?;
+            render(
+                out,
+                (1, 1),
+                &frame,
+                Some(&prop),
+                state.time.0 as u64,
+                &status,
+                flash_on,
+            )?;
             last_frame = Instant::now();
         }
 

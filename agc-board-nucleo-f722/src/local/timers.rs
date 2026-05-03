@@ -27,8 +27,8 @@
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use agc_core::hal::timers::Timers;
 use agc_core::hal::runtime::T6_PENDING;
+use agc_core::hal::timers::Timers;
 
 use crate::TIMER_HANDLES;
 
@@ -73,24 +73,36 @@ impl LocalTimers {
 
             // Enable APB1 clocks for TIM2/3/4/5.
             rcc.apb1enr.modify(|_, w| {
-                w.tim2en().set_bit()
-                 .tim3en().set_bit()
-                 .tim4en().set_bit()
-                 .tim5en().set_bit()
+                w.tim2en()
+                    .set_bit()
+                    .tim3en()
+                    .set_bit()
+                    .tim4en()
+                    .set_bit()
+                    .tim5en()
+                    .set_bit()
             });
 
             // Reset then release each timer to clear any leftover state.
             rcc.apb1rstr.modify(|_, w| {
-                w.tim2rst().set_bit()
-                 .tim3rst().set_bit()
-                 .tim4rst().set_bit()
-                 .tim5rst().set_bit()
+                w.tim2rst()
+                    .set_bit()
+                    .tim3rst()
+                    .set_bit()
+                    .tim4rst()
+                    .set_bit()
+                    .tim5rst()
+                    .set_bit()
             });
             rcc.apb1rstr.modify(|_, w| {
-                w.tim2rst().clear_bit()
-                 .tim3rst().clear_bit()
-                 .tim4rst().clear_bit()
-                 .tim5rst().clear_bit()
+                w.tim2rst()
+                    .clear_bit()
+                    .tim3rst()
+                    .clear_bit()
+                    .tim4rst()
+                    .clear_bit()
+                    .tim5rst()
+                    .clear_bit()
             });
 
             // ── TIM2: T3RUPT one-shot ────────────────────────────────────────

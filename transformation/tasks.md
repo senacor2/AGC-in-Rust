@@ -712,6 +712,32 @@ state machine.
 - [ ] Restart vs FRESH START differentiation from RCC reset cause.
 - [ ] T5 retire-or-repurpose decision.
 
+---
+
+### Hardware Port — Phase 6: SERVICER Wiring + DSKY Display Emission
+
+**Milestone**: `agc-board-nucleo-f722` v0.6.0 (2026-05-03)
+
+#### Completed (this milestone)
+
+- [x] Foreground PIPA accumulator in `Executive::run` — destructive `hw.imu().read_pipa()` called once per iteration after staging-field translation; saturating-add into `state.pipa_counts`; ordered after `process_rcs_staging`/`process_engine_staging` so `servicer_task` consumes the prior accumulation before new counts arrive.
+- [x] `servicer_task` reset: `state.pipa_counts = [0; 3]` immediately after consuming (step 2), documented with inline comment.
+- [x] `start_servicer` invoked at boot in `bin/agc.rs` (after `dap_init`); servicer_task reschedules itself via Waitlist at 200 cs.
+- [x] `services::pinball::emit_dsky_to_hw<H: Dsky>` — walks `DskyFrame`, emits 21 `write_row` calls (rows 0–20) plus 10 `set_lamp` calls; tracker lamp (no HAL variant) silently skipped.
+- [x] 4 unit tests for `emit_dsky_to_hw`: TC-PB-E1 (all-blank, 21 rows, 10 lamps off), TC-PB-E2 (VERB=37 → row 1 = 0x37), TC-PB-E3 (R1=−00123 → sign=2, correct 5 digit rows), TC-PB-E4 (all 10 lamps on via `set_lamp`).
+- [x] T4 drain in `Executive::run` calls `decode_dsky` + `emit_dsky_to_hw` + `set_flash` every 120 ms.
+- [x] DSKY row encoding documented in `docs/external-peripheral-protocol.md` §"DSKY Display Row Encoding".
+- [x] ADR-019 recorded: per-row, per-field encoding vs AGC relay matrix trade-off.
+- [x] Bridge pretty-printer (`agc-bridge-pico/src/console.rs`): `decode_dsky_row(row, data)` helper; `DskyWriteRow` log line shows decoded field name instead of raw hex.
+
+#### Follow-on (not yet implemented)
+
+- [ ] DSKY refresh rate-limiting (re-emit only if the frame changed since the last T4 tick)
+- [ ] Restart vs FRESH START differentiation from RCC reset cause register
+- [ ] HIL automated test harness (Phase 7)
+
+---
+
 ## Completed
 
 - [x] Architecture — `docs/architecture.md`

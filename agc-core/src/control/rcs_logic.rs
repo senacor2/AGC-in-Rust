@@ -145,22 +145,22 @@ impl Default for RcsConfig {
 /// Index matches bit position in the u16 jet mask (bit 0 = jet 0 = index 0).
 /// Actual torque magnitude = thrust_n × moment_arm; see `build_sm_torque_table`.
 pub const SM_JET_TORQUES: [Vec3; 16] = [
-    [0.0,  0.0, -1.0], // bit  0: B4  -Yaw
-    [0.0,  0.0,  1.0], // bit  1: B3  +Yaw
-    [0.0, -1.0,  0.0], // bit  2: B2  -Pitch
-    [0.0,  1.0,  0.0], // bit  3: B1  +Pitch
-    [0.0,  0.0, -1.0], // bit  4: A4  -Yaw
-    [0.0,  0.0,  1.0], // bit  5: A3  +Yaw
-    [0.0, -1.0,  0.0], // bit  6: A2  -Pitch
-    [0.0,  1.0,  0.0], // bit  7: A1  +Pitch
-    [-1.0, 0.0,  0.0], // bit  8: D4  -Roll (redundant)
-    [ 1.0, 0.0,  0.0], // bit  9: D3  +Roll (redundant)
-    [-1.0, 0.0,  0.0], // bit 10: D2  -Roll
-    [ 1.0, 0.0,  0.0], // bit 11: D1  +Roll
-    [0.0,  0.0, -1.0], // bit 12: C4  -Yaw  (quad C)
-    [0.0,  0.0,  1.0], // bit 13: C3  +Yaw  (quad C)
-    [0.0, -1.0,  0.0], // bit 14: C2  -Pitch (quad C)
-    [0.0,  1.0,  0.0], // bit 15: C1  +Pitch (quad C)
+    [0.0, 0.0, -1.0], // bit  0: B4  -Yaw
+    [0.0, 0.0, 1.0],  // bit  1: B3  +Yaw
+    [0.0, -1.0, 0.0], // bit  2: B2  -Pitch
+    [0.0, 1.0, 0.0],  // bit  3: B1  +Pitch
+    [0.0, 0.0, -1.0], // bit  4: A4  -Yaw
+    [0.0, 0.0, 1.0],  // bit  5: A3  +Yaw
+    [0.0, -1.0, 0.0], // bit  6: A2  -Pitch
+    [0.0, 1.0, 0.0],  // bit  7: A1  +Pitch
+    [-1.0, 0.0, 0.0], // bit  8: D4  -Roll (redundant)
+    [1.0, 0.0, 0.0],  // bit  9: D3  +Roll (redundant)
+    [-1.0, 0.0, 0.0], // bit 10: D2  -Roll
+    [1.0, 0.0, 0.0],  // bit 11: D1  +Roll
+    [0.0, 0.0, -1.0], // bit 12: C4  -Yaw  (quad C)
+    [0.0, 0.0, 1.0],  // bit 13: C3  +Yaw  (quad C)
+    [0.0, -1.0, 0.0], // bit 14: C2  -Pitch (quad C)
+    [0.0, 1.0, 0.0],  // bit 15: C1  +Pitch (quad C)
 ];
 
 /// Torque contribution unit-direction vectors for the 12 CM RCS jets (body frame).
@@ -174,18 +174,18 @@ pub const SM_JET_TORQUES: [Vec3; 16] = [
 ///   bit  3: A3 Aft +Yaw     bit  2: A4 Aft -Yaw
 ///   bit  1: A5 Aft +Roll    bit  0: A6 Aft -Roll
 pub const CM_JET_TORQUES: [Vec3; 12] = [
-    [-1.0, 0.0,  0.0], // bit  0: A6 Aft -Roll
-    [ 1.0, 0.0,  0.0], // bit  1: A5 Aft +Roll
-    [0.0,  0.0, -1.0], // bit  2: A4 Aft -Yaw
-    [0.0,  0.0,  1.0], // bit  3: A3 Aft +Yaw
-    [0.0, -1.0,  0.0], // bit  4: A2 Aft -Pitch
-    [0.0,  1.0,  0.0], // bit  5: A1 Aft +Pitch
-    [-1.0, 0.0,  0.0], // bit  6: F6 Fwd -Roll
-    [ 1.0, 0.0,  0.0], // bit  7: F5 Fwd +Roll
-    [0.0,  0.0, -1.0], // bit  8: F4 Fwd -Yaw
-    [0.0,  0.0,  1.0], // bit  9: F3 Fwd +Yaw
-    [0.0, -1.0,  0.0], // bit 10: F2 Fwd -Pitch
-    [0.0,  1.0,  0.0], // bit 11: F1 Fwd +Pitch
+    [-1.0, 0.0, 0.0], // bit  0: A6 Aft -Roll
+    [1.0, 0.0, 0.0],  // bit  1: A5 Aft +Roll
+    [0.0, 0.0, -1.0], // bit  2: A4 Aft -Yaw
+    [0.0, 0.0, 1.0],  // bit  3: A3 Aft +Yaw
+    [0.0, -1.0, 0.0], // bit  4: A2 Aft -Pitch
+    [0.0, 1.0, 0.0],  // bit  5: A1 Aft +Pitch
+    [-1.0, 0.0, 0.0], // bit  6: F6 Fwd -Roll
+    [1.0, 0.0, 0.0],  // bit  7: F5 Fwd +Roll
+    [0.0, 0.0, -1.0], // bit  8: F4 Fwd -Yaw
+    [0.0, 0.0, 1.0],  // bit  9: F3 Fwd +Yaw
+    [0.0, -1.0, 0.0], // bit 10: F2 Fwd -Pitch
+    [0.0, 1.0, 0.0],  // bit 11: F1 Fwd +Pitch
 ];
 
 // ── Table builders ────────────────────────────────────────────────────────────
@@ -464,7 +464,7 @@ pub fn fire_pulse<H: AgcHardware>(hw: &mut H, jet_mask: u16, duration_counts: u1
     }
     let jets_a = (jet_mask & 0x00FF) as u8; // channel 05 (PYJETS)
     let jets_b = ((jet_mask >> 8) & 0xFF) as u8; // channel 06 (ROLLJETS)
-    // Arm T6 FIRST, then fire jets — mandatory ordering per spec §2 and §6.3.
+                                                 // Arm T6 FIRST, then fire jets — mandatory ordering per spec §2 and §6.3.
     hw.timers().arm_t6(duration_counts);
     hw.rcs().fire_sm_jets(jets_a, jets_b);
 }
@@ -533,8 +533,12 @@ mod tests {
         let mask = select_jets_sm([0.0, 1.0, 0.0], &config);
         assert_ne!(mask, 0);
         let positive_pitch_bits: u16 = (1 << 3) | (1 << 7) | (1 << 15);
-        assert_eq!(mask & !positive_pitch_bits, 0,
-            "only +pitch jet bits (3, 7, 15) expected for pure +Y torque, got {:#06x}", mask);
+        assert_eq!(
+            mask & !positive_pitch_bits,
+            0,
+            "only +pitch jet bits (3, 7, 15) expected for pure +Y torque, got {:#06x}",
+            mask
+        );
     }
 
     #[test]
@@ -544,8 +548,12 @@ mod tests {
         let mask = select_jets_sm([0.0, 0.0, 1.0], &config);
         assert_ne!(mask, 0);
         let positive_yaw_bits: u16 = (1 << 1) | (1 << 5) | (1 << 13);
-        assert_eq!(mask & !positive_yaw_bits, 0,
-            "only +yaw jet bits (1, 5, 13) expected for pure +Z torque, got {:#06x}", mask);
+        assert_eq!(
+            mask & !positive_yaw_bits,
+            0,
+            "only +yaw jet bits (1, 5, 13) expected for pure +Z torque, got {:#06x}",
+            mask
+        );
     }
 
     // ── TC-RCS-3: jet failure — disabled jet must not appear in result ────────
@@ -567,7 +575,11 @@ mod tests {
             mask
         );
         // D3 (bit 9) should still be available.
-        assert_ne!(mask & (1 << 9), 0, "D3 (bit 9) should be selected as the only +roll jet");
+        assert_ne!(
+            mask & (1 << 9),
+            0,
+            "D3 (bit 9) should be selected as the only +roll jet"
+        );
     }
 
     #[test]
@@ -578,7 +590,11 @@ mod tests {
 
         // Pure roll command — no jets can be selected.
         let mask = select_jets_sm([1.0, 0.0, 0.0], &config);
-        assert_eq!(mask, 0, "no usable roll jets → must return 0, got {:#06x}", mask);
+        assert_eq!(
+            mask, 0,
+            "no usable roll jets → must return 0, got {:#06x}",
+            mask
+        );
     }
 
     // ── TC-RCS-4: compute_pulse_duration in [min, max] ────────────────────────
@@ -593,11 +609,16 @@ mod tests {
         assert_ne!(jet_mask, 0);
 
         let counts = compute_pulse_duration(torque_cmd, jet_mask, &config, inertia);
-        assert_ne!(counts, 0, "reasonable torque must produce a non-zero pulse duration");
+        assert_ne!(
+            counts, 0,
+            "reasonable torque must produce a non-zero pulse duration"
+        );
         assert!(
             counts >= config.min_pulse_counts && counts <= config.max_pulse_counts,
             "pulse duration {} not in [{}, {}]",
-            counts, config.min_pulse_counts, config.max_pulse_counts
+            counts,
+            config.min_pulse_counts,
+            config.max_pulse_counts
         );
     }
 
@@ -615,7 +636,11 @@ mod tests {
         let inertia: Vec3 = [1.0, 1.0, 1.0]; // tiny inertia → tiny impulse
         let jet_mask = select_jets_sm(torque_cmd, &config);
         let counts = compute_pulse_duration(torque_cmd, jet_mask, &config, inertia);
-        assert_eq!(counts, 0, "tiny torque must be discarded (return 0), got {}", counts);
+        assert_eq!(
+            counts, 0,
+            "tiny torque must be discarded (return 0), got {}",
+            counts
+        );
     }
 
     // ── TC-RCS-6: u16 mask split into jets_a / jets_b ────────────────────────
@@ -655,7 +680,12 @@ mod tests {
     fn tc_rcs_7_cm_returns_12_bit_mask() {
         let config = RcsConfig::NOMINAL;
         let mask = select_jets_cm([0.0, 1.0, 0.0], &config);
-        assert_eq!(mask & 0xF000, 0, "CM mask must have bits 15-12 cleared, got {:#06x}", mask);
+        assert_eq!(
+            mask & 0xF000,
+            0,
+            "CM mask must have bits 15-12 cleared, got {:#06x}",
+            mask
+        );
         assert_ne!(mask, 0, "non-zero torque should produce a non-zero CM mask");
     }
 
@@ -665,7 +695,11 @@ mod tests {
         // Disable all CM jets.
         config.cm_jet_enable_mask = 0x0000;
         let mask = select_jets_cm([0.0, 1.0, 0.0], &config);
-        assert_eq!(mask, 0, "all CM jets disabled → must return 0, got {:#06x}", mask);
+        assert_eq!(
+            mask, 0,
+            "all CM jets disabled → must return 0, got {:#06x}",
+            mask
+        );
     }
 
     #[test]

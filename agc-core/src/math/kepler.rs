@@ -75,10 +75,19 @@ pub fn stumpff_s(z: f64) -> f64 {
 ///
 /// AGC source: Comanche055/CONIC_SUBROUTINES.agc, routines KEPRTN / KEPSILON.
 pub fn kepler_step(r0: Vec3, v0: Vec3, dt: f64, mu: f64) -> (Vec3, Vec3) {
-    debug_assert!(dt.is_finite() && dt != 0.0, "kepler_step: dt must be finite and non-zero");
-    debug_assert!(mu > 0.0 && mu.is_finite(), "kepler_step: mu must be positive and finite");
+    debug_assert!(
+        dt.is_finite() && dt != 0.0,
+        "kepler_step: dt must be finite and non-zero"
+    );
+    debug_assert!(
+        mu > 0.0 && mu.is_finite(),
+        "kepler_step: mu must be positive and finite"
+    );
     let r0_mag = norm(r0);
-    debug_assert!(r0_mag > 0.0 && r0_mag.is_finite(), "kepler_step: r0 must be non-zero and finite");
+    debug_assert!(
+        r0_mag > 0.0 && r0_mag.is_finite(),
+        "kepler_step: r0 must be non-zero and finite"
+    );
 
     // ── Pre-computation ──────────────────────────────────────────────────────
     let v0_sq = dot(v0, v0);
@@ -267,9 +276,8 @@ mod tests {
         let v0: Vec3 = [0.0, vc, 0.0];
 
         // Orbital period T = 2π √(r³/μ)
-        let t_period = 2.0
-            * core::f64::consts::PI
-            * libm::sqrt(r_circ * r_circ * r_circ / MU_EARTH);
+        let t_period =
+            2.0 * core::f64::consts::PI * libm::sqrt(r_circ * r_circ * r_circ / MU_EARTH);
         let dt = t_period / 4.0;
 
         let (r1, v1) = kepler_step(r0, v0, dt, MU_EARTH);
@@ -288,9 +296,8 @@ mod tests {
         let r0: Vec3 = [r_circ, 0.0, 0.0];
         let v0: Vec3 = [0.0, vc, 0.0];
 
-        let t_period = 2.0
-            * core::f64::consts::PI
-            * libm::sqrt(r_circ * r_circ * r_circ / MU_EARTH);
+        let t_period =
+            2.0 * core::f64::consts::PI * libm::sqrt(r_circ * r_circ * r_circ / MU_EARTH);
         let dt = t_period / 2.0;
 
         let (r1, v1) = kepler_step(r0, v0, dt, MU_EARTH);
@@ -308,9 +315,8 @@ mod tests {
         let r0: Vec3 = [r_circ, 0.0, 0.0];
         let v0: Vec3 = [0.0, vc, 0.0];
 
-        let t_period = 2.0
-            * core::f64::consts::PI
-            * libm::sqrt(r_circ * r_circ * r_circ / MU_EARTH);
+        let t_period =
+            2.0 * core::f64::consts::PI * libm::sqrt(r_circ * r_circ * r_circ / MU_EARTH);
 
         let (r1, v1) = kepler_step(r0, v0, t_period, MU_EARTH);
 

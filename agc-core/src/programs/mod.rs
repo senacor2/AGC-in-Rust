@@ -47,10 +47,10 @@ pub type ProgramInit = fn(&mut crate::AgcState) -> JobPriority;
 /// `None` entries are programs not implemented in Comanche055 / out of scope.
 pub static PROGRAM_TABLE: [Option<ProgramInit>; 100] = {
     let mut t: [Option<ProgramInit>; 100] = [None; 100];
-    t[0]  = Some(p00::init);
-    t[1]  = Some(p01_p02::init_p01);
-    t[2]  = Some(p01_p02::init_p02);
-    t[6]  = Some(p06::init);
+    t[0] = Some(p00::init);
+    t[1] = Some(p01_p02::init_p01);
+    t[2] = Some(p01_p02::init_p02);
+    t[6] = Some(p06::init);
     t[11] = Some(p11::init);
     t[15] = Some(p15::init);
     t[20] = Some(p20::init_p20);

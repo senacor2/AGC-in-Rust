@@ -46,7 +46,7 @@ impl Key {
             16 => Some(Key::Digit(0)),
             17 => Some(Key::Verb),
             18 => Some(Key::Rset),
-            25 => Some(Key::Pro),     // also KeyRel in hardware
+            25 => Some(Key::Pro), // also KeyRel in hardware
             26 => Some(Key::Plus),
             27 => Some(Key::Minus),
             28 => Some(Key::Entr),
@@ -153,11 +153,7 @@ impl Default for VnState {
 /// proceeding. Sets the DSKY to `V50 Nxx` flashing and stashes the
 /// callback. When the crew presses PRO the callback runs and the
 /// request is cleared.
-pub fn request_v50(
-    state: &mut crate::AgcState,
-    noun: u8,
-    on_proceed: fn(&mut crate::AgcState),
-) {
+pub fn request_v50(state: &mut crate::AgcState, noun: u8, on_proceed: fn(&mut crate::AgcState)) {
     state.dsky.verb = 50;
     state.dsky.noun = noun;
     state.dsky.flashing = true;
@@ -535,8 +531,8 @@ fn noun_display(state: &crate::AgcState, noun: u8) -> Option<(f32, f32, f32)> {
             // valid Keplerian orbit (zero h means rectilinear or unset state).
             if r > 0.0 && h >= 1.0 {
                 use crate::navigation::conics::{
-                    sv_to_elements, apoapsis_altitude_earth, periapsis_altitude_earth,
-                    orbital_period,
+                    apoapsis_altitude_earth, orbital_period, periapsis_altitude_earth,
+                    sv_to_elements,
                 };
                 let el = sv_to_elements(state.csm_state);
                 if el.is_hyperbolic() {
@@ -583,15 +579,13 @@ fn noun_display(state: &crate::AgcState, noun: u8) -> Option<(f32, f32, f32)> {
         }
 
         // N81 — ΔV components from pending maneuver (inertial frame).
-        81 => {
-            match &state.pending_maneuver {
-                Some(m) => {
-                    let dv = m.delta_v.0;
-                    Some((dv[0] as f32, dv[1] as f32, dv[2] as f32))
-                }
-                None => Some((0.0, 0.0, 0.0)),
+        81 => match &state.pending_maneuver {
+            Some(m) => {
+                let dv = m.delta_v.0;
+                Some((dv[0] as f32, dv[1] as f32, dv[2] as f32))
             }
-        }
+            None => Some((0.0, 0.0, 0.0)),
+        },
 
         _ => None,
     }
@@ -692,7 +686,11 @@ fn hms_to_cs(values: [f64; 3]) -> u32 {
     let minutes = values[1];
     let sec100 = values[2]; // seconds × 100 (e.g. 1230 = 12.30 s)
     let total_cs = hours * 360_000.0 + minutes * 6_000.0 + sec100;
-    if total_cs < 0.0 { 0 } else { total_cs as u32 }
+    if total_cs < 0.0 {
+        0
+    } else {
+        total_cs as u32
+    }
 }
 
 /// Commit a completed data load. Called after the final ENTR of a
@@ -950,10 +948,7 @@ mod tests {
             &[Key::Verb, d(3), d(7), Key::Noun, d(3), Key::Verb],
         );
 
-        assert_eq!(
-            state.vn.phase,
-            VnPhase::EnteringVerb { digits: 0, buf: 0 }
-        );
+        assert_eq!(state.vn.phase, VnPhase::EnteringVerb { digits: 0, buf: 0 });
     }
 
     // ── TC-VN-10: CLR from EnteringVerb returns to Idle ───────────────────────
@@ -1082,7 +1077,10 @@ mod tests {
     fn tc_vnd_1_v21_single_register_load() {
         let mut state = AgcState::new();
 
-        feed(&mut state, &[Key::Verb, d(2), d(1), Key::Noun, d(3), d(3), Key::Entr]);
+        feed(
+            &mut state,
+            &[Key::Verb, d(2), d(1), Key::Noun, d(3), d(3), Key::Entr],
+        );
         feed_key(&mut state, Key::Plus);
         feed_number(&mut state, 2); // 2 hours
         feed_key(&mut state, Key::Entr);
@@ -1100,7 +1098,10 @@ mod tests {
     fn tc_vnd_2_v25_n33_commits_tig() {
         let mut state = AgcState::new();
 
-        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(3), d(3), Key::Entr]);
+        feed(
+            &mut state,
+            &[Key::Verb, d(2), d(5), Key::Noun, d(3), d(3), Key::Entr],
+        );
         // R1 = hours
         feed_number(&mut state, 1);
         feed_key(&mut state, Key::Entr);
@@ -1134,7 +1135,10 @@ mod tests {
         state.time = Met(0);
 
         // V25 N33 E 0h 8m 20.00s = 50000 cs
-        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(3), d(3), Key::Entr]);
+        feed(
+            &mut state,
+            &[Key::Verb, d(2), d(5), Key::Noun, d(3), d(3), Key::Entr],
+        );
         feed_number(&mut state, 0); // hours
         feed_key(&mut state, Key::Entr);
         feed_number(&mut state, 8); // minutes
@@ -1146,7 +1150,10 @@ mod tests {
         assert_eq!(state.vn.pending_tig, Some(Met(50_000)));
 
         // V25 N81 E +100 E +0 E +0 E
-        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(8), d(1), Key::Entr]);
+        feed(
+            &mut state,
+            &[Key::Verb, d(2), d(5), Key::Noun, d(8), d(1), Key::Entr],
+        );
         feed_key(&mut state, Key::Plus);
         feed_number(&mut state, 100);
         feed_key(&mut state, Key::Entr);
@@ -1169,7 +1176,10 @@ mod tests {
         // 100 m/s prograde → delta_v magnitude ≈ 100
         let dv = m.delta_v.0;
         let mag = libm::sqrt(dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]);
-        assert!((mag - 100.0).abs() < 1e-6, "ΔV magnitude ≈ 100 m/s, got {mag}");
+        assert!(
+            (mag - 100.0).abs() < 1e-6,
+            "ΔV magnitude ≈ 100 m/s, got {mag}"
+        );
     }
 
     /// TC-VND-4: V25 N81 without prior TIG raises alarm 240.
@@ -1178,7 +1188,10 @@ mod tests {
         let mut state = AgcState::new();
         state.vn.pending_tig = None;
 
-        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(8), d(1), Key::Entr]);
+        feed(
+            &mut state,
+            &[Key::Verb, d(2), d(5), Key::Noun, d(8), d(1), Key::Entr],
+        );
         feed_number(&mut state, 100);
         feed_key(&mut state, Key::Entr);
         feed_number(&mut state, 0);
@@ -1207,7 +1220,10 @@ mod tests {
             frame: Frame::EarthInertial,
         };
 
-        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(8), d(1), Key::Entr]);
+        feed(
+            &mut state,
+            &[Key::Verb, d(2), d(5), Key::Noun, d(8), d(1), Key::Entr],
+        );
         feed_key(&mut state, Key::Minus);
         feed_number(&mut state, 50);
         feed_key(&mut state, Key::Entr);
@@ -1228,7 +1244,10 @@ mod tests {
     fn tc_vnd_6_sign_after_digit_opr_err() {
         let mut state = AgcState::new();
 
-        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(3), d(3), Key::Entr]);
+        feed(
+            &mut state,
+            &[Key::Verb, d(2), d(5), Key::Noun, d(3), d(3), Key::Entr],
+        );
         feed_key(&mut state, Key::Digit(1));
         feed_key(&mut state, Key::Plus); // sign after digit
 
@@ -1241,7 +1260,10 @@ mod tests {
     fn tc_vnd_7_six_digit_overflow() {
         let mut state = AgcState::new();
 
-        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(3), d(3), Key::Entr]);
+        feed(
+            &mut state,
+            &[Key::Verb, d(2), d(5), Key::Noun, d(3), d(3), Key::Entr],
+        );
         // 5 digits are ok; the 6th must error.
         for _ in 0..5 {
             feed_key(&mut state, Key::Digit(1));
@@ -1256,7 +1278,10 @@ mod tests {
     fn tc_vnd_8_clr_aborts_load() {
         let mut state = AgcState::new();
 
-        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(3), d(3), Key::Entr]);
+        feed(
+            &mut state,
+            &[Key::Verb, d(2), d(5), Key::Noun, d(3), d(3), Key::Entr],
+        );
         feed_key(&mut state, Key::Digit(1));
         feed_key(&mut state, Key::Digit(2));
         feed_key(&mut state, Key::Clr);
@@ -1271,7 +1296,10 @@ mod tests {
         let mut state = AgcState::new();
 
         // V21 N33 loads R1 only (hours). 3 hours = 1_080_000 cs.
-        feed(&mut state, &[Key::Verb, d(2), d(1), Key::Noun, d(3), d(3), Key::Entr]);
+        feed(
+            &mut state,
+            &[Key::Verb, d(2), d(1), Key::Noun, d(3), d(3), Key::Entr],
+        );
         feed_number(&mut state, 3);
         feed_key(&mut state, Key::Entr);
 
@@ -1284,8 +1312,8 @@ mod tests {
     #[test]
     fn tc_vn_13_v37_e11_e_selects_p11() {
         use crate::navigation::gravity::MU_EARTH;
-        use crate::navigation::state_vector::{Frame, StateVector};
         use crate::navigation::gravity::R_EARTH;
+        use crate::navigation::state_vector::{Frame, StateVector};
         use crate::types::Met;
 
         let mut state = AgcState::new();
@@ -1370,7 +1398,10 @@ mod tests {
         let mut state = AgcState::new();
 
         // V21 N01 — single-register integer load to a generic noun.
-        feed(&mut state, &[Key::Verb, d(2), d(1), Key::Noun, d(0), d(1), Key::Entr]);
+        feed(
+            &mut state,
+            &[Key::Verb, d(2), d(1), Key::Noun, d(0), d(1), Key::Entr],
+        );
         // Now in EnteringData, R1 should be 0.
         assert_eq!(state.dsky.r[0], 0.0);
         assert!(state.dsky.flashing);
@@ -1410,7 +1441,10 @@ mod tests {
         assert_eq!(state.dsky.noun, 65, "TC-VN-ND-1: noun must be 65");
         assert_eq!(state.dsky.r[0], 0.0f32, "TC-VN-ND-1: R1 = hours = 0");
         assert_eq!(state.dsky.r[1], 2.0f32, "TC-VN-ND-1: R2 = minutes = 2");
-        assert_eq!(state.dsky.r[2], 345.0f32, "TC-VN-ND-1: R3 = 3.45s as SSSCC = 345");
+        assert_eq!(
+            state.dsky.r[2], 345.0f32,
+            "TC-VN-ND-1: R3 = 3.45s as SSSCC = 345"
+        );
     }
 
     /// TC-VN-ND-2: V16 N65 monitors mission time; refresh_monitor_display
@@ -1430,7 +1464,10 @@ mod tests {
 
         assert_eq!(state.dsky.r[0], 1.0f32, "TC-VN-ND-2: R1 = 1 hour");
         assert_eq!(state.dsky.r[1], 0.0f32, "TC-VN-ND-2: R2 = 0 minutes");
-        assert_eq!(state.dsky.r[2], 100.0f32, "TC-VN-ND-2: R3 = 1.00s as SSSCC = 100");
+        assert_eq!(
+            state.dsky.r[2], 100.0f32,
+            "TC-VN-ND-2: R3 = 1.00s as SSSCC = 100"
+        );
 
         // Advance MET and refresh — display must update.
         // 363700 cs = 3637.00 s = 1h 0m 37.00s
@@ -1439,7 +1476,10 @@ mod tests {
 
         assert_eq!(state.dsky.r[0], 1.0f32, "TC-VN-ND-2: R1 still 1 hour");
         assert_eq!(state.dsky.r[1], 0.0f32, "TC-VN-ND-2: R2 still 0 minutes");
-        assert_eq!(state.dsky.r[2], 3700.0f32, "TC-VN-ND-2: R3 = 37.00s as SSSCC = 3700");
+        assert_eq!(
+            state.dsky.r[2], 3700.0f32,
+            "TC-VN-ND-2: R3 = 37.00s as SSSCC = 3700"
+        );
     }
 
     /// TC-VN-ND-3: V06 N33 displays pending TIG as HH / MM / SSSCC.
@@ -1456,7 +1496,10 @@ mod tests {
 
         assert_eq!(state.dsky.r[0], 0.0f32, "TC-VN-ND-3: R1 = 0 hours");
         assert_eq!(state.dsky.r[1], 16.0f32, "TC-VN-ND-3: R2 = 16 minutes");
-        assert_eq!(state.dsky.r[2], 3900.0f32, "TC-VN-ND-3: R3 = 39.00s as SSSCC");
+        assert_eq!(
+            state.dsky.r[2], 3900.0f32,
+            "TC-VN-ND-3: R3 = 39.00s as SSSCC"
+        );
     }
 
     /// TC-VN-ND-4: V06 N33 with no pending TIG shows zero in R1.
@@ -1502,8 +1545,14 @@ mod tests {
         let peri = state.dsky.r[1];
         let half_period = state.dsky.r[2];
 
-        assert!(apo > 0.0, "TC-VN-ND-5: apogee altitude must be positive, got {apo}");
-        assert!(peri > 0.0, "TC-VN-ND-5: perigee altitude must be positive, got {peri}");
+        assert!(
+            apo > 0.0,
+            "TC-VN-ND-5: apogee altitude must be positive, got {apo}"
+        );
+        assert!(
+            peri > 0.0,
+            "TC-VN-ND-5: perigee altitude must be positive, got {peri}"
+        );
         assert!(
             half_period > 0.0,
             "TC-VN-ND-5: half-period must be positive, got {half_period}"
@@ -1568,7 +1617,10 @@ mod tests {
         let mut state = AgcState::new();
 
         // V25 N18 E → enter 3 registers (deg×100)
-        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(1), d(8), Key::Entr]);
+        feed(
+            &mut state,
+            &[Key::Verb, d(2), d(5), Key::Noun, d(1), d(8), Key::Entr],
+        );
 
         // R1 = +09000 → 90.00°
         feed_key(&mut state, Key::Plus);
@@ -1612,7 +1664,10 @@ mod tests {
         let mut state = AgcState::new();
         assert!(state.vn.crew_star_code.is_none());
 
-        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(7), d(0), Key::Entr]);
+        feed(
+            &mut state,
+            &[Key::Verb, d(2), d(5), Key::Noun, d(7), d(0), Key::Entr],
+        );
         // R1 = +00014
         feed_key(&mut state, Key::Plus);
         feed_number(&mut state, 14);
@@ -1639,7 +1694,10 @@ mod tests {
         let mut state = AgcState::new();
         assert!(state.vn.crew_landmark.is_none());
 
-        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(7), d(2), Key::Entr]);
+        feed(
+            &mut state,
+            &[Key::Verb, d(2), d(5), Key::Noun, d(7), d(2), Key::Entr],
+        );
         // R1 = +00285 (lat)
         feed_key(&mut state, Key::Plus);
         feed_number(&mut state, 285);
@@ -1654,7 +1712,10 @@ mod tests {
         feed_key(&mut state, Key::Entr);
 
         assert_eq!(state.vn.phase, VnPhase::Idle);
-        let lm = state.vn.crew_landmark.expect("TC-VND-12: crew_landmark must be Some");
+        let lm = state
+            .vn
+            .crew_landmark
+            .expect("TC-VND-12: crew_landmark must be Some");
         assert_eq!(lm[0], 285.0, "TC-VND-12: lat");
         assert_eq!(lm[1], -7742.0, "TC-VND-12: lon");
         assert_eq!(lm[2], 100.0, "TC-VND-12: alt");
@@ -1667,7 +1728,10 @@ mod tests {
     fn tc_vnd_13_v25_n16_time_of_event() {
         let mut state = AgcState::new();
 
-        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(1), d(6), Key::Entr]);
+        feed(
+            &mut state,
+            &[Key::Verb, d(2), d(5), Key::Noun, d(1), d(6), Key::Entr],
+        );
         feed_number(&mut state, 0); // hours
         feed_key(&mut state, Key::Entr);
         feed_number(&mut state, 0); // minutes
@@ -1685,7 +1749,10 @@ mod tests {
         let mut state = AgcState::new();
         state.time = Met(0);
 
-        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(3), d(6), Key::Entr]);
+        feed(
+            &mut state,
+            &[Key::Verb, d(2), d(5), Key::Noun, d(3), d(6), Key::Entr],
+        );
         feed_number(&mut state, 2); // hours
         feed_key(&mut state, Key::Entr);
         feed_number(&mut state, 30); // minutes
@@ -1704,7 +1771,10 @@ mod tests {
         let mut state = AgcState::new();
         state.time = Met(100_000);
 
-        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(2), d(4), Key::Entr]);
+        feed(
+            &mut state,
+            &[Key::Verb, d(2), d(5), Key::Noun, d(2), d(4), Key::Entr],
+        );
         feed_number(&mut state, 0); // hours
         feed_key(&mut state, Key::Entr);
         feed_number(&mut state, 5); // minutes
@@ -1723,7 +1793,10 @@ mod tests {
         let mut state = AgcState::new();
         state.time = Met(999_999);
 
-        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(6), d(5), Key::Entr]);
+        feed(
+            &mut state,
+            &[Key::Verb, d(2), d(5), Key::Noun, d(6), d(5), Key::Entr],
+        );
         feed_number(&mut state, 0);
         feed_key(&mut state, Key::Entr);
         feed_number(&mut state, 0);
@@ -1740,7 +1813,10 @@ mod tests {
     fn tc_vnd_17_v25_n34_tfi() {
         let mut state = AgcState::new();
 
-        feed(&mut state, &[Key::Verb, d(2), d(5), Key::Noun, d(3), d(4), Key::Entr]);
+        feed(
+            &mut state,
+            &[Key::Verb, d(2), d(5), Key::Noun, d(3), d(4), Key::Entr],
+        );
         feed_number(&mut state, 1);
         feed_key(&mut state, Key::Entr);
         feed_number(&mut state, 0);

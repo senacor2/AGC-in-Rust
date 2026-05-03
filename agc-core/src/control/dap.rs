@@ -163,7 +163,7 @@ const DEFAULT_INERTIA: Vec3 = [120_000.0, 120_000.0, 100_000.0];
 /// AGC source: Comanche055/RCS-CSM_DAP_EXECUTIVE_PROGRAMS.agc — DAPINIT routine.
 pub fn dap_init(state: &mut crate::AgcState, initial_mode: DapMode) {
     use crate::control::tvc::tvc_init;
-    use crate::executive::{GROUP_6, Phase};
+    use crate::executive::{Phase, GROUP_6};
 
     debug_assert!(
         initial_mode != DapMode::Off,
@@ -232,7 +232,7 @@ pub fn dap_stop(state: &mut crate::AgcState) {
 /// AGC source: Comanche055/RCS-CSM_DIGITAL_AUTOPILOT.agc — T5RUPT handler / DAPIDLER.
 pub fn dap_step(state: &mut crate::AgcState) {
     use crate::control::attitude::compute_body_rates;
-    use crate::executive::{GROUP_6, Phase};
+    use crate::executive::{Phase, GROUP_6};
 
     // CI-9: flag-then-exit — Off mode terminates without rescheduling.
     if state.dap_state.mode == DapMode::Off {
@@ -307,8 +307,7 @@ fn dispatch_rate_damping(state: &mut crate::AgcState, rates: Vec3) {
 
     let torque = rate_damping_torque(rates, DEFAULT_RATE_GAIN);
     let jet_mask = select_jets_sm(torque, &state.rcs_config);
-    let pulse_cs =
-        compute_pulse_duration(torque, jet_mask, &state.rcs_config, DEFAULT_INERTIA);
+    let pulse_cs = compute_pulse_duration(torque, jet_mask, &state.rcs_config, DEFAULT_INERTIA);
 
     state.rcs_commanded_jets = jet_mask;
     state.rcs_commanded_pulse_cs = pulse_cs;
@@ -351,8 +350,7 @@ fn dispatch_attitude_hold(state: &mut crate::AgcState, rates: Vec3) {
 
     let torque = attitude_hold_torque(error, rates, DEFAULT_KP, DEFAULT_KD);
     let jet_mask = select_jets_sm(torque, &state.rcs_config);
-    let pulse_cs =
-        compute_pulse_duration(torque, jet_mask, &state.rcs_config, DEFAULT_INERTIA);
+    let pulse_cs = compute_pulse_duration(torque, jet_mask, &state.rcs_config, DEFAULT_INERTIA);
 
     state.rcs_commanded_jets = jet_mask;
     state.rcs_commanded_pulse_cs = pulse_cs;
@@ -430,18 +428,22 @@ mod tests {
         dap_step(&mut state);
 
         // Output staging must be cleared.
-        assert_eq!(state.rcs_commanded_jets, 0, "Off mode must clear rcs_commanded_jets");
+        assert_eq!(
+            state.rcs_commanded_jets, 0,
+            "Off mode must clear rcs_commanded_jets"
+        );
         assert_eq!(
             state.rcs_commanded_pulse_cs, 0,
             "Off mode must clear rcs_commanded_pulse_cs"
         );
         // No reschedule — waitlist stays empty.
         assert_eq!(
-            state.waitlist.len(), 0,
+            state.waitlist.len(),
+            0,
             "Off mode must not reschedule dap_step"
         );
         // Restart group must be IDLE.
-        use crate::executive::{GROUP_6, Phase};
+        use crate::executive::{Phase, GROUP_6};
         assert_eq!(
             state.restart.phase(GROUP_6),
             Phase::IDLE,
@@ -562,8 +564,15 @@ mod tests {
 
         dap_stop(&mut state);
 
-        assert_eq!(state.dap_state.mode, DapMode::Off, "dap_stop must set mode to Off");
-        assert_eq!(state.rcs_commanded_jets, 0, "dap_stop must clear rcs_commanded_jets");
+        assert_eq!(
+            state.dap_state.mode,
+            DapMode::Off,
+            "dap_stop must set mode to Off"
+        );
+        assert_eq!(
+            state.rcs_commanded_jets, 0,
+            "dap_stop must clear rcs_commanded_jets"
+        );
         assert_eq!(
             state.rcs_commanded_pulse_cs, 0,
             "dap_stop must clear rcs_commanded_pulse_cs"

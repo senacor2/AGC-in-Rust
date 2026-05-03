@@ -105,12 +105,12 @@ fn main() -> ! {
     let gpioa = dp.GPIOA.split();
     let gpiob = dp.GPIOB.split();
 
-    let sck  = gpiob.pb3.into_alternate::<6>();
+    let sck = gpiob.pb3.into_alternate::<6>();
     let miso = gpiob.pb4.into_alternate::<6>();
     let mosi = gpiob.pb5.into_alternate::<6>();
 
     let mut cs_accel = gpioa.pa15.into_push_pull_output();
-    let mut cs_gyro  = gpiob.pb12.into_push_pull_output();
+    let mut cs_gyro = gpiob.pb12.into_push_pull_output();
     cs_accel.set_high();
     cs_gyro.set_high();
 
@@ -152,20 +152,20 @@ fn main() -> ! {
     // power-up so gravity points along +Z.  Gyro mean = gyro zero-rate offset.
     // Accel bias = measured mean − [0, 0, g].
     let mut bmi = bmi;
-    let mut gyro_sum  = [0.0f64; 3];
+    let mut gyro_sum = [0.0f64; 3];
     let mut accel_sum = [0.0f64; 3];
     const CAL_SAMPLES: usize = 100;
     for _ in 0..CAL_SAMPLES {
         let g = bmi.read_gyro_rad_s();
         let a = bmi.read_accel_mps2();
         for i in 0..3 {
-            gyro_sum[i]  += g[i];
+            gyro_sum[i] += g[i];
             accel_sum[i] += a[i];
         }
         cortex_m::asm::delay(216_000 * 10);
     }
     let n = CAL_SAMPLES as f64;
-    let gyro_bias  = [gyro_sum[0] / n,  gyro_sum[1] / n,  gyro_sum[2] / n];
+    let gyro_bias = [gyro_sum[0] / n, gyro_sum[1] / n, gyro_sum[2] / n];
     let accel_mean = [accel_sum[0] / n, accel_sum[1] / n, accel_sum[2] / n];
     let accel_bias = [accel_mean[0], accel_mean[1], accel_mean[2] - 9.806_65];
 
@@ -262,6 +262,7 @@ fn main() -> ! {
         state.current_cdu = Board::new().imu.read_cdu();
     }
     agc_core::control::dap::dap_init(state, agc_core::control::dap::DapMode::AttitudeHold);
+    agc_core::services::average_g::start_servicer(state);
 
     // ── Hello handshake ───────────────────────────────────────────────────────
     agc_board_nucleo_f722::with_bridge_and_link(|link, bridge| {
@@ -322,12 +323,9 @@ fn TIM7() {
     cortex_m::interrupt::free(|cs| {
         let mut bmi_opt = BMI088.borrow(cs).borrow_mut();
         if let Some(bmi) = bmi_opt.as_mut() {
-            let gyro  = bmi.read_gyro_rad_s();
+            let gyro = bmi.read_gyro_rad_s();
             let accel = bmi.read_accel_mps2();
-            PLATFORM
-                .borrow(cs)
-                .borrow_mut()
-                .tick(gyro, accel, 0.001);
+            PLATFORM.borrow(cs).borrow_mut().tick(gyro, accel, 0.001);
         }
     });
 }

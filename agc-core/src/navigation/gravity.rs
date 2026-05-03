@@ -172,8 +172,14 @@ pub fn third_body_perturbation(r_sc: Vec3, r_third: Vec3, mu_third: f64) -> Vec3
     let d_mag = norm(d);
     let r3_mag = norm(r_third);
 
-    debug_assert!(d_mag > 1e3, "third_body_perturbation: spacecraft too close to third body");
-    debug_assert!(r3_mag > 0.0, "third_body_perturbation: third body at primary origin");
+    debug_assert!(
+        d_mag > 1e3,
+        "third_body_perturbation: spacecraft too close to third body"
+    );
+    debug_assert!(
+        r3_mag > 0.0,
+        "third_body_perturbation: third body at primary origin"
+    );
 
     let d3 = d_mag * d_mag * d_mag;
     let r3_cubed = r3_mag * r3_mag * r3_mag;
@@ -357,8 +363,8 @@ mod tests {
         let d_x = 1.92e8_f64 - 3.844e8_f64; // = −1.924e8
         let d_mag = d_x.abs();
         let r3_mag = 3.844e8_f64;
-        let expected_ax = MU_MOON * (-d_x / (d_mag * d_mag * d_mag)
-            - r_moon_eci[0] / (r3_mag * r3_mag * r3_mag));
+        let expected_ax =
+            MU_MOON * (-d_x / (d_mag * d_mag * d_mag) - r_moon_eci[0] / (r3_mag * r3_mag * r3_mag));
 
         let tolerance = 1e-7;
         assert!(
@@ -371,7 +377,10 @@ mod tests {
 
         // The spacecraft (at 192,000 km) is closer to the Moon (at 384,400 km) than
         // the Earth-Moon distance, so the net perturbation is toward the Moon (+x).
-        assert!(a[0] > 0.0, "TC-GR-4: net perturbation must be positive (toward Moon)");
+        assert!(
+            a[0] > 0.0,
+            "TC-GR-4: net perturbation must be positive (toward Moon)"
+        );
 
         // Sanity check: magnitude should be in the range [1e-5, 1e-3] m/s²
         // (spec §4.3: at trans-lunar coast midpoint the perturbation reaches ~1e-3 m/s²;

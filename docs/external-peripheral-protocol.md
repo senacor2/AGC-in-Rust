@@ -155,6 +155,42 @@ safety backstop independent of the link.
 
 ---
 
+## DSKY Display Row Encoding
+
+**Note**: this encoding is the project's own design — it is NOT the original AGC relay matrix (which packed 5 digits + sign across 12 relay coils per row in an SC-prefix scheme). The per-row, per-field layout is optimised for the bridge to render directly without any further decoding.
+
+Each `DskyWriteRow { row, data }` message carries one logical DSKY field. There are 21 rows total (rows 0–20):
+
+| Row | Field           | `data` encoding                                           |
+|-----|-----------------|-----------------------------------------------------------|
+| 0   | PROG            | bits 7–4 = tens digit, bits 3–0 = units digit            |
+| 1   | VERB            | same as PROG                                             |
+| 2   | NOUN            | same as PROG                                             |
+| 3   | R1 sign         | 0 = blank, 1 = '+', 2 = '−'                              |
+| 4   | R1 digit 0 (MS) | bits 3–0 = digit value 0x0–0x9; 0xF = blank              |
+| 5   | R1 digit 1      | same                                                     |
+| 6   | R1 digit 2      | same                                                     |
+| 7   | R1 digit 3      | same                                                     |
+| 8   | R1 digit 4 (LS) | same                                                     |
+| 9   | R2 sign         | same as row 3                                            |
+| 10  | R2 digit 0 (MS) | same as row 4                                            |
+| 11  | R2 digit 1      | same                                                     |
+| 12  | R2 digit 2      | same                                                     |
+| 13  | R2 digit 3      | same                                                     |
+| 14  | R2 digit 4 (LS) | same                                                     |
+| 15  | R3 sign         | same as row 3                                            |
+| 16  | R3 digit 0 (MS) | same as row 4                                            |
+| 17  | R3 digit 1      | same                                                     |
+| 18  | R3 digit 2      | same                                                     |
+| 19  | R3 digit 3      | same                                                     |
+| 20  | R3 digit 4 (LS) | same                                                     |
+
+All 21 rows are emitted on every T4RUPT (every 120 ms) as an atomic snapshot of the current display state. Indicator lamps are NOT in the row stream — they travel through `DskySetLamp` messages (type `0x12`). The V/N flashing indicator travels through `DskySetFlash` (type `0x13`), also emitted once per T4RUPT immediately after the row stream.
+
+**Rationale (ADR-019)**: A per-row design costs 21 frames per refresh versus the original relay matrix's 14, but it allows the bridge renderer to update individual fields without holding a complete display shadow. The encoding is trivially decodable in C, MicroPython, or any bridge firmware.
+
+---
+
 ## Protocol Version
 
 Current protocol version: **1** (constant `PROTO_VERSION` in `agc-protocol/src/lib.rs`).

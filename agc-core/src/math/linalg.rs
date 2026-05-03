@@ -102,15 +102,24 @@ mod tests {
 
     fn assert_vec_near(a: Vec3, b: Vec3, eps: f64) {
         for i in 0..3 {
-            assert!((a[i] - b[i]).abs() < eps, "component {i}: {} != {} (eps={eps})", a[i], b[i]);
+            assert!(
+                (a[i] - b[i]).abs() < eps,
+                "component {i}: {} != {} (eps={eps})",
+                a[i],
+                b[i]
+            );
         }
     }
 
     fn assert_mat_near(a: Mat3x3, b: Mat3x3, eps: f64) {
         for r in 0..3 {
             for c in 0..3 {
-                assert!((a[r][c] - b[r][c]).abs() < eps,
-                    "[{r}][{c}]: {} != {} (eps={eps})", a[r][c], b[r][c]);
+                assert!(
+                    (a[r][c] - b[r][c]).abs() < eps,
+                    "[{r}][{c}]: {} != {} (eps={eps})",
+                    a[r][c],
+                    b[r][c]
+                );
             }
         }
     }
@@ -146,7 +155,11 @@ mod tests {
 
     #[test]
     fn tc_cross_1_right_hand_rule() {
-        assert_vec_near(cross([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]), [0.0, 0.0, 1.0], 1e-15);
+        assert_vec_near(
+            cross([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+            [0.0, 0.0, 1.0],
+            1e-15,
+        );
     }
 
     #[test]
@@ -160,7 +173,11 @@ mod tests {
 
     #[test]
     fn tc_cross_3_parallel_zero() {
-        assert_vec_near(cross([2.0, 0.0, 0.0], [5.0, 0.0, 0.0]), [0.0, 0.0, 0.0], 1e-15);
+        assert_vec_near(
+            cross([2.0, 0.0, 0.0], [5.0, 0.0, 0.0]),
+            [0.0, 0.0, 0.0],
+            1e-15,
+        );
     }
 
     #[test]

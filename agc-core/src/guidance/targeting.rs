@@ -327,8 +327,7 @@ pub fn return_to_earth(
         Frame::MoonInertial => MU_MOON,
         _ => MU_EARTH,
     };
-    let mut maneuver =
-        lambert_targeting(current, entry_target, tof_estimate, mu, true, refsmmat);
+    let mut maneuver = lambert_targeting(current, entry_target, tof_estimate, mu, true, refsmmat);
     maneuver.mode = TargetingMode::ReturnToEarth;
     maneuver
 }
@@ -472,12 +471,7 @@ mod tests {
             frame: Frame::EarthInertial,
         };
 
-        let maneuver = apply_external_delta_v(
-            current,
-            Met(0),
-            [0.0, 0.0, 0.0],
-            linalg::IDENTITY,
-        );
+        let maneuver = apply_external_delta_v(current, Met(0), [0.0, 0.0, 0.0], linalg::IDENTITY);
 
         // Delta-V magnitude must be zero
         assert!(
@@ -487,7 +481,12 @@ mod tests {
         );
 
         // Burn attitude must be identity for zero delta-V
-        assert_mat_near(maneuver.burn_attitude, linalg::IDENTITY, 1e-12, "burn_attitude");
+        assert_mat_near(
+            maneuver.burn_attitude,
+            linalg::IDENTITY,
+            1e-12,
+            "burn_attitude",
+        );
 
         assert_eq!(maneuver.mode, TargetingMode::ExternalDeltaV);
         assert_eq!(maneuver.tig, Met(0));
@@ -670,14 +669,8 @@ mod tests {
         let period = 2.0 * core::f64::consts::PI * r / v_circ;
         let tof = period / 4.0;
 
-        let maneuver = lambert_targeting(
-            current,
-            target_pos,
-            tof,
-            MU_EARTH,
-            true,
-            linalg::IDENTITY,
-        );
+        let maneuver =
+            lambert_targeting(current, target_pos, tof, MU_EARTH, true, linalg::IDENTITY);
 
         // Delta-V magnitude must be below circular velocity (sanity bound).
         assert!(
@@ -711,7 +704,10 @@ mod tests {
             "burn_duration = {dt}, expected {expected}"
         );
         assert!(dt > 0.0, "burn time must be positive");
-        assert!(dt < 600.0, "burn time should be under 10 minutes for 900 m/s");
+        assert!(
+            dt < 600.0,
+            "burn time should be under 10 minutes for 900 m/s"
+        );
 
         // Zero delta-V → zero burn time
         assert_eq!(burn_duration(0.0, mass_kg), 0.0);
@@ -769,8 +765,7 @@ mod tests {
         // Estimated TEI TOF: ~60 hours
         let tof_s = 60.0 * 3600.0;
 
-        let maneuver =
-            return_to_earth(current, entry_target, tof_s, linalg::IDENTITY);
+        let maneuver = return_to_earth(current, entry_target, tof_s, linalg::IDENTITY);
 
         assert_eq!(maneuver.mode, TargetingMode::ReturnToEarth);
 

@@ -51,8 +51,7 @@ pub static BMI088: Mutex<RefCell<Option<local::imu::bmi088::Bmi088Driver>>> =
 
 /// TIM2/3/4/5 peripheral handles. Populated by `LocalTimers::init`; accessed
 /// by the `Timers` trait impl and the TIM ISRs to clear the UIF flag.
-pub static TIMER_HANDLES: Mutex<RefCell<Option<TimerHandles>>> =
-    Mutex::new(RefCell::new(None));
+pub static TIMER_HANDLES: Mutex<RefCell<Option<TimerHandles>>> = Mutex::new(RefCell::new(None));
 
 // ── Convenience accessors ─────────────────────────────────────────────────────
 

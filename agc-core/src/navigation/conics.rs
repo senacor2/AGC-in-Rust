@@ -12,11 +12,11 @@
 //!   HANGLE/REVUP (period/revolutions, implemented as orbital_period),
 //!   element extraction (implemented as state_to_elements).
 
-use core::f64::consts::{PI, TAU};
-use crate::types::Met;
-use crate::navigation::state_vector::{Frame, StateVector};
-use crate::navigation::gravity::{MU_EARTH, MU_MOON, R_EARTH, R_MOON};
 use crate::math::linalg::{cross, dot, mxv, norm, vscale, vsub};
+use crate::navigation::gravity::{MU_EARTH, MU_MOON, R_EARTH, R_MOON};
+use crate::navigation::state_vector::{Frame, StateVector};
+use crate::types::Met;
+use core::f64::consts::{PI, TAU};
 
 pub use crate::math::kepler::kepler_step;
 
@@ -341,11 +341,7 @@ pub fn elements_to_state(el: OrbitalElements, mu: f64) -> StateVector {
     let denom = 1.0 + el.e * cos_nu;
 
     // Step 2 — Position and velocity in perifocal frame (PQW).
-    let r_pqw: [f64; 3] = [
-        p * cos_nu / denom,
-        p * sin_nu / denom,
-        0.0,
-    ];
+    let r_pqw: [f64; 3] = [p * cos_nu / denom, p * sin_nu / denom, 0.0];
 
     let sqrt_mu_over_p = libm::sqrt(mu / p);
     let v_pqw: [f64; 3] = [
@@ -374,11 +370,7 @@ pub fn elements_to_state(el: OrbitalElements, mu: f64) -> StateVector {
             -sin_raan * sin_aop + cos_raan * cos_aop * cos_i,
             -cos_raan * sin_i,
         ],
-        [
-            sin_aop * sin_i,
-            cos_aop * sin_i,
-            cos_i,
-        ],
+        [sin_aop * sin_i, cos_aop * sin_i, cos_i],
     ];
 
     // Step 4 — Apply rotation.
@@ -490,8 +482,8 @@ pub fn apoapsis_altitude_moon(el: &OrbitalElements) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::f64::consts::{PI, TAU};
     use crate::types::Met;
+    use core::f64::consts::{PI, TAU};
 
     // Helper: Euclidean distance between two Vec3.
     fn vec3_dist(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -779,11 +771,7 @@ mod tests {
         );
 
         // e < 1e-6 (circular)
-        assert!(
-            el.e < 1.0e-6,
-            "TC-CO-4: e = {} not < 1e-6",
-            el.e
-        );
+        assert!(el.e < 1.0e-6, "TC-CO-4: e = {} not < 1e-6", el.e);
         assert!(el.is_circular(), "TC-CO-4: is_circular() must be true");
 
         // Equatorial orbit
@@ -871,10 +859,7 @@ mod tests {
         );
 
         // is_circular() must be true
-        assert!(
-            el.is_circular(),
-            "TC-CO-5: is_circular() must be true"
-        );
+        assert!(el.is_circular(), "TC-CO-5: is_circular() must be true");
 
         // Period within 5 s of theoretical 2π * sqrt(a³ / MU_EARTH)
         let t_expected = TAU * libm::sqrt(a * a * a / MU_EARTH);

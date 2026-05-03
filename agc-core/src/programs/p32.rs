@@ -217,8 +217,8 @@ pub fn compute_cdh_delta_v(
     let h_t_vec = cross(r_t, v_t);
     let h_t = norm(h_t_vec);
     let r_t_hat = unit(r_t);
-    let w_hat = unit(h_t_vec);       // orbit normal = W-axis at CDH
-    let s_t_hat = unit(cross(w_hat, r_t_hat));  // S-axis in target frame
+    let w_hat = unit(h_t_vec); // orbit normal = W-axis at CDH
+    let s_t_hat = unit(cross(w_hat, r_t_hat)); // S-axis in target frame
 
     // Step 2 — Required post-burn chaser angular momentum (coelliptic condition).
     let r_c_required = r_t_mag - delta_h;
@@ -344,7 +344,7 @@ mod tests {
     fn tc_p32_3_hyperbolic_target_returns_degenerate_state() {
         let r_t: Vec3 = [6_571_000.0, 0.0, 0.0];
         let v_t_hyperbolic: Vec3 = [0.0, 12_000.0, 0.0]; // well above escape velocity (~11,005 m/s)
-        // Chaser 10 nmi below to avoid DegenerateGeometry guard.
+                                                         // Chaser 10 nmi below to avoid DegenerateGeometry guard.
         let r_c: Vec3 = [6_552_480.0, 0.0, 0.0];
         let v_c: Vec3 = [0.0, 7795.0, 0.0];
         let delta_h = 18_520.0_f64;
@@ -404,11 +404,7 @@ mod tests {
 
         // Step 2: apply CSI burn — add in-track ΔV to chaser velocity.
         // LVLH S-hat for r=[r,0,0], v=[0,v,0] is [0,1,0].
-        let v_post_csi: Vec3 = [
-            v_c[0],
-            v_c[1] + csi.dv_lvlh[1],
-            v_c[2],
-        ];
+        let v_post_csi: Vec3 = [v_c[0], v_c[1] + csi.dv_lvlh[1], v_c[2]];
 
         // Step 3: propagate chaser to CDH epoch.
         let (r_c_cdh, v_c_cdh) = kepler_step(r_c, v_post_csi, dt, MU_EARTH);

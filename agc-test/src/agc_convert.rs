@@ -141,8 +141,8 @@ pub fn to_agc_dword(value: f64, scale: i8) -> (u16, u16) {
     let combined = combined.clamp(min_val, max_val);
 
     // Split into high (bits 28:14) and low (bits 13:0) parts.
-    let hi_i = combined >> 14;           // upper 15 bits (includes sign extension)
-    let lo_i = combined & 0x3FFF;        // lower 14 bits (always non-negative)
+    let hi_i = combined >> 14; // upper 15 bits (includes sign extension)
+    let lo_i = combined & 0x3FFF; // lower 14 bits (always non-negative)
 
     // Pack into u16. The i32 hi value fits in i16 (15-bit range); cast preserves bits.
     let hi = hi_i as i16 as u16;
@@ -227,13 +227,15 @@ mod tests {
     /// A position of 6_378_137 m (Earth radius) should round-trip within 1 m.
     #[test]
     fn dword_position_roundtrip_earth_radius() {
-        let pos = 6_378_137.0_f64;  // R_EARTH in metres
+        let pos = 6_378_137.0_f64; // R_EARTH in metres
         let (hi, lo) = to_agc_dword(pos, 0);
         let recovered = from_agc_dword(hi, lo, 0);
         assert!(
             (recovered - pos).abs() < 1.0,
             "Round-trip error for R_EARTH: {} - {} = {}",
-            recovered, pos, recovered - pos
+            recovered,
+            pos,
+            recovered - pos
         );
     }
 
@@ -254,7 +256,8 @@ mod tests {
         assert!(
             (recovered - val).abs() < 1.0,
             "Round-trip failed: {} vs {}",
-            recovered, val
+            recovered,
+            val
         );
     }
 
@@ -267,7 +270,8 @@ mod tests {
         assert!(
             (recovered - val).abs() < 1.0,
             "Round-trip failed for negative: {} vs {}",
-            recovered, val
+            recovered,
+            val
         );
     }
 
@@ -282,7 +286,8 @@ mod tests {
         assert!(
             (recovered - pos).abs() < 1.0,
             "GEO position round-trip failed: {} vs {}",
-            recovered, pos
+            recovered,
+            pos
         );
     }
 
@@ -299,7 +304,9 @@ mod tests {
         assert!(
             (recovered - vel).abs() < lsb,
             "Velocity round-trip failed: {} vs {} (1 LSB = {})",
-            recovered, vel, lsb
+            recovered,
+            vel,
+            lsb
         );
     }
 
@@ -319,6 +326,10 @@ mod tests {
     fn to_dword_negative_zero() {
         let (hi_pos, lo_pos) = to_agc_dword(0.0_f64, 0);
         let (hi_neg, lo_neg) = to_agc_dword(-0.0_f64, 0);
-        assert_eq!((hi_pos, lo_pos), (hi_neg, lo_neg), "±0.0 must encode identically");
+        assert_eq!(
+            (hi_pos, lo_pos),
+            (hi_neg, lo_neg),
+            "±0.0 must encode identically"
+        );
     }
 }

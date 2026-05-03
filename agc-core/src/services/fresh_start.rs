@@ -67,7 +67,11 @@ pub fn fresh_start(state: &mut AgcState) {
     };
 
     // Alarms — cleared.
-    state.alarm = AlarmState { code: 0, code2: 0, lit: false };
+    state.alarm = AlarmState {
+        code: 0,
+        code2: 0,
+        lit: false,
+    };
 
     // Flags — all cleared.
     state.flagwords = [0u16; 12];
@@ -168,7 +172,9 @@ pub fn restart(state: &mut AgcState) {
         if phase.is_job() {
             // Positive even phase → re-create as Executive job.
             if let Some(job_fn) = entry.job_entry {
-                state.executive.create_job(entry.job_priority, job_fn, entry.major_mode, false);
+                state
+                    .executive
+                    .create_job(entry.job_priority, job_fn, entry.major_mode, false);
             }
         } else if phase.is_task() {
             // Positive odd phase → re-schedule as Waitlist task.
@@ -179,7 +185,9 @@ pub fn restart(state: &mut AgcState) {
             // Negative phase → restart group from top. Use job entry if available,
             // otherwise task entry, to re-enter the computation from scratch.
             if let Some(job_fn) = entry.job_entry {
-                state.executive.create_job(entry.job_priority, job_fn, entry.major_mode, false);
+                state
+                    .executive
+                    .create_job(entry.job_priority, job_fn, entry.major_mode, false);
             } else if let Some(task_fn) = entry.task_entry {
                 state.waitlist.schedule(entry.task_delay, task_fn);
             }
@@ -290,8 +298,12 @@ mod tests {
     #[test]
     fn tc_rs_4_redispatch_groups() {
         let mut state = AgcState::new();
-        fn group3_job(state: &mut AgcState) { let _ = state; }
-        fn group5_task(state: &mut AgcState) { let _ = state; }
+        fn group3_job(state: &mut AgcState) {
+            let _ = state;
+        }
+        fn group5_task(state: &mut AgcState) {
+            let _ = state;
+        }
 
         // Set up restart group entries.
         unsafe {

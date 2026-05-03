@@ -22,8 +22,8 @@
 //! - `Comanche055/ERASABLE_ASSIGNMENTS.agc` — PIPAX/Y/Z addresses, NBDX/Y/Z
 //! - `Comanche055/INTEGRATION_INITIALIZATION.agc` — body selection, PIPA scale
 
-use crate::executive::{ScheduleResult, GROUP_2};
 use crate::executive::restart::Phase;
+use crate::executive::{ScheduleResult, GROUP_2};
 use crate::math::linalg::mxv;
 use crate::navigation::integration::average_g_step;
 use crate::types::Vec3;
@@ -68,9 +68,10 @@ pub struct PipaCalibration {
 impl PipaCalibration {
     /// Nominal (uncalibrated) constants. Used at FRESH START.
     pub const NOMINAL: Self = Self {
-        scale: 0.0585,          // m/s per count, approximate
-        bias: [0, 0, 0],        // no bias correction
-        misalignment: [         // identity (no misalignment correction)
+        scale: 0.0585,   // m/s per count, approximate
+        bias: [0, 0, 0], // no bias correction
+        misalignment: [
+            // identity (no misalignment correction)
             [1.0, 0.0, 0.0],
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
@@ -165,9 +166,13 @@ pub fn servicer_task(state: &mut AgcState) {
         return;
     }
 
-    // Step 2 — read raw PIPA counts from staging field.
-    // Written by T3RUPT handler (Strategy B) before Waitlist::dispatch.
+    // Step 2 — read raw PIPA counts from staging field and reset to zero.
+    // Written by the foreground PIPA accumulator in Executive::run before
+    // the waitlist dispatch. Reset here so the next 2-second accumulation
+    // starts clean; any counts arriving between reset and the next read
+    // are correctly captured in the fresh accumulation window.
     let raw: [i16; 3] = state.pipa_counts;
+    state.pipa_counts = [0; 3]; // destructive read: reset after consuming
 
     // PIPA overflow check: if any axis is at i16::MAX the counter wrapped.
     // In that case zero out the count for this cycle (do not corrupt navigation).
@@ -212,7 +217,7 @@ pub fn servicer_task(state: &mut AgcState) {
     state.restart.set_phase(GROUP_2, Phase(-1)); // mid-update guard
     state.csm_state = new_sv;
     state.time = new_sv.epoch;
-    state.restart.set_phase(GROUP_2, Phase(1));  // cycle complete
+    state.restart.set_phase(GROUP_2, Phase(1)); // cycle complete
 
     // Stage the delta-V this cycle for burn_servicer_exit (P40/P41 hook).
     state.servicer_last_dv_inertial = delta_v_inertial;
@@ -342,11 +347,7 @@ mod tests {
             misalignment: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
         };
         // 90° rotation about Z: platform-X → inertial-Y, platform-Y → inertial-(-X)
-        state.refsmmat = [
-            [0.0, -1.0, 0.0],
-            [1.0,  0.0, 0.0],
-            [0.0,  0.0, 1.0],
-        ];
+        state.refsmmat = [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
 
         // Use a position along X so gravity is purely along -X.
         // That way we can isolate the Y contribution from PIPA.
@@ -425,11 +426,21 @@ mod tests {
             state.csm_state.velocity[0],
             expected_vx,
             0.1,
-            "TC-AG-4: free-fall velocity[0]"
+            "TC-AG-4: free-fall velocity[0]",
         );
         // Y and Z should remain near zero.
-        assert_near(state.csm_state.velocity[1], 0.0, 1e-6, "TC-AG-4: velocity[1]");
-        assert_near(state.csm_state.velocity[2], 0.0, 1e-6, "TC-AG-4: velocity[2]");
+        assert_near(
+            state.csm_state.velocity[1],
+            0.0,
+            1e-6,
+            "TC-AG-4: velocity[1]",
+        );
+        assert_near(
+            state.csm_state.velocity[2],
+            0.0,
+            1e-6,
+            "TC-AG-4: velocity[2]",
+        );
     }
 
     // ── Lifecycle: start/stop flag behaviour ──────────────────────────────────

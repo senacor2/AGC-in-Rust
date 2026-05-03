@@ -193,20 +193,22 @@ pub fn tvc_step(
     let raw_yaw = attitude_error[2];
 
     // Guard NaN / Inf — treat as zero to avoid driving the gimbal to the stop.
-    let pitch_err = if raw_pitch.is_finite() { raw_pitch } else { 0.0 };
+    let pitch_err = if raw_pitch.is_finite() {
+        raw_pitch
+    } else {
+        0.0
+    };
     let yaw_err = if raw_yaw.is_finite() { raw_yaw } else { 0.0 };
 
     // Apply lead-lag filter: y[n] = a0·x[n] + a1·x[n-1] − b1·y[n-1]
     let x_pitch = pitch_err;
-    let y_pitch = filter.pitch.a0 * x_pitch
-        + filter.pitch.a1 * filter.pitch.prev_input
+    let y_pitch = filter.pitch.a0 * x_pitch + filter.pitch.a1 * filter.pitch.prev_input
         - filter.pitch.b1 * filter.pitch.prev_output;
     filter.pitch.prev_input = x_pitch;
     filter.pitch.prev_output = y_pitch;
 
     let x_yaw = yaw_err;
-    let y_yaw = filter.yaw.a0 * x_yaw
-        + filter.yaw.a1 * filter.yaw.prev_input
+    let y_yaw = filter.yaw.a0 * x_yaw + filter.yaw.a1 * filter.yaw.prev_input
         - filter.yaw.b1 * filter.yaw.prev_output;
     filter.yaw.prev_input = x_yaw;
     filter.yaw.prev_output = y_yaw;
@@ -283,10 +285,16 @@ mod tests {
 
         // With zero error the filter output is zero; cmd_unsat = initial_trim.
         // gimbal_pitch/yaw are clamped from cmd_unsat (not the post-update trim).
-        assert_eq!(state.gimbal_pitch, initial_trim.0.clamp(-GIMBAL_LIMIT_RAD, GIMBAL_LIMIT_RAD),
-            "gimbal_pitch should equal initial trim after zero-error step");
-        assert_eq!(state.gimbal_yaw, initial_trim.1.clamp(-GIMBAL_LIMIT_RAD, GIMBAL_LIMIT_RAD),
-            "gimbal_yaw should equal initial trim after zero-error step");
+        assert_eq!(
+            state.gimbal_pitch,
+            initial_trim.0.clamp(-GIMBAL_LIMIT_RAD, GIMBAL_LIMIT_RAD),
+            "gimbal_pitch should equal initial trim after zero-error step"
+        );
+        assert_eq!(
+            state.gimbal_yaw,
+            initial_trim.1.clamp(-GIMBAL_LIMIT_RAD, GIMBAL_LIMIT_RAD),
+            "gimbal_yaw should equal initial trim after zero-error step"
+        );
 
         // Counts must be consistent with the stored gimbal angles.
         let expected_pc = (state.gimbal_pitch * SPS_GIMBAL_SCALE) as i16;
@@ -308,13 +316,17 @@ mod tests {
         // First sample: prev_input and prev_output were 0 before the call.
         // y[0] = a0 * err + a1 * 0 - b1 * 0 = a0 * err
         let expected_gimbal = TVC_A0 * err; // trim is 0 and was just updated
-        // The trim was updated with (a0*err, 0) * K_TRIM * DT — very small.
-        // gimbal_pitch = clamp(a0*err + trim_pitch_after_update).
-        // Check that gimbal_pitch is close to a0 * err (within trim perturbation).
+                                            // The trim was updated with (a0*err, 0) * K_TRIM * DT — very small.
+                                            // gimbal_pitch = clamp(a0*err + trim_pitch_after_update).
+                                            // Check that gimbal_pitch is close to a0 * err (within trim perturbation).
         let diff = (state.gimbal_pitch - expected_gimbal).abs();
         // trim increment = K_TRIM * a0 * err * DT ≈ 0.0167 * 0.5530 * 0.05 * 0.1 ≈ 4.6e-5
-        assert!(diff < 1e-3,
-            "gimbal_pitch {:.6} should be close to a0*err {:.6}", state.gimbal_pitch, expected_gimbal);
+        assert!(
+            diff < 1e-3,
+            "gimbal_pitch {:.6} should be close to a0*err {:.6}",
+            state.gimbal_pitch,
+            expected_gimbal
+        );
     }
 
     // TC-TVC-3: steady-state tracking — constant input should settle to a0/(1+b1) ratio
@@ -340,9 +352,13 @@ mod tests {
         let expected_steady = dc_gain * err;
         // Allow 1 % tolerance plus tiny trim accumulation.
         let diff = (state.gimbal_pitch - expected_steady).abs();
-        assert!(diff < 0.001 * err.abs() + 1e-5,
+        assert!(
+            diff < 0.001 * err.abs() + 1e-5,
             "steady state gimbal_pitch {:.6} vs expected {:.6} (diff {:.2e})",
-            state.gimbal_pitch, expected_steady, diff);
+            state.gimbal_pitch,
+            expected_steady,
+            diff
+        );
     }
 
     // TC-TVC-4: trim integration — constant gimbal command integrates trim over time
@@ -359,16 +375,24 @@ mod tests {
             update_trim(&mut state, gimbal_cmd, DT);
         }
 
-        let expected_pitch = (K_TRIM * gimbal_cmd.0 * DT * steps as f64)
-            .clamp(-GIMBAL_LIMIT_RAD, GIMBAL_LIMIT_RAD);
-        let expected_yaw = (K_TRIM * gimbal_cmd.1 * DT * steps as f64)
-            .clamp(-GIMBAL_LIMIT_RAD, GIMBAL_LIMIT_RAD);
+        let expected_pitch =
+            (K_TRIM * gimbal_cmd.0 * DT * steps as f64).clamp(-GIMBAL_LIMIT_RAD, GIMBAL_LIMIT_RAD);
+        let expected_yaw =
+            (K_TRIM * gimbal_cmd.1 * DT * steps as f64).clamp(-GIMBAL_LIMIT_RAD, GIMBAL_LIMIT_RAD);
 
         let tol = 1e-9;
-        assert!((state.trim_pitch - expected_pitch).abs() < tol,
-            "trim_pitch {:.8} vs expected {:.8}", state.trim_pitch, expected_pitch);
-        assert!((state.trim_yaw - expected_yaw).abs() < tol,
-            "trim_yaw {:.8} vs expected {:.8}", state.trim_yaw, expected_yaw);
+        assert!(
+            (state.trim_pitch - expected_pitch).abs() < tol,
+            "trim_pitch {:.8} vs expected {:.8}",
+            state.trim_pitch,
+            expected_pitch
+        );
+        assert!(
+            (state.trim_yaw - expected_yaw).abs() < tol,
+            "trim_yaw {:.8} vs expected {:.8}",
+            state.trim_yaw,
+            expected_yaw
+        );
     }
 
     // TC-TVC-5: saturation — large error → gimbal clamped to GIMBAL_LIMIT_RAD
@@ -381,10 +405,14 @@ mod tests {
         // 10 rad error is far beyond any mechanical limit.
         tvc_step(&mut state, &mut filter, [0.0, 10.0, -10.0], DT);
 
-        assert_eq!(state.gimbal_pitch, GIMBAL_LIMIT_RAD,
-            "gimbal_pitch should be clamped to GIMBAL_LIMIT_RAD");
-        assert_eq!(state.gimbal_yaw, -GIMBAL_LIMIT_RAD,
-            "gimbal_yaw should be clamped to -GIMBAL_LIMIT_RAD");
+        assert_eq!(
+            state.gimbal_pitch, GIMBAL_LIMIT_RAD,
+            "gimbal_pitch should be clamped to GIMBAL_LIMIT_RAD"
+        );
+        assert_eq!(
+            state.gimbal_yaw, -GIMBAL_LIMIT_RAD,
+            "gimbal_yaw should be clamped to -GIMBAL_LIMIT_RAD"
+        );
     }
 
     // TC-TVC-6: tvc_init with non-zero trim → initial gimbal and trim match
@@ -428,8 +456,14 @@ mod tests {
         // NaN in pitch and Inf in yaw should not cause a panic or saturate the gimbal.
         tvc_step(&mut state, &mut filter, [0.0, f64::NAN, f64::INFINITY], DT);
 
-        assert!(state.gimbal_pitch.is_finite(), "gimbal_pitch must be finite after NaN input");
-        assert!(state.gimbal_yaw.is_finite(), "gimbal_yaw must be finite after Inf input");
+        assert!(
+            state.gimbal_pitch.is_finite(),
+            "gimbal_pitch must be finite after NaN input"
+        );
+        assert!(
+            state.gimbal_yaw.is_finite(),
+            "gimbal_yaw must be finite after Inf input"
+        );
         // Both should be near zero (trim is zero, error was treated as zero).
         assert!(state.gimbal_pitch.abs() < 1e-6);
         assert!(state.gimbal_yaw.abs() < 1e-6);

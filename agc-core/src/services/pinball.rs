@@ -153,6 +153,80 @@ pub fn decode_dsky(state: &DskyState) -> DskyFrame {
     }
 }
 
+// ── Hardware emission ─────────────────────────────────────────────────────────
+
+/// Emit a decoded `DskyFrame` to the hardware DSKY via the row-encoding protocol.
+///
+/// Writes 21 `write_row` calls covering PROG/VERB/NOUN and the three data
+/// registers (sign + 5 digits each), then updates all 10 indicator lamps.
+/// The `set_flash` call is NOT made here — the caller (T4 drain) issues it
+/// separately so this function remains pure frame → HAL with no extra state.
+///
+/// Row encoding (ADR-019):
+/// - Row 0: PROG  — `(tens << 4) | units`; 0xF = blank digit
+/// - Row 1: VERB  — same
+/// - Row 2: NOUN  — same
+/// - Row 3: R1 sign — 0=blank, 1='+', 2='-'
+/// - Rows 4–8: R1 digits 0–4 (most-significant first); 0x0..0x9 or 0xF=blank
+/// - Row 9:  R2 sign
+/// - Rows 10–14: R2 digits
+/// - Row 15: R3 sign
+/// - Rows 16–20: R3 digits
+///
+/// Lamps are mapped to the `Lamp` enum; the `tracker` lamp in `Lamps` has no
+/// HAL variant and is silently skipped.
+pub fn emit_dsky_to_hw<H: crate::hal::Dsky>(frame: &DskyFrame, dsky: &mut H) {
+    #[inline]
+    fn pack_two_digit(td: TwoDigit) -> u16 {
+        ((td.tens as u16) << 4) | (td.units as u16)
+    }
+
+    #[inline]
+    fn sign_byte(s: i8) -> u16 {
+        match s {
+            1 => 1,  // plus
+            -1 => 2, // minus
+            _ => 0,  // blank
+        }
+    }
+
+    dsky.write_row(0, pack_two_digit(frame.prog));
+    dsky.write_row(1, pack_two_digit(frame.verb));
+    dsky.write_row(2, pack_two_digit(frame.noun));
+
+    // R1: rows 3–8
+    dsky.write_row(3, sign_byte(frame.r1.sign));
+    for (i, &d) in frame.r1.digits.iter().enumerate() {
+        dsky.write_row(4 + i as u8, d as u16);
+    }
+
+    // R2: rows 9–14
+    dsky.write_row(9, sign_byte(frame.r2.sign));
+    for (i, &d) in frame.r2.digits.iter().enumerate() {
+        dsky.write_row(10 + i as u8, d as u16);
+    }
+
+    // R3: rows 15–20
+    dsky.write_row(15, sign_byte(frame.r3.sign));
+    for (i, &d) in frame.r3.digits.iter().enumerate() {
+        dsky.write_row(16 + i as u8, d as u16);
+    }
+
+    // Lamps (tracker has no HAL variant — omitted).
+    use crate::hal::Lamp;
+    let l = &frame.lamps;
+    dsky.set_lamp(Lamp::UplinkActivity, l.uplink_activity);
+    dsky.set_lamp(Lamp::NoAtt, l.no_att);
+    dsky.set_lamp(Lamp::Stby, l.stby);
+    dsky.set_lamp(Lamp::KeyRel, l.key_rel);
+    dsky.set_lamp(Lamp::OprErr, l.opr_err);
+    dsky.set_lamp(Lamp::Restart, l.restart);
+    dsky.set_lamp(Lamp::GimbalLock, l.gimbal_lock);
+    dsky.set_lamp(Lamp::Temp, l.temp);
+    dsky.set_lamp(Lamp::ProgAlarm, l.prog_alarm);
+    dsky.set_lamp(Lamp::CompActy, l.comp_acty);
+}
+
 // ── Seven-segment encoding ────────────────────────────────────────────────────
 
 /// Return the 7-segment bit pattern for a decimal digit.
@@ -311,6 +385,195 @@ mod tests {
         assert_eq!(digit_to_segments(255), 0x00);
     }
 
+    // ── emit_dsky_to_hw tests ─────────────────────────────────────────────────
+
+    /// Minimal mock that records all `write_row` and `set_lamp` calls.
+    struct MockDsky {
+        rows: [(u8, u16); 32],
+        row_count: usize,
+        lamps: [(crate::hal::Lamp, bool); 16],
+        lamp_count: usize,
+        flash: Option<bool>,
+    }
+
+    impl MockDsky {
+        fn new() -> Self {
+            Self {
+                rows: [(0, 0); 32],
+                row_count: 0,
+                lamps: [(crate::hal::Lamp::CompActy, false); 16],
+                lamp_count: 0,
+                flash: None,
+            }
+        }
+
+        fn row(&self, r: u8) -> Option<u16> {
+            self.rows[..self.row_count]
+                .iter()
+                .find(|&&(row, _)| row == r)
+                .map(|&(_, data)| data)
+        }
+
+        fn lamp(&self, l: crate::hal::Lamp) -> Option<bool> {
+            self.lamps[..self.lamp_count]
+                .iter()
+                .find(|&&(lamp, _)| lamp == l)
+                .map(|&(_, on)| on)
+        }
+    }
+
+    impl crate::hal::Dsky for MockDsky {
+        fn write_row(&mut self, row: u8, data: u16) {
+            if self.row_count < self.rows.len() {
+                self.rows[self.row_count] = (row, data);
+                self.row_count += 1;
+            }
+        }
+        fn clear_row(&mut self, _row: u8) {}
+        fn set_lamp(&mut self, lamp: crate::hal::Lamp, on: bool) {
+            if self.lamp_count < self.lamps.len() {
+                self.lamps[self.lamp_count] = (lamp, on);
+                self.lamp_count += 1;
+            }
+        }
+        fn set_flash(&mut self, on: bool) {
+            self.flash = Some(on);
+        }
+        fn read_key(&mut self) -> Option<u8> {
+            None
+        }
+    }
+
+    fn blank_frame() -> DskyFrame {
+        DskyFrame {
+            prog: TwoDigit { tens: 0, units: 0 },
+            verb: TwoDigit { tens: 0, units: 0 },
+            noun: TwoDigit { tens: 0, units: 0 },
+            r1: Register {
+                sign: 0,
+                digits: [0; 5],
+                overflow: false,
+            },
+            r2: Register {
+                sign: 0,
+                digits: [0; 5],
+                overflow: false,
+            },
+            r3: Register {
+                sign: 0,
+                digits: [0; 5],
+                overflow: false,
+            },
+            lamps: Lamps {
+                uplink_activity: false,
+                no_att: false,
+                stby: false,
+                key_rel: false,
+                opr_err: false,
+                restart: false,
+                gimbal_lock: false,
+                temp: false,
+                prog_alarm: false,
+                comp_acty: false,
+                tracker: false,
+            },
+            lamp_test: false,
+            flashing: false,
+        }
+    }
+
+    /// TC-PB-E1: all-blank frame: every digit field is zero, all lamps off.
+    #[test]
+    fn tc_pb_e1_all_blank() {
+        let frame = blank_frame();
+        let mut dsky = MockDsky::new();
+        emit_dsky_to_hw(&frame, &mut dsky);
+
+        // PROG row 0: tens=0, units=0 → (0<<4)|0 = 0x00
+        assert_eq!(dsky.row(0), Some(0x00), "PROG row");
+        // VERB row 1
+        assert_eq!(dsky.row(1), Some(0x00), "VERB row");
+        // NOUN row 2
+        assert_eq!(dsky.row(2), Some(0x00), "NOUN row");
+        // R1 sign row 3: blank → 0
+        assert_eq!(dsky.row(3), Some(0), "R1 sign blank");
+        // R1 digits rows 4–8: all zero
+        for r in 4u8..=8 {
+            assert_eq!(dsky.row(r), Some(0), "R1 digit row {r}");
+        }
+        // 21 write_row calls total
+        assert_eq!(dsky.row_count, 21, "21 write_row calls");
+        // 10 set_lamp calls, all false
+        assert_eq!(dsky.lamp_count, 10, "10 set_lamp calls");
+        for i in 0..dsky.lamp_count {
+            assert!(!dsky.lamps[i].1, "lamp {} should be off", i);
+        }
+    }
+
+    /// TC-PB-E2: VERB=37 → row 1 data = `(3<<4)|7` = 0x37.
+    #[test]
+    fn tc_pb_e2_verb_37() {
+        let mut frame = blank_frame();
+        frame.verb = TwoDigit { tens: 3, units: 7 };
+        let mut dsky = MockDsky::new();
+        emit_dsky_to_hw(&frame, &mut dsky);
+        assert_eq!(dsky.row(1), Some(0x37), "VERB=37 → 0x37");
+    }
+
+    /// TC-PB-E3: R1 = -00123 → sign row=2(minus), digits=[0,0,1,2,3].
+    #[test]
+    fn tc_pb_e3_r1_negative_123() {
+        let mut frame = blank_frame();
+        frame.r1 = Register {
+            sign: -1,
+            digits: [0, 0, 1, 2, 3],
+            overflow: false,
+        };
+        let mut dsky = MockDsky::new();
+        emit_dsky_to_hw(&frame, &mut dsky);
+
+        assert_eq!(dsky.row(3), Some(2), "R1 sign = minus (2)");
+        assert_eq!(dsky.row(4), Some(0), "R1[0] = 0");
+        assert_eq!(dsky.row(5), Some(0), "R1[1] = 0");
+        assert_eq!(dsky.row(6), Some(1), "R1[2] = 1");
+        assert_eq!(dsky.row(7), Some(2), "R1[3] = 2");
+        assert_eq!(dsky.row(8), Some(3), "R1[4] = 3");
+    }
+
+    /// TC-PB-E4: all 10 lamps on → 10 set_lamp(_, true) calls.
+    #[test]
+    fn tc_pb_e4_all_lamps_on() {
+        use crate::hal::Lamp;
+        let mut frame = blank_frame();
+        frame.lamps = Lamps {
+            uplink_activity: true,
+            no_att: true,
+            stby: true,
+            key_rel: true,
+            opr_err: true,
+            restart: true,
+            gimbal_lock: true,
+            temp: true,
+            prog_alarm: true,
+            comp_acty: true,
+            tracker: true, // tracker has no HAL variant; must not crash
+        };
+        let mut dsky = MockDsky::new();
+        emit_dsky_to_hw(&frame, &mut dsky);
+
+        assert_eq!(dsky.lamp_count, 10, "exactly 10 lamps");
+        assert_eq!(dsky.lamp(Lamp::UplinkActivity), Some(true));
+        assert_eq!(dsky.lamp(Lamp::NoAtt), Some(true));
+        assert_eq!(dsky.lamp(Lamp::Stby), Some(true));
+        assert_eq!(dsky.lamp(Lamp::KeyRel), Some(true));
+        assert_eq!(dsky.lamp(Lamp::OprErr), Some(true));
+        assert_eq!(dsky.lamp(Lamp::Restart), Some(true));
+        assert_eq!(dsky.lamp(Lamp::GimbalLock), Some(true));
+        assert_eq!(dsky.lamp(Lamp::Temp), Some(true));
+        assert_eq!(dsky.lamp(Lamp::ProgAlarm), Some(true));
+        assert_eq!(dsky.lamp(Lamp::CompActy), Some(true));
+    }
+
     /// TC-PB-13: end-to-end `decode_dsky` composition.
     #[test]
     fn tc_pb_13_decode_dsky_end_to_end() {
@@ -330,16 +593,28 @@ mod tests {
 
         assert_eq!(
             frame.r1,
-            Register { sign: 1, digits: [0, 0, 1, 0, 0], overflow: false }
+            Register {
+                sign: 1,
+                digits: [0, 0, 1, 0, 0],
+                overflow: false
+            }
         );
         // -2.5 rounds to -3.
         assert_eq!(
             frame.r2,
-            Register { sign: -1, digits: [0, 0, 0, 0, 3], overflow: false }
+            Register {
+                sign: -1,
+                digits: [0, 0, 0, 0, 3],
+                overflow: false
+            }
         );
         assert_eq!(
             frame.r3,
-            Register { sign: 0, digits: [0; 5], overflow: false }
+            Register {
+                sign: 0,
+                digits: [0; 5],
+                overflow: false
+            }
         );
 
         assert!(frame.lamps.opr_err);

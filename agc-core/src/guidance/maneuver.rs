@@ -374,7 +374,10 @@ mod tests {
         burn_servicer_exit(&mut state);
 
         assert_vec_near(state.burn.accumulated_dv_inertial, [3.0, 0.0, 0.0], 1e-14);
-        assert!(state.burn.burn_active, "burn must still be active after 3/10 m/s");
+        assert!(
+            state.burn.burn_active,
+            "burn must still be active after 3/10 m/s"
+        );
         assert!(
             state.servicer_exit.is_some(),
             "hook must remain installed until burn completes"
@@ -401,8 +404,14 @@ mod tests {
 
         burn_servicer_exit(&mut state);
 
-        assert!(!state.burn.burn_active, "burn must cut off after target reached");
-        assert!(!state.engine_thrusting, "engine_thrusting must clear on cutoff");
+        assert!(
+            !state.burn.burn_active,
+            "burn must cut off after target reached"
+        );
+        assert!(
+            !state.engine_thrusting,
+            "engine_thrusting must clear on cutoff"
+        );
         assert!(
             state.servicer_exit.is_none(),
             "hook must be uninstalled on cutoff"

@@ -116,7 +116,12 @@ pub fn p37_compute_tei(state: &mut crate::AgcState, tig: Met, tof: f64) {
             state.csm_state
         } else {
             let dt_s = (tig_cs as f64 - epoch_cs as f64) / 100.0;
-            let (r1, v1) = kepler_step(state.csm_state.position, state.csm_state.velocity, dt_s, MU_MOON);
+            let (r1, v1) = kepler_step(
+                state.csm_state.position,
+                state.csm_state.velocity,
+                dt_s,
+                MU_MOON,
+            );
             StateVector {
                 position: r1,
                 velocity: v1,
@@ -222,10 +227,16 @@ mod tests {
             .pending_maneuver
             .expect("TC-P37-2: pending_maneuver must be Some");
 
-        assert_eq!(maneuver.tig, tig, "TC-P37-2: maneuver.tig must equal input tig");
+        assert_eq!(
+            maneuver.tig, tig,
+            "TC-P37-2: maneuver.tig must equal input tig"
+        );
 
         let dv_mag = math::linalg::norm(maneuver.delta_v.0);
-        assert!(dv_mag.is_finite(), "TC-P37-2: delta_v magnitude must be finite");
+        assert!(
+            dv_mag.is_finite(),
+            "TC-P37-2: delta_v magnitude must be finite"
+        );
         assert!(dv_mag > 1.0, "TC-P37-2: delta_v magnitude must be > 1 m/s");
         assert!(
             dv_mag < 5000.0,
@@ -324,8 +335,14 @@ mod tests {
         p37_compute_tei(&mut state, tig2, tof_s);
 
         let m2 = state.pending_maneuver.unwrap();
-        assert_eq!(m2.tig, tig2, "TC-P37-4: second call must overwrite pending_maneuver.tig");
-        assert_ne!(m.tig, m2.tig, "TC-P37-4: second call must produce a different TIG");
+        assert_eq!(
+            m2.tig, tig2,
+            "TC-P37-4: second call must overwrite pending_maneuver.tig"
+        );
+        assert_ne!(
+            m.tig, m2.tig,
+            "TC-P37-4: second call must produce a different TIG"
+        );
     }
 
     /// TC-P37-5: `p37_compute_tei` with TOF < MIN_TEI_TOF_S panics.

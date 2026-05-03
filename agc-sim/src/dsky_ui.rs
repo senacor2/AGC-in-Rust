@@ -104,13 +104,25 @@ pub fn render<W: Write>(
 fn lamp_grid(lamps: &Lamps, lamp_test: bool) -> [[(&'static str, bool); 2]; 7] {
     let on = |b: bool| lamp_test || b;
     [
-        [("UPLINK ACTY", on(lamps.uplink_activity)), ("TEMP",        on(lamps.temp))],
-        [("NO ATT",      on(lamps.no_att)),          ("GIMBAL LOCK", on(lamps.gimbal_lock))],
-        [("STBY",        on(lamps.stby)),            ("PROG",        on(lamps.prog_alarm))],
-        [("KEY REL",     on(lamps.key_rel)),         ("RESTART",     on(lamps.restart))],
-        [("OPR ERR",     on(lamps.opr_err)),         ("TRACKER",     on(lamps.tracker))],
-        [("",            false),                     ("",            false)],
-        [("",            false),                     ("",            false)],
+        [
+            ("UPLINK ACTY", on(lamps.uplink_activity)),
+            ("TEMP", on(lamps.temp)),
+        ],
+        [
+            ("NO ATT", on(lamps.no_att)),
+            ("GIMBAL LOCK", on(lamps.gimbal_lock)),
+        ],
+        [("STBY", on(lamps.stby)), ("PROG", on(lamps.prog_alarm))],
+        [
+            ("KEY REL", on(lamps.key_rel)),
+            ("RESTART", on(lamps.restart)),
+        ],
+        [
+            ("OPR ERR", on(lamps.opr_err)),
+            ("TRACKER", on(lamps.tracker)),
+        ],
+        [("", false), ("", false)],
+        [("", false), ("", false)],
     ]
 }
 
@@ -124,15 +136,27 @@ fn draw_lamp_panel<W: Write>(
     let grid = lamp_grid(lamps, lamp_test);
 
     queue!(out, SetForegroundColor(DIM))?;
-    queue!(out, MoveTo(ox, oy),     Print("┌─────────────┬─────────────┐"))?;
+    queue!(out, MoveTo(ox, oy), Print("┌─────────────┬─────────────┐"))?;
     for row in 0..7 {
         let y = oy + 1 + row * 2;
-        queue!(out, MoveTo(ox, y),     Print("│             │             │"))?;
-        queue!(out, MoveTo(ox, y + 1), Print("├─────────────┼─────────────┤"))?;
+        queue!(out, MoveTo(ox, y), Print("│             │             │"))?;
+        queue!(
+            out,
+            MoveTo(ox, y + 1),
+            Print("├─────────────┼─────────────┤")
+        )?;
     }
     // Extra blank row to align with the 17-row display panel.
-    queue!(out, MoveTo(ox, oy + 15), Print("│             │             │"))?;
-    queue!(out, MoveTo(ox, oy + 16), Print("└─────────────┴─────────────┘"))?;
+    queue!(
+        out,
+        MoveTo(ox, oy + 15),
+        Print("│             │             │")
+    )?;
+    queue!(
+        out,
+        MoveTo(ox, oy + 16),
+        Print("└─────────────┴─────────────┘")
+    )?;
 
     for (row_idx, row) in grid.iter().enumerate() {
         let y = oy + 1 + (row_idx as u16) * 2;
@@ -159,47 +183,110 @@ fn draw_display_panel<W: Write>(
 ) -> io::Result<()> {
     queue!(out, SetForegroundColor(DIM))?;
     // Outer frame (31 cols wide, 17 rows tall, matching the lamp panel height).
-    queue!(out, MoveTo(ox, oy),      Print("┌──────────────┬──────────────┐"))?;
+    queue!(
+        out,
+        MoveTo(ox, oy),
+        Print("┌──────────────┬──────────────┐")
+    )?;
     for row in 1..=3 {
-        queue!(out, MoveTo(ox, oy + row),     Print("│              │              │"))?;
+        queue!(
+            out,
+            MoveTo(ox, oy + row),
+            Print("│              │              │")
+        )?;
     }
-    queue!(out, MoveTo(ox, oy + 4),  Print("├──────────────┼──────────────┤"))?;
+    queue!(
+        out,
+        MoveTo(ox, oy + 4),
+        Print("├──────────────┼──────────────┤")
+    )?;
     for row in 5..=7 {
-        queue!(out, MoveTo(ox, oy + row),     Print("│              │              │"))?;
+        queue!(
+            out,
+            MoveTo(ox, oy + row),
+            Print("│              │              │")
+        )?;
     }
-    queue!(out, MoveTo(ox, oy + 8),  Print("├──────────────┴──────────────┤"))?;
+    queue!(
+        out,
+        MoveTo(ox, oy + 8),
+        Print("├──────────────┴──────────────┤")
+    )?;
     for row in 9..=10 {
-        queue!(out, MoveTo(ox, oy + row),     Print("│                             │"))?;
+        queue!(
+            out,
+            MoveTo(ox, oy + row),
+            Print("│                             │")
+        )?;
     }
-    queue!(out, MoveTo(ox, oy + 11), Print("├─────────────────────────────┤"))?;
+    queue!(
+        out,
+        MoveTo(ox, oy + 11),
+        Print("├─────────────────────────────┤")
+    )?;
     for row in 12..=13 {
-        queue!(out, MoveTo(ox, oy + row),     Print("│                             │"))?;
+        queue!(
+            out,
+            MoveTo(ox, oy + row),
+            Print("│                             │")
+        )?;
     }
-    queue!(out, MoveTo(ox, oy + 14), Print("├─────────────────────────────┤"))?;
-    queue!(out, MoveTo(ox, oy + 15), Print("│                             │"))?;
-    queue!(out, MoveTo(ox, oy + 16), Print("└─────────────────────────────┘"))?;
+    queue!(
+        out,
+        MoveTo(ox, oy + 14),
+        Print("├─────────────────────────────┤")
+    )?;
+    queue!(
+        out,
+        MoveTo(ox, oy + 15),
+        Print("│                             │")
+    )?;
+    queue!(
+        out,
+        MoveTo(ox, oy + 16),
+        Print("└─────────────────────────────┘")
+    )?;
 
     // Row 0: COMP ACTY lamp | PROG label
-    queue!(out, SetForegroundColor(if frame.lamps.comp_acty { ACTIVE } else { DIM }))?;
+    queue!(
+        out,
+        SetForegroundColor(if frame.lamps.comp_acty { ACTIVE } else { DIM })
+    )?;
     queue!(out, MoveTo(ox + 2, oy + 1), Print("  COMP  "))?;
     queue!(out, MoveTo(ox + 2, oy + 2), Print("  ACTY  "))?;
 
     queue!(out, SetForegroundColor(DIM))?;
     queue!(out, MoveTo(ox + 17, oy + 1), Print("    PROG    "))?;
     queue!(out, SetForegroundColor(ACTIVE))?;
-    queue!(out, MoveTo(ox + 17, oy + 2), Print(format!("     {}     ", two_digit(&frame.prog))))?;
+    queue!(
+        out,
+        MoveTo(ox + 17, oy + 2),
+        Print(format!("     {}     ", two_digit(&frame.prog)))
+    )?;
 
     // Row 5–7: VERB | NOUN, labels may flash
-    let vn_color = if frame.flashing && !flash_on { DIM } else { ACTIVE };
+    let vn_color = if frame.flashing && !flash_on {
+        DIM
+    } else {
+        ACTIVE
+    };
     queue!(out, SetForegroundColor(DIM))?;
     queue!(out, MoveTo(ox + 2, oy + 5), Print("    VERB    "))?;
     queue!(out, MoveTo(ox + 17, oy + 5), Print("    NOUN    "))?;
     queue!(out, SetForegroundColor(vn_color))?;
-    queue!(out, MoveTo(ox + 2, oy + 6), Print(format!("     {}     ", two_digit(&frame.verb))))?;
-    queue!(out, MoveTo(ox + 17, oy + 6), Print(format!("     {}     ", two_digit(&frame.noun))))?;
+    queue!(
+        out,
+        MoveTo(ox + 2, oy + 6),
+        Print(format!("     {}     ", two_digit(&frame.verb)))
+    )?;
+    queue!(
+        out,
+        MoveTo(ox + 17, oy + 6),
+        Print(format!("     {}     ", two_digit(&frame.noun)))
+    )?;
 
     // Rows 9–10, 12–13, 15 → R1, R2, R3 (two rows per register box)
-    draw_register(out, ox, oy + 9,  "R1", &frame.r1)?;
+    draw_register(out, ox, oy + 9, "R1", &frame.r1)?;
     draw_register(out, ox, oy + 12, "R2", &frame.r2)?;
     draw_register(out, ox, oy + 15, "R3", &frame.r3)?;
 
@@ -227,16 +314,16 @@ fn draw_register<W: Write>(
         MoveTo(ox + 8, y),
         Print(format!(
             "{}{}{}{}{}{}",
-            sign_ch,
-            reg.digits[0],
-            reg.digits[1],
-            reg.digits[2],
-            reg.digits[3],
-            reg.digits[4],
+            sign_ch, reg.digits[0], reg.digits[1], reg.digits[2], reg.digits[3], reg.digits[4],
         ))
     )?;
     if reg.overflow {
-        queue!(out, SetForegroundColor(DIM), MoveTo(ox + 17, y), Print("[OVF]"))?;
+        queue!(
+            out,
+            SetForegroundColor(DIM),
+            MoveTo(ox + 17, y),
+            Print("[OVF]")
+        )?;
     }
     Ok(())
 }
@@ -267,12 +354,20 @@ fn draw_keyboard<W: Write>(out: &mut W, ox: u16, oy: u16) -> io::Result<()> {
 
 /// Jet indicator: `●` if firing, `○` if idle.
 fn jet_char(firing: bool) -> char {
-    if firing { '●' } else { '○' }
+    if firing {
+        '●'
+    } else {
+        '○'
+    }
 }
 
 /// Return the colour for a jet indicator.
 fn jet_color(firing: bool) -> Color {
-    if firing { JET_FIRE } else { DIM }
+    if firing {
+        JET_FIRE
+    } else {
+        DIM
+    }
 }
 
 /// Draw a single jet indicator at the given position.
@@ -284,7 +379,13 @@ fn draw_jet<W: Write>(out: &mut W, x: u16, y: u16, label: &str, firing: bool) ->
 }
 
 /// Draw a single jet indicator with the label after the indicator.
-fn draw_jet_rev<W: Write>(out: &mut W, x: u16, y: u16, label: &str, firing: bool) -> io::Result<()> {
+fn draw_jet_rev<W: Write>(
+    out: &mut W,
+    x: u16,
+    y: u16,
+    label: &str,
+    firing: bool,
+) -> io::Result<()> {
     queue!(out, SetForegroundColor(jet_color(firing)))?;
     queue!(out, MoveTo(x, y), Print(jet_char(firing)))?;
     queue!(out, Print(label))?;
@@ -303,9 +404,13 @@ fn draw_propulsion_panel<W: Write>(
     queue!(out, SetForegroundColor(DIM))?;
     // Top border with title
     queue!(out, MoveTo(ox, oy), Print("┌─PROPULSION"))?;
-    for _ in 12..div { queue!(out, Print("─"))?; }
+    for _ in 12..div {
+        queue!(out, Print("─"))?;
+    }
     queue!(out, Print("┬"))?;
-    for _ in (div + 1)..65 { queue!(out, Print("─"))?; }
+    for _ in (div + 1)..65 {
+        queue!(out, Print("─"))?;
+    }
     queue!(out, Print("┐"))?;
 
     // Content rows (7 rows)
@@ -313,10 +418,14 @@ fn draw_propulsion_panel<W: Write>(
         let y = oy + row;
         queue!(out, MoveTo(ox, y), Print("│"))?;
         // Fill left half with spaces
-        for _ in 1..div { queue!(out, Print(" "))?; }
+        for _ in 1..div {
+            queue!(out, Print(" "))?;
+        }
         queue!(out, Print("│"))?;
         // Fill right half with spaces
-        for _ in (div + 1)..65 { queue!(out, Print(" "))?; }
+        for _ in (div + 1)..65 {
+            queue!(out, Print(" "))?;
+        }
         // Right edge is at column 65
         queue!(out, MoveTo(ox + 65, y), Print("│"))?;
     }
@@ -324,9 +433,13 @@ fn draw_propulsion_panel<W: Write>(
     // Bottom border
     queue!(out, MoveTo(ox, oy + 8))?;
     queue!(out, Print("└"))?;
-    for _ in 1..div { queue!(out, Print("─"))?; }
+    for _ in 1..div {
+        queue!(out, Print("─"))?;
+    }
     queue!(out, Print("┴"))?;
-    for _ in (div + 1)..65 { queue!(out, Print("─"))?; }
+    for _ in (div + 1)..65 {
+        queue!(out, Print("─"))?;
+    }
     queue!(out, Print("┘"))?;
 
     // ── Left half: SM RCS diamond layout ─────────────────────────────────────
@@ -341,7 +454,12 @@ fn draw_propulsion_panel<W: Write>(
     // Row 2: A4 A2 · A1 A3
     draw_jet(out, ox + 5, oy + 2, "A4", j(4))?;
     draw_jet(out, ox + 9, oy + 2, "A2", j(6))?;
-    queue!(out, SetForegroundColor(DIM), MoveTo(ox + 12, oy + 2), Print("·"))?;
+    queue!(
+        out,
+        SetForegroundColor(DIM),
+        MoveTo(ox + 12, oy + 2),
+        Print("·")
+    )?;
     draw_jet_rev(out, ox + 14, oy + 2, "A1", j(7))?;
     draw_jet_rev(out, ox + 18, oy + 2, "A3", j(5))?;
 
@@ -353,21 +471,36 @@ fn draw_propulsion_panel<W: Write>(
     // Quad D (left) — row 4
     draw_jet(out, ox + 1, oy + 4, "D4", j(8))?;
     draw_jet(out, ox + 5, oy + 4, "D3", j(9))?;
-    queue!(out, SetForegroundColor(DIM), MoveTo(ox + 12, oy + 4), Print("·"))?;
+    queue!(
+        out,
+        SetForegroundColor(DIM),
+        MoveTo(ox + 12, oy + 4),
+        Print("·")
+    )?;
     draw_jet_rev(out, ox + 14, oy + 4, "D1", j(11))?;
     draw_jet_rev(out, ox + 18, oy + 4, "D2", j(10))?;
 
     // Quad B (right) — row 5
     draw_jet(out, ox + 1, oy + 5, "B2", j(2))?;
     draw_jet(out, ox + 5, oy + 5, "B1", j(3))?;
-    queue!(out, SetForegroundColor(DIM), MoveTo(ox + 12, oy + 5), Print("·"))?;
+    queue!(
+        out,
+        SetForegroundColor(DIM),
+        MoveTo(ox + 12, oy + 5),
+        Print("·")
+    )?;
     draw_jet_rev(out, ox + 14, oy + 5, "B3", j(1))?;
     draw_jet_rev(out, ox + 18, oy + 5, "B4", j(0))?;
 
     // Quad C (bottom) — row 6-7
     draw_jet(out, ox + 5, oy + 6, "C4", j(12))?;
     draw_jet(out, ox + 9, oy + 6, "C2", j(14))?;
-    queue!(out, SetForegroundColor(DIM), MoveTo(ox + 12, oy + 6), Print("·"))?;
+    queue!(
+        out,
+        SetForegroundColor(DIM),
+        MoveTo(ox + 12, oy + 6),
+        Print("·")
+    )?;
     draw_jet_rev(out, ox + 14, oy + 6, "C1", j(15))?;
     draw_jet_rev(out, ox + 18, oy + 6, "C3", j(13))?;
     queue!(out, SetForegroundColor(DIM))?;
@@ -379,7 +512,11 @@ fn draw_propulsion_panel<W: Write>(
     // Row 1: SPS status
     if prop.sps_thrusting {
         queue!(out, SetForegroundColor(SPS_FIRE))?;
-        queue!(out, MoveTo(rx, oy + 1), Print("SPS: \u{2588}\u{2588} THRUST \u{2588}\u{2588}"))?;
+        queue!(
+            out,
+            MoveTo(rx, oy + 1),
+            Print("SPS: \u{2588}\u{2588} THRUST \u{2588}\u{2588}")
+        )?;
     } else {
         queue!(out, SetForegroundColor(DIM))?;
         queue!(out, MoveTo(rx, oy + 1), Print("SPS: OFF"))?;
@@ -399,14 +536,32 @@ fn draw_propulsion_panel<W: Write>(
     // Rows 4-6: Nozzle glyph
     if prop.sps_thrusting {
         queue!(out, SetForegroundColor(SPS_FIRE))?;
-        queue!(out, MoveTo(rx + 5, oy + 4), Print("\u{2571}\u{2593}\u{2593}\u{2593}\u{2593}\u{2572}"))?;
-        queue!(out, MoveTo(rx + 4, oy + 5), Print("\u{2571}\u{2593}\u{2593}\u{2593}\u{2593}\u{2593}\u{2593}\u{2572}"))?;
-        queue!(out, MoveTo(rx + 3, oy + 6), Print("\u{2571}\u{2593}\u{2593}\u{2593}\u{2593}\u{2593}\u{2593}\u{2593}\u{2593}\u{2572}"))?;
+        queue!(
+            out,
+            MoveTo(rx + 5, oy + 4),
+            Print("\u{2571}\u{2593}\u{2593}\u{2593}\u{2593}\u{2572}")
+        )?;
+        queue!(
+            out,
+            MoveTo(rx + 4, oy + 5),
+            Print("\u{2571}\u{2593}\u{2593}\u{2593}\u{2593}\u{2593}\u{2593}\u{2572}")
+        )?;
+        queue!(
+            out,
+            MoveTo(rx + 3, oy + 6),
+            Print(
+                "\u{2571}\u{2593}\u{2593}\u{2593}\u{2593}\u{2593}\u{2593}\u{2593}\u{2593}\u{2572}"
+            )
+        )?;
     } else {
         queue!(out, SetForegroundColor(DIM))?;
         queue!(out, MoveTo(rx + 5, oy + 4), Print("\u{2571}    \u{2572}"))?;
         queue!(out, MoveTo(rx + 4, oy + 5), Print("\u{2571}      \u{2572}"))?;
-        queue!(out, MoveTo(rx + 3, oy + 6), Print("\u{2571}        \u{2572}"))?;
+        queue!(
+            out,
+            MoveTo(rx + 3, oy + 6),
+            Print("\u{2571}        \u{2572}")
+        )?;
     }
 
     Ok(())

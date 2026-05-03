@@ -77,8 +77,14 @@ pub fn lambert(r1: Vec3, r2: Vec3, tof: f64, mu: f64, prograde: bool) -> (Vec3, 
         r2.iter().all(|v| v.is_finite()),
         "lambert: r2 contains non-finite values"
     );
-    assert!(tof.is_finite() && tof > 0.0, "lambert: tof must be > 0 and finite");
-    assert!(mu.is_finite() && mu > 0.0, "lambert: mu must be > 0 and finite");
+    assert!(
+        tof.is_finite() && tof > 0.0,
+        "lambert: tof must be > 0 and finite"
+    );
+    assert!(
+        mu.is_finite() && mu > 0.0,
+        "lambert: mu must be > 0 and finite"
+    );
 
     let r1_mag = norm(r1);
     let r2_mag = norm(r2);
@@ -122,9 +128,7 @@ pub fn lambert(r1: Vec3, r2: Vec3, tof: f64, mu: f64, prograde: bool) -> (Vec3, 
 
     // ── 2. Non-dimensional parameters (Izzo 2015, §3) ────────────────────────
     // Chord length.
-    let c = libm::sqrt(
-        r1_mag * r1_mag + r2_mag * r2_mag - 2.0 * r1_mag * r2_mag * libm::cos(dnu),
-    );
+    let c = libm::sqrt(r1_mag * r1_mag + r2_mag * r2_mag - 2.0 * r1_mag * r2_mag * libm::cos(dnu));
     // Semi-perimeter.
     let s = (r1_mag + r2_mag + c) / 2.0;
     // λ ∈ [0, 1]; negative for dnu > π (long-way arc).
@@ -328,7 +332,8 @@ fn tof_and_derivs(x: f64, lambda: f64) -> (f64, f64, f64) {
         let (tp2, _, _) = tof_and_derivs_inner(x + 2.0 * h, lambda);
         (-tp2 + 16.0 * tp1 - 30.0 * t_val + 16.0 * tm1 - tm2) / (12.0 * h * h)
     } else {
-        (3.0 * t_val + (3.0 * x - 4.0 / x) * dt
+        (3.0 * t_val
+            + (3.0 * x - 4.0 / x) * dt
             + (4.0 / (x * x)) * (t_val - (2.0 / 3.0) * (1.0 - lam3)))
             / a_inv
     };
@@ -376,7 +381,8 @@ fn tof_and_derivs_inner(x: f64, lambda: f64) -> (f64, f64, f64) {
     let d2t = if x_safe.abs() < 1.0e-8 {
         0.0
     } else {
-        (3.0 * t_val + (3.0 * x_safe - 4.0 / x_safe) * dt
+        (3.0 * t_val
+            + (3.0 * x_safe - 4.0 / x_safe) * dt
             + (4.0 / (x_safe * x_safe)) * (t_val - (2.0 / 3.0) * (1.0 - lam3)))
             / a_inv
     };
@@ -416,15 +422,10 @@ mod tests {
         let r1: Vec3 = [r1_mag, 0.0, 0.0];
         // 179° instead of exactly 180° to avoid anti-parallel degeneracy.
         let theta = 179.0_f64.to_radians();
-        let r2: Vec3 = [
-            r2_mag * libm::cos(theta),
-            r2_mag * libm::sin(theta),
-            0.0,
-        ];
+        let r2: Vec3 = [r2_mag * libm::cos(theta), r2_mag * libm::sin(theta), 0.0];
 
         let a_tr = (r1_mag + r2_mag) / 2.0;
-        let t_period =
-            2.0 * core::f64::consts::PI * libm::sqrt(a_tr * a_tr * a_tr / MU_EARTH);
+        let t_period = 2.0 * core::f64::consts::PI * libm::sqrt(a_tr * a_tr * a_tr / MU_EARTH);
         let tof = t_period / 2.0; // half-period for Hohmann transfer
 
         let (v1, v2) = lambert(r1, r2, tof, MU_EARTH, true);
@@ -459,11 +460,19 @@ mod tests {
             "TC-LAM-1: radial velocity at periapsis should be small, got {}",
             v1_radial
         );
-        assert!(v1[1] > 0.0, "TC-LAM-1: v1_y should be +prograde, got {}", v1[1]);
+        assert!(
+            v1[1] > 0.0,
+            "TC-LAM-1: v1_y should be +prograde, got {}",
+            v1[1]
+        );
 
         // Angular momentum z > 0 for prograde.
         let h = cross(r1, v1);
-        assert!(h[2] > 0.0, "TC-LAM-1: h_z must be positive (prograde), got {}", h[2]);
+        assert!(
+            h[2] > 0.0,
+            "TC-LAM-1: h_z must be positive (prograde), got {}",
+            h[2]
+        );
 
         // Energy conservation I2.
         check_energy(r1, v1, r2, v2, MU_EARTH, "TC-LAM-1");
@@ -480,16 +489,11 @@ mod tests {
         let r1: Vec3 = [r_mag, 0.0, 0.0];
 
         // Compute the arc angle from the circular orbit period.
-        let t_period = 2.0 * core::f64::consts::PI
-            * libm::sqrt(r_mag * r_mag * r_mag / MU_EARTH);
+        let t_period = 2.0 * core::f64::consts::PI * libm::sqrt(r_mag * r_mag * r_mag / MU_EARTH);
         let tof = 300.0; // 5 minutes
         let theta = 2.0 * core::f64::consts::PI * tof / t_period;
 
-        let r2: Vec3 = [
-            r_mag * libm::cos(theta),
-            r_mag * libm::sin(theta),
-            0.0,
-        ];
+        let r2: Vec3 = [r_mag * libm::cos(theta), r_mag * libm::sin(theta), 0.0];
 
         let (v1, v2) = lambert(r1, r2, tof, MU_EARTH, true);
 
@@ -502,12 +506,14 @@ mod tests {
         assert!(
             (v1_mag - v_circ).abs() / v_circ < 0.01,
             "TC-LAM-2: |v1| = {} m/s, expected ≈ {} m/s (circular)",
-            v1_mag, v_circ
+            v1_mag,
+            v_circ
         );
         assert!(
             (v2_mag - v_circ).abs() / v_circ < 0.01,
             "TC-LAM-2: |v2| = {} m/s, expected ≈ {} m/s (circular)",
-            v2_mag, v_circ
+            v2_mag,
+            v_circ
         );
 
         // v1 should be tangential (perpendicular to r1) → v1_x ≈ 0
@@ -596,19 +602,14 @@ mod tests {
         let r1: Vec3 = [6_778_000.0, 0.0, 0.0];
         let r2: Vec3 = [0.0, 7_578_000.0, 0.0];
         let a_tr = (6_778_000.0_f64 + 7_578_000.0) / 2.0;
-        let t_period =
-            2.0 * core::f64::consts::PI * libm::sqrt(a_tr * a_tr * a_tr / MU_EARTH);
+        let t_period = 2.0 * core::f64::consts::PI * libm::sqrt(a_tr * a_tr * a_tr / MU_EARTH);
         let tof = 3.0 * t_period / 4.0; // long-way: 3/4 of ellipse period
 
         let (v1, _v2) = lambert(r1, r2, tof, MU_EARTH, false);
 
         // Retrograde: angular momentum z should be negative.
         let h = cross(r1, v1);
-        assert!(
-            h[2] < 0.0,
-            "Retrograde h_z must be negative, got {}",
-            h[2]
-        );
+        assert!(h[2] < 0.0, "Retrograde h_z must be negative, got {}", h[2]);
     }
 
     // ── TC-LAM-8: Hyperbolic TEI escape (LLO → Earth, 60 h) ───────────────────

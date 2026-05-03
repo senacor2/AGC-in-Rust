@@ -23,9 +23,9 @@ use agc_core::types::Met;
 use agc_core::AgcState;
 
 use agc_test::fixtures::{
-    load_gravity_cases, load_kalman_cases, load_kepler_cases, load_lambert_cases,
-    load_orbit_cases, load_rendezvous_cases, load_servicer_cases, load_targeting_cases,
-    GravityCase, KalmanCase, OrbitCase, ServicerCase, StateVectorJson,
+    load_gravity_cases, load_kalman_cases, load_kepler_cases, load_lambert_cases, load_orbit_cases,
+    load_rendezvous_cases, load_servicer_cases, load_targeting_cases, GravityCase, KalmanCase,
+    OrbitCase, ServicerCase, StateVectorJson,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -118,7 +118,8 @@ fn test_gravity_fixtures_direction() {
         assert!(
             dot < 0.0,
             "earth_gravity fixture '{}': dot(g, r) = {:.4e} must be negative",
-            case.name, dot
+            case.name,
+            dot
         );
     }
 }
@@ -184,7 +185,11 @@ fn test_servicer_cycle_fixtures() {
 /// (bias correction → scale → misalignment → REFSMMAT rotation) by comparing
 /// the actual velocity change against the expected delta-V.
 fn run_servicer_single_cycle(case: &ServicerCase) {
-    assert_eq!(case.pipa_sequence.len(), 1, "single-cycle case must have exactly 1 PIPA entry");
+    assert_eq!(
+        case.pipa_sequence.len(),
+        1,
+        "single-cycle case must have exactly 1 PIPA entry"
+    );
 
     // Run the actual servicer task with PIPA counts from fixture.
     let mut state = AgcState::new();
@@ -215,8 +220,7 @@ fn run_servicer_single_cycle(case: &ServicerCase) {
     // Epoch must have advanced by 200 centiseconds.
     let expected_epoch_cs = case.initial_state.epoch_cs + 200;
     assert_eq!(
-        state.csm_state.epoch.0 as u64,
-        expected_epoch_cs,
+        state.csm_state.epoch.0 as u64, expected_epoch_cs,
         "servicer case '{}': epoch = {} cs, expected {} cs",
         case.name, state.csm_state.epoch.0, expected_epoch_cs
     );
@@ -225,7 +229,10 @@ fn run_servicer_single_cycle(case: &ServicerCase) {
     let expected_frame = match case.expected_final_state.frame.as_str() {
         "EarthInertial" => Frame::EarthInertial,
         "MoonInertial" => Frame::MoonInertial,
-        other => panic!("Unknown expected frame in servicer case '{}': {}", case.name, other),
+        other => panic!(
+            "Unknown expected frame in servicer case '{}': {}",
+            case.name, other
+        ),
     };
     assert_eq!(
         state.csm_state.frame, expected_frame,
@@ -253,14 +260,14 @@ fn run_servicer_single_cycle(case: &ServicerCase) {
         (pipa[2] as i32 - bias[2] as i32) as f64 * scale,
     ];
     let mis_dv = [
-        m[0][0]*biased[0] + m[0][1]*biased[1] + m[0][2]*biased[2],
-        m[1][0]*biased[0] + m[1][1]*biased[1] + m[1][2]*biased[2],
-        m[2][0]*biased[0] + m[2][1]*biased[1] + m[2][2]*biased[2],
+        m[0][0] * biased[0] + m[0][1] * biased[1] + m[0][2] * biased[2],
+        m[1][0] * biased[0] + m[1][1] * biased[1] + m[1][2] * biased[2],
+        m[2][0] * biased[0] + m[2][1] * biased[1] + m[2][2] * biased[2],
     ];
     let expected_dv = [
-        r[0][0]*mis_dv[0] + r[0][1]*mis_dv[1] + r[0][2]*mis_dv[2],
-        r[1][0]*mis_dv[0] + r[1][1]*mis_dv[1] + r[1][2]*mis_dv[2],
-        r[2][0]*mis_dv[0] + r[2][1]*mis_dv[1] + r[2][2]*mis_dv[2],
+        r[0][0] * mis_dv[0] + r[0][1] * mis_dv[1] + r[0][2] * mis_dv[2],
+        r[1][0] * mis_dv[0] + r[1][1] * mis_dv[1] + r[1][2] * mis_dv[2],
+        r[2][0] * mis_dv[0] + r[2][1] * mis_dv[1] + r[2][2] * mis_dv[2],
     ];
 
     for i in 0..3 {
@@ -298,8 +305,7 @@ fn run_servicer_multi_cycle(case: &ServicerCase) {
     // Verify epoch advanced by exactly num_cycles × 200 cs.
     let expected_epoch_cs = case.initial_state.epoch_cs + (case.num_cycles as u64 * 200);
     assert_eq!(
-        sv.epoch.0 as u64,
-        expected_epoch_cs,
+        sv.epoch.0 as u64, expected_epoch_cs,
         "servicer multi-cycle case '{}': epoch = {} cs, expected {} cs",
         case.name, sv.epoch.0, expected_epoch_cs
     );
@@ -321,12 +327,16 @@ fn run_servicer_multi_cycle(case: &ServicerCase) {
     assert!(
         (final_r - initial_r).abs() <= case.position_tolerance_m,
         "servicer multi-cycle case '{}': radius drift = {:.2} m, tolerance = {:.2} m",
-        case.name, (final_r - initial_r).abs(), case.position_tolerance_m
+        case.name,
+        (final_r - initial_r).abs(),
+        case.position_tolerance_m
     );
     assert!(
         (final_v - initial_v).abs() <= case.velocity_tolerance_m_s,
         "servicer multi-cycle case '{}': speed drift = {:.4} m/s, tolerance = {:.4} m/s",
-        case.name, (final_v - initial_v).abs(), case.velocity_tolerance_m_s
+        case.name,
+        (final_v - initial_v).abs(),
+        case.velocity_tolerance_m_s
     );
 }
 
@@ -378,7 +388,9 @@ fn run_orbit_case(case: &OrbitCase) {
         assert!(
             (r_final - r0).abs() <= pos_tol,
             "orbit case '{}': radius error = {:.2} m, tolerance = {:.2} m",
-            case.name, (r_final - r0).abs(), pos_tol
+            case.name,
+            (r_final - r0).abs(),
+            pos_tol
         );
 
         // Verify speed conservation.
@@ -387,7 +399,9 @@ fn run_orbit_case(case: &OrbitCase) {
         assert!(
             (v_final - v0).abs() <= vel_tol,
             "orbit case '{}': speed error = {:.4} m/s, tolerance = {:.4} m/s",
-            case.name, (v_final - v0).abs(), vel_tol
+            case.name,
+            (v_final - v0).abs(),
+            vel_tol
         );
     } else {
         // Compare each Cartesian component of the propagated state.
@@ -410,8 +424,7 @@ fn run_orbit_case(case: &OrbitCase) {
     // Epoch must have advanced by exactly dt_s seconds.
     let expected_epoch_cs = case.initial_state.epoch_cs + (dt * 100.0) as u64;
     assert_eq!(
-        result.epoch.0 as u64,
-        expected_epoch_cs,
+        result.epoch.0 as u64, expected_epoch_cs,
         "orbit case '{}': epoch = {} cs, expected {} cs",
         case.name, result.epoch.0, expected_epoch_cs
     );
@@ -420,7 +433,10 @@ fn run_orbit_case(case: &OrbitCase) {
     let expected_frame = match expected.frame.as_str() {
         "EarthInertial" => Frame::EarthInertial,
         "MoonInertial" => Frame::MoonInertial,
-        other => panic!("Unknown expected frame in orbit case '{}': {}", case.name, other),
+        other => panic!(
+            "Unknown expected frame in orbit case '{}': {}",
+            case.name, other
+        ),
     };
     assert_eq!(
         result.frame, expected_frame,
@@ -437,7 +453,10 @@ fn test_orbit_energy_conservation() {
 
     let cases = load_orbit_cases();
 
-    for case in cases.iter().filter(|c| c.initial_state.frame == "EarthInertial") {
+    for case in cases
+        .iter()
+        .filter(|c| c.initial_state.frame == "EarthInertial")
+    {
         let sv = sv_from_json(&case.initial_state);
         let result = propagate_coast(sv, case.dt_s, case.moon_pos_m);
 
@@ -453,7 +472,8 @@ fn test_orbit_energy_conservation() {
         assert!(
             rel_err < 1e-4,
             "orbit case '{}': relative energy error = {:.4e} > 1e-4",
-            case.name, rel_err
+            case.name,
+            rel_err
         );
     }
 }
@@ -467,7 +487,10 @@ fn test_lunar_orbit_energy_conservation() {
 
     let cases = load_orbit_cases();
 
-    for case in cases.iter().filter(|c| c.initial_state.frame == "MoonInertial") {
+    for case in cases
+        .iter()
+        .filter(|c| c.initial_state.frame == "MoonInertial")
+    {
         let sv = sv_from_json(&case.initial_state);
         let result = propagate_coast(sv, case.dt_s, case.moon_pos_m);
 
@@ -485,7 +508,8 @@ fn test_lunar_orbit_energy_conservation() {
         assert!(
             rel_err < 1e-3,
             "lunar orbit case '{}': relative energy error = {:.4e} > 1e-3",
-            case.name, rel_err
+            case.name,
+            rel_err
         );
     }
 }
@@ -502,7 +526,7 @@ fn test_lunar_orbit_energy_conservation() {
 /// are within the expected range (< 10 ppm for mu values).
 #[test]
 fn test_vagc_constant_consistency() {
-    use agc_core::navigation::gravity::{MU_EARTH, MU_MOON, R_SOI_MOON, J2_EARTH, R_EARTH};
+    use agc_core::navigation::gravity::{J2_EARTH, MU_EARTH, MU_MOON, R_EARTH, R_SOI_MOON};
 
     // AGC MUEARTH = 3.986032E10 m^3/cs^2 → 3.986032E14 m^3/s^2
     // (AGC stored mu in centisecond units; multiply by 1e4 to get SI)
@@ -598,7 +622,13 @@ fn test_lambert_fixtures() {
         // covered by unit tests in agc-core; we skip them in the fixture tests
         // by catching the panic and logging a skip.
         let result = catch_unwind(AssertUnwindSafe(|| {
-            lambert(case.r1_m, case.r2_m, case.tof_s, case.mu_m3_s2, case.prograde)
+            lambert(
+                case.r1_m,
+                case.r2_m,
+                case.tof_s,
+                case.mu_m3_s2,
+                case.prograde,
+            )
         }));
         let (v1, v2) = match result {
             Ok(vs) => vs,
@@ -615,8 +645,8 @@ fn test_lambert_fixtures() {
         // 1) Energy conservation.
         let r1_mag = vec3_norm(r1);
         let r2_mag = vec3_norm(r2);
-        let v1_sq = v1[0]*v1[0] + v1[1]*v1[1] + v1[2]*v1[2];
-        let v2_sq = v2[0]*v2[0] + v2[1]*v2[1] + v2[2]*v2[2];
+        let v1_sq = v1[0] * v1[0] + v1[1] * v1[1] + v1[2] * v1[2];
+        let v2_sq = v2[0] * v2[0] + v2[1] * v2[1] + v2[2] * v2[2];
         let e1 = 0.5 * v1_sq - mu / r1_mag;
         let e2 = 0.5 * v2_sq - mu / r2_mag;
         let energy_rel_err = (e1 - e2).abs() / e1.abs().max(1.0);
@@ -629,7 +659,11 @@ fn test_lambert_fixtures() {
 
         // 2) Angular momentum conservation.
         let cross = |a: [f64; 3], b: [f64; 3]| -> [f64; 3] {
-            [a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]]
+            [
+                a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0],
+            ]
         };
         let h1 = vec3_norm(cross(r1, v1));
         let h2 = vec3_norm(cross(r2, v2));
@@ -662,10 +696,18 @@ fn test_lambert_fixtures() {
     // Skipped cases are allowed — they exercise degenerate geometries or
     // long-TOF regimes that are out of scope for invariant-based testing.
     if !skipped.is_empty() {
-        eprintln!("INFO: {} Lambert case(s) skipped: {}", skipped.len(), skipped.join(", "));
+        eprintln!(
+            "INFO: {} Lambert case(s) skipped: {}",
+            skipped.len(),
+            skipped.join(", ")
+        );
     }
     if !failures.is_empty() {
-        panic!("Lambert invariant failures ({}):\n  {}", failures.len(), failures.join("\n  "));
+        panic!(
+            "Lambert invariant failures ({}):\n  {}",
+            failures.len(),
+            failures.join("\n  ")
+        );
     }
 }
 
@@ -699,7 +741,11 @@ fn test_kepler_step_fixtures() {
     assert!(!cases.is_empty(), "kepler_cases.json must not be empty");
 
     let cross = |a: [f64; 3], b: [f64; 3]| -> [f64; 3] {
-        [a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]]
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
     };
 
     let mut failures: Vec<String> = Vec::new();
@@ -711,8 +757,12 @@ fn test_kepler_step_fixtures() {
         let (r1, v1) = kepler_step(r0, v0, case.dt_s, mu);
 
         // Check all results are finite.
-        if !(r1[0].is_finite() && r1[1].is_finite() && r1[2].is_finite()
-             && v1[0].is_finite() && v1[1].is_finite() && v1[2].is_finite())
+        if !(r1[0].is_finite()
+            && r1[1].is_finite()
+            && r1[2].is_finite()
+            && v1[0].is_finite()
+            && v1[1].is_finite()
+            && v1[2].is_finite())
         {
             failures.push(format!(
                 "kepler '{}': non-finite output r={:?} v={:?}",
@@ -724,8 +774,8 @@ fn test_kepler_step_fixtures() {
         // 1) Specific orbital energy conservation.
         let r0_mag = vec3_norm(r0);
         let r1_mag = vec3_norm(r1);
-        let v0_sq = v0[0]*v0[0] + v0[1]*v0[1] + v0[2]*v0[2];
-        let v1_sq = v1[0]*v1[0] + v1[1]*v1[1] + v1[2]*v1[2];
+        let v0_sq = v0[0] * v0[0] + v0[1] * v0[1] + v0[2] * v0[2];
+        let v1_sq = v1[0] * v1[0] + v1[1] * v1[1] + v1[2] * v1[2];
         let e0 = 0.5 * v0_sq - mu / r0_mag;
         let e1 = 0.5 * v1_sq - mu / r1_mag;
         let energy_rel_err = (e0 - e1).abs() / e0.abs().max(1.0);
@@ -761,7 +811,11 @@ fn test_kepler_step_fixtures() {
         }
     }
     if !failures.is_empty() {
-        panic!("Kepler invariant failures ({}):\n  {}", failures.len(), failures.join("\n  "));
+        panic!(
+            "Kepler invariant failures ({}):\n  {}",
+            failures.len(),
+            failures.join("\n  ")
+        );
     }
 }
 
@@ -862,16 +916,18 @@ fn run_kalman_case(case: &KalmanCase) {
     // provides the inputs (initial_x, initial_w, b, residual, sigma_sq) and
     // the per-case tolerances.
     let (ref_outcome, ref_x, ref_w) = reference_kalman_update(
-        case.initial_x, case.initial_w, case.b, case.residual, case.sigma_sq,
+        case.initial_x,
+        case.initial_w,
+        case.b,
+        case.residual,
+        case.sigma_sq,
     );
 
     // Clone fixture state into mutable locals for the production call.
     let mut x = case.initial_x;
     let mut w = case.initial_w;
 
-    let outcome = scalar_measurement_update(
-        &mut x, &mut w, case.b, case.residual, case.sigma_sq,
-    );
+    let outcome = scalar_measurement_update(&mut x, &mut w, case.b, case.residual, case.sigma_sq);
 
     let outcome_str = match outcome {
         UpdateOutcome::Accepted => "Accepted",
@@ -887,14 +943,18 @@ fn run_kalman_case(case: &KalmanCase) {
     // Compare production output to reference implementation within fixture tolerances.
     for i in 0..6 {
         assert_near(
-            x[i], ref_x[i], case.state_tolerance,
+            x[i],
+            ref_x[i],
+            case.state_tolerance,
             &format!("kalman case '{}': x[{}]", case.name, i),
         );
     }
     for i in 0..6 {
         for j in 0..6 {
             assert_near(
-                w[i][j], ref_w[i][j], case.covariance_tolerance,
+                w[i][j],
+                ref_w[i][j],
+                case.covariance_tolerance,
                 &format!("kalman case '{}': w[{}][{}]", case.name, i, j),
             );
         }
@@ -1029,7 +1089,8 @@ fn test_rendezvous_fixtures() {
             let los = los_angles_lvlh(&lvlh);
             if !(los.elevation.is_finite() && los.azimuth.is_finite()) {
                 failures.push(format!(
-                    "rendezvous '{}': los_angles has non-finite components", case.name,
+                    "rendezvous '{}': los_angles has non-finite components",
+                    case.name,
                 ));
             }
             let pi_2 = core::f64::consts::PI / 2.0;
@@ -1065,9 +1126,8 @@ fn test_rendezvous_fixtures() {
                 lvlh.rho[1] / rho_mag_lvlh,
                 lvlh.rho[2] / rho_mag_lvlh,
             ];
-            let dot_val = rebuilt[0] * rho_hat[0]
-                + rebuilt[1] * rho_hat[1]
-                + rebuilt[2] * rho_hat[2];
+            let dot_val =
+                rebuilt[0] * rho_hat[0] + rebuilt[1] * rho_hat[1] + rebuilt[2] * rho_hat[2];
             // Unit vectors pointing the same way should have dot ≈ 1.
             if (dot_val - 1.0).abs() > 1e-6 {
                 failures.push(format!(
@@ -1076,7 +1136,6 @@ fn test_rendezvous_fixtures() {
                 ));
             }
         }
-
     }
 
     if !failures.is_empty() {
@@ -1110,8 +1169,7 @@ fn test_targeting_fixtures() {
     let cases = load_targeting_cases();
     assert!(!cases.is_empty(), "targeting_cases.json must not be empty");
 
-    let identity_mat: [[f64; 3]; 3] =
-        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    let identity_mat: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
     let mut failures: Vec<String> = Vec::new();
 

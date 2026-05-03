@@ -3,8 +3,7 @@
 use std::time::Instant;
 
 use agc_core::hal::{
-    AgcHardware, Dsky, Engine, Imu, Optics, Rcs, Telemetry, Timers, Uplink,
-    dsky::Lamp,
+    dsky::Lamp, AgcHardware, Dsky, Engine, Imu, Optics, Rcs, Telemetry, Timers, Uplink,
 };
 use agc_core::types::CduAngle;
 
@@ -21,7 +20,10 @@ pub struct SimTimers {
 
 impl SimTimers {
     pub fn new() -> Self {
-        Self { base_cs: 0, epoch: Instant::now() }
+        Self {
+            base_cs: 0,
+            epoch: Instant::now(),
+        }
     }
 
     /// Set the mission clock to an absolute value.  The timer continues
@@ -31,9 +33,17 @@ impl SimTimers {
         self.epoch = Instant::now();
     }
 }
-pub struct SimDsky   { pub keys: std::collections::VecDeque<u8> }
-pub struct SimImu    { pub pipa: [i16; 3], pub cdu: [CduAngle; 3] }
-pub struct SimOptics { pub trunnion: CduAngle, pub shaft: CduAngle }
+pub struct SimDsky {
+    pub keys: std::collections::VecDeque<u8>,
+}
+pub struct SimImu {
+    pub pipa: [i16; 3],
+    pub cdu: [CduAngle; 3],
+}
+pub struct SimOptics {
+    pub trunnion: CduAngle,
+    pub shaft: CduAngle,
+}
 pub struct SimEngine {
     pub thrusting: bool,
     pub gimbal_pitch: i16,
@@ -47,8 +57,12 @@ pub struct SimRcs {
     pub visual_sm_jets: u16,
     pub visual_cm_jets: u16,
 }
-pub struct SimUplink  { pub words: std::collections::VecDeque<u16> }
-pub struct SimTelemetry { pub log: Vec<u16> }
+pub struct SimUplink {
+    pub words: std::collections::VecDeque<u16>,
+}
+pub struct SimTelemetry {
+    pub log: Vec<u16>,
+}
 
 // ── Trait implementations ─────────────────────────────────────────────────────
 
@@ -68,7 +82,9 @@ impl Dsky for SimDsky {
     fn clear_row(&mut self, _row: u8) {}
     fn set_lamp(&mut self, _lamp: Lamp, _on: bool) {}
     fn set_flash(&mut self, _on: bool) {}
-    fn read_key(&mut self) -> Option<u8> { self.keys.pop_front() }
+    fn read_key(&mut self) -> Option<u8> {
+        self.keys.pop_front()
+    }
 }
 
 impl Imu for SimImu {
@@ -77,26 +93,40 @@ impl Imu for SimImu {
         self.pipa = [0; 3];
         counts
     }
-    fn read_cdu(&self) -> [CduAngle; 3] { self.cdu }
+    fn read_cdu(&self) -> [CduAngle; 3] {
+        self.cdu
+    }
     fn torque_gyro(&mut self, _axis: usize, _pulses: i16) {}
     fn coarse_align(&mut self, _commands: [i16; 3]) {}
-    fn is_caged(&self) -> bool { false }
+    fn is_caged(&self) -> bool {
+        false
+    }
 }
 
 impl Optics for SimOptics {
-    fn trunnion_angle(&self) -> CduAngle { self.trunnion }
-    fn shaft_angle(&self) -> CduAngle { self.shaft }
+    fn trunnion_angle(&self) -> CduAngle {
+        self.trunnion
+    }
+    fn shaft_angle(&self) -> CduAngle {
+        self.shaft
+    }
     fn drive(&mut self, _trunnion: i16, _shaft: i16) {}
-    fn mark_pressed(&self) -> bool { false }
+    fn mark_pressed(&self) -> bool {
+        false
+    }
 }
 
 impl Engine for SimEngine {
-    fn sps_enable(&mut self, on: bool) { self.thrusting = on; }
+    fn sps_enable(&mut self, on: bool) {
+        self.thrusting = on;
+    }
     fn sps_gimbal(&mut self, pitch: i16, yaw: i16) {
         self.gimbal_pitch = pitch;
         self.gimbal_yaw = yaw;
     }
-    fn thrust_on(&self) -> bool { self.thrusting }
+    fn thrust_on(&self) -> bool {
+        self.thrusting
+    }
 }
 
 impl Rcs for SimRcs {
@@ -128,61 +158,101 @@ impl SimRcs {
 }
 
 impl Uplink for SimUplink {
-    fn read_word(&mut self) -> Option<u16> { self.words.pop_front() }
+    fn read_word(&mut self) -> Option<u16> {
+        self.words.pop_front()
+    }
 }
 
 impl Telemetry for SimTelemetry {
-    fn send_word(&mut self, word: u16) { self.log.push(word); }
+    fn send_word(&mut self, word: u16) {
+        self.log.push(word);
+    }
 }
 
 // ── Top-level SimHardware ─────────────────────────────────────────────────────
 
 pub struct SimHardware {
-    pub timers:    SimTimers,
-    pub dsky:      SimDsky,
-    pub imu:       SimImu,
-    pub optics:    SimOptics,
-    pub engine:    SimEngine,
-    pub rcs:       SimRcs,
-    pub uplink:    SimUplink,
+    pub timers: SimTimers,
+    pub dsky: SimDsky,
+    pub imu: SimImu,
+    pub optics: SimOptics,
+    pub engine: SimEngine,
+    pub rcs: SimRcs,
+    pub uplink: SimUplink,
     pub telemetry: SimTelemetry,
 }
 
 impl SimHardware {
     pub fn new() -> Self {
         Self {
-            timers:    SimTimers::new(),
-            dsky:      SimDsky   { keys: Default::default() },
-            imu:       SimImu    { pipa: [0; 3], cdu: [CduAngle(0); 3] },
-            optics:    SimOptics { trunnion: CduAngle(0), shaft: CduAngle(0) },
-            engine:    SimEngine { thrusting: false, gimbal_pitch: 0, gimbal_yaw: 0 },
-            rcs:       SimRcs { sm_jets: 0, cm_jets: 0, visual_sm_jets: 0, visual_cm_jets: 0 },
-            uplink:    SimUplink  { words: Default::default() },
+            timers: SimTimers::new(),
+            dsky: SimDsky {
+                keys: Default::default(),
+            },
+            imu: SimImu {
+                pipa: [0; 3],
+                cdu: [CduAngle(0); 3],
+            },
+            optics: SimOptics {
+                trunnion: CduAngle(0),
+                shaft: CduAngle(0),
+            },
+            engine: SimEngine {
+                thrusting: false,
+                gimbal_pitch: 0,
+                gimbal_yaw: 0,
+            },
+            rcs: SimRcs {
+                sm_jets: 0,
+                cm_jets: 0,
+                visual_sm_jets: 0,
+                visual_cm_jets: 0,
+            },
+            uplink: SimUplink {
+                words: Default::default(),
+            },
             telemetry: SimTelemetry { log: Vec::new() },
         }
     }
 }
 
 impl AgcHardware for SimHardware {
-    type Timers    = SimTimers;
-    type Dsky      = SimDsky;
-    type Imu       = SimImu;
-    type Optics    = SimOptics;
-    type Engine    = SimEngine;
-    type Rcs       = SimRcs;
-    type Uplink    = SimUplink;
+    type Timers = SimTimers;
+    type Dsky = SimDsky;
+    type Imu = SimImu;
+    type Optics = SimOptics;
+    type Engine = SimEngine;
+    type Rcs = SimRcs;
+    type Uplink = SimUplink;
     type Telemetry = SimTelemetry;
 
-    fn timers(&mut self)    -> &mut SimTimers    { &mut self.timers }
-    fn dsky(&mut self)      -> &mut SimDsky      { &mut self.dsky }
-    fn imu(&mut self)       -> &mut SimImu       { &mut self.imu }
-    fn optics(&mut self)    -> &mut SimOptics    { &mut self.optics }
-    fn engine(&mut self)    -> &mut SimEngine    { &mut self.engine }
-    fn rcs(&mut self)       -> &mut SimRcs       { &mut self.rcs }
-    fn uplink(&mut self)    -> &mut SimUplink    { &mut self.uplink }
-    fn telemetry(&mut self) -> &mut SimTelemetry { &mut self.telemetry }
+    fn timers(&mut self) -> &mut SimTimers {
+        &mut self.timers
+    }
+    fn dsky(&mut self) -> &mut SimDsky {
+        &mut self.dsky
+    }
+    fn imu(&mut self) -> &mut SimImu {
+        &mut self.imu
+    }
+    fn optics(&mut self) -> &mut SimOptics {
+        &mut self.optics
+    }
+    fn engine(&mut self) -> &mut SimEngine {
+        &mut self.engine
+    }
+    fn rcs(&mut self) -> &mut SimRcs {
+        &mut self.rcs
+    }
+    fn uplink(&mut self) -> &mut SimUplink {
+        &mut self.uplink
+    }
+    fn telemetry(&mut self) -> &mut SimTelemetry {
+        &mut self.telemetry
+    }
 
-    fn pet_watchdog(&mut self) { /* no-op in simulation */ }
+    fn pet_watchdog(&mut self) { /* no-op in simulation */
+    }
 
     fn hardware_restart(&mut self) -> ! {
         panic!("SimHardware: hardware_restart triggered")
@@ -192,8 +262,8 @@ impl AgcHardware for SimHardware {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agc_core::hal::{Dsky, Engine, Imu, Optics, Rcs, Telemetry, Timers, Uplink};
     use agc_core::hal::dsky::Lamp;
+    use agc_core::hal::{Dsky, Engine, Imu, Optics, Rcs, Telemetry, Timers, Uplink};
     use agc_core::types::CduAngle;
 
     // ── Timers (TC-TIMERS-01 through TC-TIMERS-03) ──────────────────────────

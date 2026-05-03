@@ -109,12 +109,7 @@ pub fn p30_load_dv_lvlh(state: &mut crate::AgcState, tig: Met, dv_crew: Vec3) {
     // W = cross-track  = crew Z (index 2)
     let dv_rsw: Vec3 = [dv_crew[1], dv_crew[0], dv_crew[2]];
 
-    let maneuver = apply_external_delta_v(
-        state.csm_state,
-        tig,
-        dv_rsw,
-        state.refsmmat,
-    );
+    let maneuver = apply_external_delta_v(state.csm_state, tig, dv_rsw, state.refsmmat);
     state.pending_maneuver = Some(maneuver);
     p30_display_summary(state);
 }
@@ -190,10 +185,10 @@ impl MajorMode for P30 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AgcState;
     use crate::guidance::targeting::TargetingMode;
     use crate::math::linalg::norm;
     use crate::types::Met;
+    use crate::AgcState;
 
     /// TC-P30-1: Zero delta-V produces zero inertial delta-V and identity burn attitude.
     ///
@@ -305,7 +300,10 @@ mod tests {
 
         let _ = p30_init(&mut state);
 
-        assert_eq!(state.major_mode, 30, "major_mode must be set to 30 by p30_init");
+        assert_eq!(
+            state.major_mode, 30,
+            "major_mode must be set to 30 by p30_init"
+        );
         assert_eq!(state.dsky.prog, 30, "dsky.prog must reflect major mode 30");
         assert_eq!(
             state.dsky.noun, P30_NOUN_TIG,

@@ -114,9 +114,7 @@ pub fn p34_init(state: &mut AgcState) -> JobPriority {
     // Step 1 — Staleness check (non-fatal).
     let target_epoch_cs = (state.rendezvous_nav.target_epoch * 100.0) as u64;
     let tig_cs_u64 = tig_cs.0 as u64;
-    if tig_cs_u64 > target_epoch_cs
-        && (tig_cs_u64 - target_epoch_cs) > TPI_STALE_TARGET_CS
-    {
+    if tig_cs_u64 > target_epoch_cs && (tig_cs_u64 - target_epoch_cs) > TPI_STALE_TARGET_CS {
         state.alarm.code = ALARM_P33_STALE_TARGET;
         state.alarm.lit = true;
         // Non-fatal: proceed with computation.
@@ -222,10 +220,7 @@ mod tests {
     use crate::math::lambert::lambert;
     use crate::navigation::gravity::MU_EARTH;
     use crate::navigation::state_vector::{Frame, StateVector};
-    use crate::programs::p33::{
-        compute_lambert_intercept,
-        ALARM_P33_NO_TIG, ALARM_P33_DEGENERATE,
-    };
+    use crate::programs::p33::{compute_lambert_intercept, ALARM_P33_DEGENERATE, ALARM_P33_NO_TIG};
     use crate::types::{Met, Vec3};
     use crate::AgcState;
 
@@ -286,8 +281,9 @@ mod tests {
         // Remaining transfer time to the same arrival point.
         let tof_remaining = tof_full - half_tof;
 
-        let result = compute_lambert_intercept(r_c_mid, v_c_mid, r_t_arrive, tof_remaining, MU_EARTH)
-            .expect("TC-P34-1: compute_lambert_intercept should succeed");
+        let result =
+            compute_lambert_intercept(r_c_mid, v_c_mid, r_t_arrive, tof_remaining, MU_EARTH)
+                .expect("TC-P34-1: compute_lambert_intercept should succeed");
 
         // The Lambert solver's TOL_NDIM ≈ 1e-5 (non-dimensional) translates
         // to ~1 mm/s residual in this geometry after propagating through half
@@ -325,8 +321,9 @@ mod tests {
 
         let tof_remaining = tof_full - half_tof;
 
-        let result = compute_lambert_intercept(r_c_mid, v_c_perturbed, r_t_arrive, tof_remaining, MU_EARTH)
-            .expect("TC-P34-2: compute_lambert_intercept should succeed");
+        let result =
+            compute_lambert_intercept(r_c_mid, v_c_perturbed, r_t_arrive, tof_remaining, MU_EARTH)
+                .expect("TC-P34-2: compute_lambert_intercept should succeed");
 
         assert!(
             result.dv_mag >= 0.1 && result.dv_mag <= 5.0,
@@ -379,7 +376,7 @@ mod tests {
         let v_t: Vec3 = [0.0, vc, 0.0];
 
         let epoch_s = 1000.0_f64;
-        let tig_s = 95.0_f64;   // P34 TIG
+        let tig_s = 95.0_f64; // P34 TIG
         let arrival_s = 100.0_f64; // only 5 s after TIG — below TPI_MIN_TOF_S
 
         let mut state = make_state(r_c, v_c, r_t, v_t, epoch_s, epoch_s);

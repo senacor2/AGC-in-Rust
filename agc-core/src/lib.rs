@@ -10,7 +10,12 @@
 
 #![cfg_attr(not(test), no_std)]
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(dead_code, unused_variables, unused_imports, clippy::upper_case_acronyms)]
+#![allow(
+    dead_code,
+    unused_variables,
+    unused_imports,
+    clippy::upper_case_acronyms
+)]
 
 pub mod control;
 pub mod executive;
@@ -23,9 +28,9 @@ pub mod services;
 pub mod tables;
 pub mod types;
 
-use control::{DapState, TvcFilter, TvcState};
 use control::imu_control::{GyroCompensation, ImuAlignmentState};
 use control::rcs_logic::RcsConfig;
+use control::{DapState, TvcFilter, TvcState};
 use executive::{Executive, RestartProtection, Waitlist};
 use guidance::maneuver::BurnState;
 use guidance::targeting::Maneuver;
@@ -33,7 +38,7 @@ use navigation::StateVector;
 use programs::p20::RendezvousNavState;
 use programs::p22::CsmNavState;
 use programs::p61_p67::EntryState;
-use services::{AlarmState, DskyState, average_g::PipaCalibration, v_n::VnState};
+use services::{average_g::PipaCalibration, v_n::VnState, AlarmState, DskyState};
 use types::{CduAngle, Mat3x3, Met};
 
 /// Central mutable state of the guidance computer.
@@ -317,27 +322,27 @@ impl AgcState {
             servicer_exit: None,
             servicer_last_dv_inertial: [0.0; 3],
             rendezvous_nav: RendezvousNavState {
-                target_pos:              [0.0; 3],
-                target_vel:              [0.0; 3],
-                target_epoch:            0.0,
-                w_matrix:                [[0.0; 6]; 6],
-                last_mark_time:          0.0,
-                mark_count:              0,
-                reject_count:            0,
+                target_pos: [0.0; 3],
+                target_vel: [0.0; 3],
+                target_epoch: 0.0,
+                w_matrix: [[0.0; 6]; 6],
+                last_mark_time: 0.0,
+                mark_count: 0,
+                reject_count: 0,
                 consecutive_reject_count: 0,
                 lvlh_state: crate::guidance::rendezvous::LvlhState {
-                    rho:     [0.0; 3],
+                    rho: [0.0; 3],
                     rho_dot: [0.0; 3],
                 },
-                tracking_active:         false,
+                tracking_active: false,
             },
             csm_nav: CsmNavState {
-                w_matrix:                  [[0.0; 6]; 6],
-                last_mark_time:            0.0,
-                mark_count:                0,
-                reject_count:              0,
-                consecutive_reject_count:  0,
-                tracking_active:           false,
+                w_matrix: [[0.0; 6]; 6],
+                last_mark_time: 0.0,
+                mark_count: 0,
+                reject_count: 0,
+                consecutive_reject_count: 0,
+                tracking_active: false,
             },
             gha_epoch_rad: 0.0,
             entry: EntryState::new(),

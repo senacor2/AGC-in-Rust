@@ -18,8 +18,9 @@
 //! - `Comanche055/INTEGRATION_INITIALIZATION.agc` — body selection, constant tables
 
 use crate::math::linalg::{norm, vadd, vscale, vsub};
-use crate::navigation::gravity::{earth_gravity, moon_gravity, third_body_perturbation,
-                                  MU_EARTH, MU_MOON, R_SOI_MOON};
+use crate::navigation::gravity::{
+    earth_gravity, moon_gravity, third_body_perturbation, MU_EARTH, MU_MOON, R_SOI_MOON,
+};
 use crate::navigation::state_vector::{Frame, StateVector};
 use crate::types::{Met, Vec3};
 
@@ -58,7 +59,10 @@ pub fn total_gravity(position: Vec3, frame: Frame, moon_pos: Vec3) -> Vec3 {
             vadd(g_primary, g_third)
         }
         Frame::StableMember => {
-            debug_assert!(false, "total_gravity: StableMember frame is invalid for integration");
+            debug_assert!(
+                false,
+                "total_gravity: StableMember frame is invalid for integration"
+            );
             [0.0; 3]
         }
     }
@@ -94,7 +98,10 @@ pub fn total_gravity(position: Vec3, frame: Frame, moon_pos: Vec3) -> Vec3 {
 ///
 /// AGC source: `Comanche055/AVERAGE_G_INTEGRATOR.agc`.
 pub fn average_g_step(sv: StateVector, delta_v: Vec3, dt: f64, moon_pos: Vec3) -> StateVector {
-    debug_assert!(dt > 0.0 && dt.is_finite(), "average_g_step: dt must be positive and finite");
+    debug_assert!(
+        dt > 0.0 && dt.is_finite(),
+        "average_g_step: dt must be positive and finite"
+    );
     debug_assert!(
         sv.position.iter().all(|x| x.is_finite()),
         "average_g_step: sv.position contains NaN or Inf"
@@ -154,7 +161,10 @@ pub fn propagate_coast(sv: StateVector, dt: f64, moon_pos: Vec3) -> StateVector 
 /// `COAST_SUBSTEP` seconds and applies a standard RK4 step to the 6-element
 /// state [position; velocity] at each sub-step.
 fn cowell_rk4_substepped(sv: StateVector, dt: f64, moon_pos: Vec3) -> StateVector {
-    debug_assert!(dt > 0.0 && dt.is_finite(), "propagate_coast: dt must be positive and finite");
+    debug_assert!(
+        dt > 0.0 && dt.is_finite(),
+        "propagate_coast: dt must be positive and finite"
+    );
 
     let n_steps = libm::ceil(dt / COAST_SUBSTEP) as usize;
     let h = dt / n_steps as f64;
@@ -308,7 +318,10 @@ mod tests {
         }
 
         // Sanity: dominant term is along -x, magnitude ~8.147 m/s²
-        assert!(tg[0] < 0.0, "TC-INT-7: gravity must be negative (toward Earth)");
+        assert!(
+            tg[0] < 0.0,
+            "TC-INT-7: gravity must be negative (toward Earth)"
+        );
         assert!(
             tg[0].abs() > 8.0 && tg[0].abs() < 9.0,
             "TC-INT-7: |g[0]| = {} out of expected range [8, 9]",
@@ -493,10 +506,27 @@ mod tests {
         };
 
         let result = soi_check(sv_eci, moon_pos_eci, moon_vel_eci);
-        assert_eq!(result.frame, Frame::MoonInertial, "TC-INT-SOI: should have converted to MoonInertial");
-        assert_near(result.position[0], -dist_inside, 1.0, "TC-INT-SOI: MCI position[0]");
-        assert_near(result.velocity[1], 900.0 - moon_vel_eci[1], 1e-9, "TC-INT-SOI: MCI velocity[1]");
-        assert_eq!(result.epoch, sv_eci.epoch, "TC-INT-SOI: epoch must not change");
+        assert_eq!(
+            result.frame,
+            Frame::MoonInertial,
+            "TC-INT-SOI: should have converted to MoonInertial"
+        );
+        assert_near(
+            result.position[0],
+            -dist_inside,
+            1.0,
+            "TC-INT-SOI: MCI position[0]",
+        );
+        assert_near(
+            result.velocity[1],
+            900.0 - moon_vel_eci[1],
+            1e-9,
+            "TC-INT-SOI: MCI velocity[1]",
+        );
+        assert_eq!(
+            result.epoch, sv_eci.epoch,
+            "TC-INT-SOI: epoch must not change"
+        );
 
         // Spacecraft well outside the SOI — should be unchanged.
         let sv_outside = StateVector {
@@ -506,6 +536,10 @@ mod tests {
             frame: Frame::EarthInertial,
         };
         let unchanged = soi_check(sv_outside, moon_pos_eci, moon_vel_eci);
-        assert_eq!(unchanged.frame, Frame::EarthInertial, "TC-INT-SOI: should remain EarthInertial");
+        assert_eq!(
+            unchanged.frame,
+            Frame::EarthInertial,
+            "TC-INT-SOI: should remain EarthInertial"
+        );
     }
 }

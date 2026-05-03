@@ -93,11 +93,7 @@ pub struct Bmi088Driver {
 
 impl Bmi088Driver {
     /// Initialise the BMI088, verify chip IDs, configure power/range/ODR.
-    pub fn init(
-        spi: Spi3Enabled,
-        cs_accel: CsAccel,
-        cs_gyro: CsGyro,
-    ) -> Result<Self, InitError> {
+    pub fn init(spi: Spi3Enabled, cs_accel: CsAccel, cs_gyro: CsGyro) -> Result<Self, InitError> {
         let mut driver = Self {
             spi,
             cs_accel,
@@ -202,7 +198,11 @@ impl Bmi088Driver {
         self.cs_accel.set_low();
         let ok = self.spi.transfer(&mut buf).is_ok();
         self.cs_accel.set_high();
-        if ok { Ok(buf[2]) } else { Err(InitError::SpiError) }
+        if ok {
+            Ok(buf[2])
+        } else {
+            Err(InitError::SpiError)
+        }
     }
 
     /// Read one byte from a gyroscope register (no dummy byte).
@@ -211,7 +211,11 @@ impl Bmi088Driver {
         self.cs_gyro.set_low();
         let ok = self.spi.transfer(&mut buf).is_ok();
         self.cs_gyro.set_high();
-        if ok { Ok(buf[1]) } else { Err(InitError::SpiError) }
+        if ok {
+            Ok(buf[1])
+        } else {
+            Err(InitError::SpiError)
+        }
     }
 
     /// Burst-read 6 data bytes from the accelerometer starting at `reg`.

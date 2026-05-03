@@ -151,12 +151,12 @@ pub struct CsmNavState {
 impl Default for CsmNavState {
     fn default() -> Self {
         Self {
-            w_matrix:                  [[0.0; 6]; 6],
-            last_mark_time:            0.0,
-            mark_count:                0,
-            reject_count:              0,
-            consecutive_reject_count:  0,
-            tracking_active:           false,
+            w_matrix: [[0.0; 6]; 6],
+            last_mark_time: 0.0,
+            mark_count: 0,
+            reject_count: 0,
+            consecutive_reject_count: 0,
+            tracking_active: false,
         }
     }
 }
@@ -226,69 +226,65 @@ pub struct LandmarkEntry {
 /// Spec: p21_p22-spec.md §3.4 (Override 3: compile-time const)
 pub const LANDMARK_TABLE: [LandmarkEntry; 9] = [
     // Index 0 — unused (DSKY is 1-indexed).
-    LandmarkEntry { lat_rad: 0.0, lon_rad: 0.0, alt_m: 0.0 },
-
+    LandmarkEntry {
+        lat_rad: 0.0,
+        lon_rad: 0.0,
+        alt_m: 0.0,
+    },
     // Index 1 — Kennedy Space Center, Florida, USA
     // ~28.573°N, 80.649°W → lon ≈ -80.649° east
     LandmarkEntry {
-        lat_rad:  0.498_820,   // 28.573° N
-        lon_rad: -1.408_000,   // 80.649° W
-        alt_m:    3.0,
+        lat_rad: 0.498_820,  // 28.573° N
+        lon_rad: -1.408_000, // 80.649° W
+        alt_m: 3.0,
     },
-
     // Index 2 — Cape Canaveral (slightly north of KSC), Florida, USA
     // ~28.4°N, 80.6°W
     LandmarkEntry {
-        lat_rad:  0.495_640,   // 28.4° N
-        lon_rad: -1.406_657,   // 80.6° W
-        alt_m:    5.0,
+        lat_rad: 0.495_640,  // 28.4° N
+        lon_rad: -1.406_657, // 80.6° W
+        alt_m: 5.0,
     },
-
     // Index 3 — Cape Town, South Africa
     // ~33.9°S, 18.4°E
     LandmarkEntry {
-        lat_rad: -0.591_984,   // 33.9° S
-        lon_rad:  0.321_209,   // 18.4° E
-        alt_m:   50.0,
+        lat_rad: -0.591_984, // 33.9° S
+        lon_rad: 0.321_209,  // 18.4° E
+        alt_m: 50.0,
     },
-
     // Index 4 — Perth, Western Australia
     // ~31.9°S, 115.9°E
     LandmarkEntry {
-        lat_rad: -0.556_538,   // 31.9° S
-        lon_rad:  2.023_365,   // 115.9° E
-        alt_m:   25.0,
+        lat_rad: -0.556_538, // 31.9° S
+        lon_rad: 2.023_365,  // 115.9° E
+        alt_m: 25.0,
     },
-
     // Index 5 — Tokyo, Japan
     // ~35.7°N, 139.7°E
     LandmarkEntry {
-        lat_rad:  0.623_010,   // 35.7° N
-        lon_rad:  2.439_016,   // 139.7° E
-        alt_m:   40.0,
+        lat_rad: 0.623_010, // 35.7° N
+        lon_rad: 2.439_016, // 139.7° E
+        alt_m: 40.0,
     },
-
     // Index 6 — Carnarvon, Western Australia (original AGC-era tracking station area)
     // ~24.9°S, 113.7°E
     LandmarkEntry {
-        lat_rad: -0.434_461,   // 24.9° S
-        lon_rad:  1.984_032,   // 113.7° E
-        alt_m:   10.0,
+        lat_rad: -0.434_461, // 24.9° S
+        lon_rad: 1.984_032,  // 113.7° E
+        alt_m: 10.0,
     },
-
     // Index 7 — Guaymas, Mexico (Sonora coast — AGC-era tracking site)
     // ~27.9°N, 110.9°W
     LandmarkEntry {
-        lat_rad:  0.486_914,   // 27.9° N
-        lon_rad: -1.936_139,   // 110.9° W
-        alt_m:    5.0,
+        lat_rad: 0.486_914,  // 27.9° N
+        lon_rad: -1.936_139, // 110.9° W
+        alt_m: 5.0,
     },
-
     // Index 8 — Hawaii, USA (Mauna Kea area)
     // ~19.8°N, 155.5°W
     LandmarkEntry {
-        lat_rad:  0.345_545,   // 19.8° N
-        lon_rad: -2.714_100,   // 155.5° W
+        lat_rad: 0.345_545,  // 19.8° N
+        lon_rad: -2.714_100, // 155.5° W
         alt_m: 4_200.0,
     },
 ];
@@ -316,13 +312,13 @@ pub const LANDMARK_TABLE: [LandmarkEntry; 9] = [
 /// Spec: p21_p22-spec.md §4.2
 pub fn p22_init(state: &mut AgcState) -> JobPriority {
     state.major_mode = P22_MAJOR_MODE;
-    state.dsky.prog  = P22_MAJOR_MODE;
+    state.dsky.prog = P22_MAJOR_MODE;
 
     // Precondition: CSM frame must be ECI for landmark navigation.
     // (landmark_inertial_pos produces ECI coordinates only.)
     if state.csm_state.frame != Frame::EarthInertial {
         state.alarm.code = ALARM_FRAME_MISMATCH;
-        state.alarm.lit  = true;
+        state.alarm.lit = true;
         state.csm_nav.tracking_active = false;
         return P22_PRIORITY;
     }
@@ -330,7 +326,7 @@ pub fn p22_init(state: &mut AgcState) -> JobPriority {
     // Precondition: non-zero CSM epoch (sanity check for initialised state vector).
     if state.csm_state.epoch.to_seconds() == 0.0 {
         state.alarm.code = ALARM_NO_CSM_SV;
-        state.alarm.lit  = true;
+        state.alarm.lit = true;
         state.csm_nav.tracking_active = false;
         return P22_PRIORITY;
     }
@@ -353,7 +349,7 @@ pub fn p22_init(state: &mut AgcState) -> JobPriority {
     match state.waitlist.schedule(P22_CYCLE_CS_U16, p22_cycle_task) {
         ScheduleResult::Full => {
             state.alarm.code = ALARM_WAITLIST_FULL;
-            state.alarm.lit  = true;
+            state.alarm.lit = true;
         }
         _ => {}
     }
@@ -385,7 +381,7 @@ pub fn p22_cycle_task(state: &mut AgcState) {
     // Edge case (k): frame check — landmark tracking is ECI-only.
     if state.csm_state.frame != Frame::EarthInertial {
         state.alarm.code = ALARM_FRAME_MISMATCH;
-        state.alarm.lit  = true;
+        state.alarm.lit = true;
         state.csm_nav.tracking_active = false;
         reschedule_if_active(state);
         return;
@@ -443,12 +439,12 @@ pub fn p22_incorporate_landmark_mark(state: &mut AgcState, mark: LandmarkMark) {
     // Edge case (g): landmark index out of range.
     if mark.landmark_index == 0 || mark.landmark_index > 8 {
         state.alarm.code = ALARM_BAD_LANDMARK_INDEX;
-        state.alarm.lit  = true;
+        state.alarm.lit = true;
         return;
     }
 
-    let csm_pos  = state.csm_state.position;
-    let lm_pos   = mark.landmark_inertial;
+    let csm_pos = state.csm_state.position;
+    let lm_pos = mark.landmark_inertial;
 
     // rho_vec = csm_pos - landmark_inertial (points from landmark to CSM).
     let rho_vec = [
@@ -461,7 +457,7 @@ pub fn p22_incorporate_landmark_mark(state: &mut AgcState, mark: LandmarkMark) {
     // Edge case: range too small (safety floor).
     if rng < MIN_LANDMARK_RANGE_M {
         state.alarm.code = ALARM_LANDMARK_RANGE_ZERO;
-        state.alarm.lit  = true;
+        state.alarm.lit = true;
         return;
     }
 
@@ -473,7 +469,7 @@ pub fn p22_incorporate_landmark_mark(state: &mut AgcState, mark: LandmarkMark) {
         LosComponent::Z => 2_usize,
     };
     let z_predicted = los_hat[c];
-    let residual    = mark.los_inertial[c] - z_predicted;
+    let residual = mark.los_inertial[c] - z_predicted;
 
     // Sensitivity vector b (§6.2):
     // b[0..3] = (e_c - los_hat[c] * los_hat) / rng
@@ -514,17 +510,17 @@ pub fn p22_incorporate_landmark_mark(state: &mut AgcState, mark: LandmarkMark) {
 /// Spec: p21_p22-spec.md §4.2
 pub fn p22_rectify_w_matrix(state: &mut AgcState) {
     p22_rectify_w_matrix_internal(state);
-    state.csm_nav.mark_count  = 0;
+    state.csm_nav.mark_count = 0;
     state.csm_nav.reject_count = 0;
     state.csm_nav.consecutive_reject_count = 0;
     state.csm_nav.last_mark_time = state.time.to_seconds();
 
     // Confirm action by showing V06 N49 on DSKY.
-    state.dsky.verb  = 6;
-    state.dsky.noun  = 49;
-    state.dsky.r[0]  = 0.0;
-    state.dsky.r[1]  = 0.0;
-    state.dsky.r[2]  = 0.0;
+    state.dsky.verb = 6;
+    state.dsky.noun = 49;
+    state.dsky.r[0] = 0.0;
+    state.dsky.r[1] = 0.0;
+    state.dsky.r[2] = 0.0;
 }
 
 // ── Landmark coordinate conversion ────────────────────────────────────────────
@@ -550,25 +546,17 @@ pub fn p22_rectify_w_matrix(state: &mut AgcState) {
 ///    Note: this is the **inverse** of the P21 Rz(+gha) step.
 ///
 /// Spec: p21_p22-spec.md §6.3
-pub fn landmark_inertial_pos(
-    entry:         &LandmarkEntry,
-    get_s:         f64,
-    gha_epoch_rad: f64,
-) -> Vec3 {
+pub fn landmark_inertial_pos(entry: &LandmarkEntry, get_s: f64, gha_epoch_rad: f64) -> Vec3 {
     let lat = entry.lat_rad;
     let lon = entry.lon_rad;
-    let r   = R_EARTH + entry.alt_m;
+    let r = R_EARTH + entry.alt_m;
 
     // Step 1: Earth-fixed Cartesian.
     let cos_lat = libm::cos(lat);
     let sin_lat = libm::sin(lat);
     let cos_lon = libm::cos(lon);
     let sin_lon = libm::sin(lon);
-    let r_ef: Vec3 = [
-        r * cos_lat * cos_lon,
-        r * cos_lat * sin_lon,
-        r * sin_lat,
-    ];
+    let r_ef: Vec3 = [r * cos_lat * cos_lon, r * cos_lat * sin_lon, r * sin_lat];
 
     // Step 2: GHA at mark time (unbounded; rotation handles wrap-around).
     let gha = gha_epoch_rad + OMEGA_EARTH * get_s;
@@ -605,8 +593,8 @@ fn p22_rectify_w_matrix_internal(state: &mut AgcState) {
 ///
 /// Spec: p21_p22-spec.md §6.2; Override 1 (shared kalman helper)
 fn p22_scalar_update(
-    state:    &mut AgcState,
-    b:        [f64; 6],
+    state: &mut AgcState,
+    b: [f64; 6],
     residual: f64,
     sigma_sq: f64,
 ) -> UpdateOutcome {
@@ -634,7 +622,7 @@ fn p22_scalar_update(
 
     if outcome == UpdateOutcome::AcceptedWOverflow {
         state.alarm.code = ALARM_CSM_W_OVERFLOW;
-        state.alarm.lit  = true;
+        state.alarm.lit = true;
         p22_rectify_w_matrix(state);
         return UpdateOutcome::Accepted;
     }
@@ -651,7 +639,7 @@ fn p22_scalar_update(
 fn check_consecutive_rejects(state: &mut AgcState) {
     if state.csm_nav.consecutive_reject_count >= 5 {
         state.alarm.code = ALARM_LANDMARK_REJECT;
-        state.alarm.lit  = true;
+        state.alarm.lit = true;
         state.csm_nav.tracking_active = false;
     }
 }
@@ -664,7 +652,7 @@ fn reschedule_if_active(state: &mut AgcState) {
     match state.waitlist.schedule(P22_CYCLE_CS_U16, p22_cycle_task) {
         ScheduleResult::Full => {
             state.alarm.code = ALARM_WAITLIST_FULL;
-            state.alarm.lit  = true;
+            state.alarm.lit = true;
         }
         _ => {}
     }
@@ -675,10 +663,10 @@ fn reschedule_if_active(state: &mut AgcState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AgcState;
+    use crate::math::linalg::norm;
     use crate::navigation::state_vector::{Frame, StateVector};
     use crate::types::Met;
-    use crate::math::linalg::norm;
+    use crate::AgcState;
 
     // ── Helper ────────────────────────────────────────────────────────────────
 
@@ -703,11 +691,7 @@ mod tests {
     /// tracking_active, and installs the cycle task in the Waitlist.
     #[test]
     fn tc_p22_1_init_w_matrix_and_waitlist() {
-        let mut state = make_state_with_csm_at(
-            [6_671_000.0, 0.0, 0.0],
-            [0.0, 7726.0, 0.0],
-            1000.0,
-        );
+        let mut state = make_state_with_csm_at([6_671_000.0, 0.0, 0.0], [0.0, 7726.0, 0.0], 1000.0);
 
         let prio = p22_init(&mut state);
 
@@ -732,14 +716,18 @@ mod tests {
                 if i != j {
                     assert_eq!(
                         state.csm_nav.w_matrix[i][j], 0.0,
-                        "w_matrix[{}][{}] must be 0 (off-diagonal)", i, j
+                        "w_matrix[{}][{}] must be 0 (off-diagonal)",
+                        i, j
                     );
                 }
             }
         }
 
         // Tracking active, no alarm
-        assert!(state.csm_nav.tracking_active, "tracking_active must be true");
+        assert!(
+            state.csm_nav.tracking_active,
+            "tracking_active must be true"
+        );
         assert_eq!(state.alarm.code, 0, "no alarm on happy path");
 
         // Counters zeroed
@@ -752,8 +740,7 @@ mod tests {
         );
         let entry = state.waitlist.peek(0).expect("waitlist entry 0 must exist");
         assert_eq!(
-            entry.task as usize,
-            p22_cycle_task as fn(&mut AgcState) as usize,
+            entry.task as usize, p22_cycle_task as fn(&mut AgcState) as usize,
             "waitlist task must be p22_cycle_task"
         );
     }
@@ -767,9 +754,9 @@ mod tests {
         use crate::programs::p21::OMEGA_EARTH;
 
         let entry = LandmarkEntry {
-            lat_rad: 0.523_6,  // 30° N
+            lat_rad: 0.523_6, // 30° N
             lon_rad: 0.0,
-            alt_m:   0.0,
+            alt_m: 0.0,
         };
         let get_s = 500.0_f64;
         let gha_epoch_rad = 0.0_f64;
@@ -784,9 +771,9 @@ mod tests {
         let cos_gha = libm::cos(gha);
         let sin_gha = libm::sin(gha);
         let pos_ef: [f64; 3] = [
-             r_inertial[0] * cos_gha + r_inertial[1] * sin_gha,
+            r_inertial[0] * cos_gha + r_inertial[1] * sin_gha,
             -r_inertial[0] * sin_gha + r_inertial[1] * cos_gha,
-             r_inertial[2],
+            r_inertial[2],
         ];
 
         // Step 3: Extract lat/lon from Earth-fixed position.
@@ -798,12 +785,14 @@ mod tests {
         assert!(
             libm::fabs(lat_recovered - entry.lat_rad) < 1e-9,
             "recovered lat_rad ({}) must equal entry.lat_rad ({}) within 1e-9",
-            lat_recovered, entry.lat_rad
+            lat_recovered,
+            entry.lat_rad
         );
         assert!(
             libm::fabs(lon_recovered - entry.lon_rad) < 1e-9,
             "recovered lon_rad ({}) must equal entry.lon_rad ({}) within 1e-9",
-            lon_recovered, entry.lon_rad
+            lon_recovered,
+            entry.lon_rad
         );
     }
 
@@ -817,16 +806,16 @@ mod tests {
         // Epoch must be non-zero so p22_init does not raise ALARM_NO_CSM_SV.
         // Set gha_epoch_rad = -OMEGA_EARTH * 1000 so the GHA at GET=1000 is
         // exactly zero, keeping the nadir landmark aligned with the +X axis.
-        let mut state = make_state_with_csm_at(
-            [7_000_000.0, 0.0, 0.0],
-            [0.0, 7500.0, 0.0],
-            1000.0,
-        );
+        let mut state = make_state_with_csm_at([7_000_000.0, 0.0, 0.0], [0.0, 7500.0, 0.0], 1000.0);
         state.gha_epoch_rad = -OMEGA_EARTH * 1000.0;
         p22_init(&mut state);
 
         // Landmark directly below at nadir: lat=0, lon=0, alt=0.
-        let lm_entry = LandmarkEntry { lat_rad: 0.0, lon_rad: 0.0, alt_m: 0.0 };
+        let lm_entry = LandmarkEntry {
+            lat_rad: 0.0,
+            lon_rad: 0.0,
+            alt_m: 0.0,
+        };
         let lm_inertial = landmark_inertial_pos(&lm_entry, 1000.0, state.gha_epoch_rad);
 
         // Perfect LOS is [1, 0, 0] (pure +X radial). Observing the X-component
@@ -852,14 +841,16 @@ mod tests {
         assert!(
             state.csm_nav.w_matrix[1][1] < w11_before,
             "W[1][1] must decrease after accepted mark; was {}, now {}",
-            w11_before, state.csm_nav.w_matrix[1][1]
+            w11_before,
+            state.csm_nav.w_matrix[1][1]
         );
 
         // Zero residual → position must be unchanged (exact or < 1e-9 m).
         for i in 0..3 {
             assert!(
                 libm::fabs(state.csm_state.position[i] - pos_before[i]) < 1e-9,
-                "csm_state.position[{}] must be unchanged for zero-residual mark", i
+                "csm_state.position[{}] must be unchanged for zero-residual mark",
+                i
             );
         }
 
@@ -876,15 +867,16 @@ mod tests {
     fn tc_p22_4_nonzero_residual_updates_state() {
         // CSM estimated position has a 500 m Y-error (true CSM would be at [7_000_000, 0, 0]).
         // Epoch must be non-zero so p22_init does not raise ALARM_NO_CSM_SV.
-        let mut state = make_state_with_csm_at(
-            [7_000_000.0, 500.0, 0.0],
-            [0.0, 7500.0, 0.0],
-            1000.0,
-        );
+        let mut state =
+            make_state_with_csm_at([7_000_000.0, 500.0, 0.0], [0.0, 7500.0, 0.0], 1000.0);
         p22_init(&mut state);
 
         // Landmark at lat=lon=alt=0, converted to ECI at GET=1000, gha_epoch=0.
-        let lm_entry = LandmarkEntry { lat_rad: 0.0, lon_rad: 0.0, alt_m: 0.0 };
+        let lm_entry = LandmarkEntry {
+            lat_rad: 0.0,
+            lon_rad: 0.0,
+            alt_m: 0.0,
+        };
         let lm_inertial = landmark_inertial_pos(&lm_entry, 1000.0, 0.0);
 
         // True LOS (from landmark to the true CSM position [7_000_000, 0, 0]).
@@ -923,14 +915,14 @@ mod tests {
     fn tc_p22_5_outlier_mark_rejected() {
         // Same geometry as TC-P22-3: CSM at (7_000_000, 0, 0), nadir landmark.
         // Epoch must be non-zero so p22_init does not raise ALARM_NO_CSM_SV.
-        let mut state = make_state_with_csm_at(
-            [7_000_000.0, 0.0, 0.0],
-            [0.0, 7500.0, 0.0],
-            1000.0,
-        );
+        let mut state = make_state_with_csm_at([7_000_000.0, 0.0, 0.0], [0.0, 7500.0, 0.0], 1000.0);
         p22_init(&mut state);
 
-        let lm_entry = LandmarkEntry { lat_rad: 0.0, lon_rad: 0.0, alt_m: 0.0 };
+        let lm_entry = LandmarkEntry {
+            lat_rad: 0.0,
+            lon_rad: 0.0,
+            alt_m: 0.0,
+        };
         let lm_inertial = landmark_inertial_pos(&lm_entry, 1000.0, 0.0);
 
         let pos_before = state.csm_state.position;
@@ -948,13 +940,17 @@ mod tests {
         p22_incorporate_landmark_mark(&mut state, mark);
 
         assert_eq!(state.csm_nav.reject_count, 1, "reject_count must be 1");
-        assert_eq!(state.csm_nav.consecutive_reject_count, 1, "consecutive_reject_count must be 1");
+        assert_eq!(
+            state.csm_nav.consecutive_reject_count, 1,
+            "consecutive_reject_count must be 1"
+        );
 
         // Position must be unchanged.
         for i in 0..3 {
             assert!(
                 libm::fabs(state.csm_state.position[i] - pos_before[i]) < 1e-9,
-                "csm_state.position[{}] must be unchanged after rejected mark", i
+                "csm_state.position[{}] must be unchanged after rejected mark",
+                i
             );
         }
 
@@ -963,7 +959,9 @@ mod tests {
             for j in 0..6 {
                 assert!(
                     libm::fabs(state.csm_nav.w_matrix[i][j] - w_before[i][j]) < 1e-9,
-                    "w_matrix[{}][{}] must be unchanged after rejected mark", i, j
+                    "w_matrix[{}][{}] must be unchanged after rejected mark",
+                    i,
+                    j
                 );
             }
         }
@@ -976,14 +974,14 @@ mod tests {
     #[test]
     fn tc_p22_6_five_rejects_alarm_01422() {
         // Epoch must be non-zero so p22_init does not raise ALARM_NO_CSM_SV.
-        let mut state = make_state_with_csm_at(
-            [7_000_000.0, 0.0, 0.0],
-            [0.0, 7500.0, 0.0],
-            1000.0,
-        );
+        let mut state = make_state_with_csm_at([7_000_000.0, 0.0, 0.0], [0.0, 7500.0, 0.0], 1000.0);
         p22_init(&mut state);
 
-        let lm_entry = LandmarkEntry { lat_rad: 0.0, lon_rad: 0.0, alt_m: 0.0 };
+        let lm_entry = LandmarkEntry {
+            lat_rad: 0.0,
+            lon_rad: 0.0,
+            alt_m: 0.0,
+        };
         let lm_inertial = landmark_inertial_pos(&lm_entry, 1000.0, 0.0);
 
         // Five consecutive wildly-wrong marks (predicted≈[1,0,0], observed=[0,1,0]).
@@ -998,11 +996,20 @@ mod tests {
             p22_incorporate_landmark_mark(&mut state, mark);
         }
 
-        assert_eq!(state.csm_nav.consecutive_reject_count, 5, "consecutive_reject_count must be 5");
+        assert_eq!(
+            state.csm_nav.consecutive_reject_count, 5,
+            "consecutive_reject_count must be 5"
+        );
         assert_eq!(state.csm_nav.reject_count, 5, "reject_count must be 5");
-        assert_eq!(state.alarm.code, ALARM_LANDMARK_REJECT, "alarm code must be 01422");
+        assert_eq!(
+            state.alarm.code, ALARM_LANDMARK_REJECT,
+            "alarm code must be 01422"
+        );
         assert!(state.alarm.lit, "alarm.lit must be true");
-        assert!(!state.csm_nav.tracking_active, "tracking_active must be false");
+        assert!(
+            !state.csm_nav.tracking_active,
+            "tracking_active must be false"
+        );
     }
 
     // ── TC-P22-7: p22_rectify_w_matrix resets counters ───────────────────────
@@ -1012,15 +1019,15 @@ mod tests {
     #[test]
     fn tc_p22_7_rectify_resets_counters_not_tracking() {
         // Start from the TC-P22-6 end-state (tracking inactive, alarm lit).
-        let mut state = make_state_with_csm_at(
-            [7_000_000.0, 0.0, 0.0],
-            [0.0, 7500.0, 0.0],
-            0.0,
-        );
+        let mut state = make_state_with_csm_at([7_000_000.0, 0.0, 0.0], [0.0, 7500.0, 0.0], 0.0);
         p22_init(&mut state);
         state.time = Met::from_seconds(0.0);
 
-        let lm_entry = LandmarkEntry { lat_rad: 0.0, lon_rad: 0.0, alt_m: 0.0 };
+        let lm_entry = LandmarkEntry {
+            lat_rad: 0.0,
+            lon_rad: 0.0,
+            alt_m: 0.0,
+        };
         let lm_inertial = landmark_inertial_pos(&lm_entry, 0.0, 0.0);
 
         for _ in 0..5 {
@@ -1056,16 +1063,26 @@ mod tests {
                 if i != j {
                     assert_eq!(
                         state.csm_nav.w_matrix[i][j], 0.0,
-                        "w_matrix[{}][{}] must be 0 after rectify", i, j
+                        "w_matrix[{}][{}] must be 0 after rectify",
+                        i, j
                     );
                 }
             }
         }
 
         // Counters zeroed.
-        assert_eq!(state.csm_nav.mark_count, 0, "mark_count must be 0 after rectify");
-        assert_eq!(state.csm_nav.reject_count, 0, "reject_count must be 0 after rectify");
-        assert_eq!(state.csm_nav.consecutive_reject_count, 0, "consecutive_reject_count must be 0");
+        assert_eq!(
+            state.csm_nav.mark_count, 0,
+            "mark_count must be 0 after rectify"
+        );
+        assert_eq!(
+            state.csm_nav.reject_count, 0,
+            "reject_count must be 0 after rectify"
+        );
+        assert_eq!(
+            state.csm_nav.consecutive_reject_count, 0,
+            "consecutive_reject_count must be 0"
+        );
 
         // last_mark_time == state.time.
         assert!(
@@ -1087,11 +1104,7 @@ mod tests {
     /// itself in the Waitlist.
     #[test]
     fn tc_p22_8_process_noise_growth() {
-        let mut state = make_state_with_csm_at(
-            [6_671_000.0, 0.0, 0.0],
-            [0.0, 7726.0, 0.0],
-            1000.0,
-        );
+        let mut state = make_state_with_csm_at([6_671_000.0, 0.0, 0.0], [0.0, 7726.0, 0.0], 1000.0);
         p22_init(&mut state);
 
         // Set up for the test per spec §TC-P22-8: Δt = 2 s.
@@ -1099,8 +1112,12 @@ mod tests {
         state.time = Met::from_seconds(1002.0);
         // Reset W to initial values (p22_init already set them, but be explicit).
         state.csm_nav.w_matrix = [[0.0; 6]; 6];
-        for i in 0..3 { state.csm_nav.w_matrix[i][i] = CSM_W_INIT_POS_VARIANCE; }
-        for i in 3..6 { state.csm_nav.w_matrix[i][i] = CSM_W_INIT_VEL_VARIANCE; }
+        for i in 0..3 {
+            state.csm_nav.w_matrix[i][i] = CSM_W_INIT_POS_VARIANCE;
+        }
+        for i in 3..6 {
+            state.csm_nav.w_matrix[i][i] = CSM_W_INIT_VEL_VARIANCE;
+        }
 
         let w00_before = state.csm_nav.w_matrix[0][0];
         let w33_before = state.csm_nav.w_matrix[3][3];
@@ -1112,7 +1129,8 @@ mod tests {
         assert!(
             libm::fabs(state.csm_nav.w_matrix[0][0] - expected_w00) < 1e-6,
             "w_matrix[0][0] should be {}; got {}",
-            expected_w00, state.csm_nav.w_matrix[0][0]
+            expected_w00,
+            state.csm_nav.w_matrix[0][0]
         );
 
         // W[3][3] = 1.0 + CSM_Q_VEL * 2.0 = 1.000_002
@@ -1120,7 +1138,8 @@ mod tests {
         assert!(
             libm::fabs(state.csm_nav.w_matrix[3][3] - expected_w33) < 1e-6,
             "w_matrix[3][3] should be {}; got {}",
-            expected_w33, state.csm_nav.w_matrix[3][3]
+            expected_w33,
+            state.csm_nav.w_matrix[3][3]
         );
 
         // p22_cycle_task must re-schedule itself in the Waitlist.
@@ -1130,7 +1149,9 @@ mod tests {
         );
         // Find the p22_cycle_task entry.
         let found = (0..state.waitlist.len()).any(|i| {
-            state.waitlist.peek(i)
+            state
+                .waitlist
+                .peek(i)
                 .map(|e| e.task as usize == p22_cycle_task as fn(&mut AgcState) as usize)
                 .unwrap_or(false)
         });
@@ -1142,21 +1163,19 @@ mod tests {
 ///
 /// Computes the ground track at `state.time` from `state.csm_state`.
 fn update_dsky_n43(state: &mut AgcState) {
-    let epoch_s      = state.csm_state.epoch.to_seconds();
-    let now_s        = state.time.to_seconds();
-    let csm_pos      = state.csm_state.position;
-    let csm_vel      = state.csm_state.velocity;
-    let gha_epoch    = state.gha_epoch_rad;
+    let epoch_s = state.csm_state.epoch.to_seconds();
+    let now_s = state.time.to_seconds();
+    let csm_pos = state.csm_state.position;
+    let csm_vel = state.csm_state.velocity;
+    let gha_epoch = state.gha_epoch_rad;
 
-    let result = p21_compute_ground_track(
-        csm_pos, csm_vel, epoch_s, now_s, gha_epoch,
-    );
+    let result = p21_compute_ground_track(csm_pos, csm_vel, epoch_s, now_s, gha_epoch);
 
     const RAD_TO_DEG: f64 = 180.0 / core::f64::consts::PI;
-    state.dsky.verb  = 16;
-    state.dsky.noun  = 43;
-    state.dsky.r[0]  = (result.lat_rad * RAD_TO_DEG * 100.0) as f32;
-    state.dsky.r[1]  = (result.lon_rad * RAD_TO_DEG * 100.0) as f32;
-    state.dsky.r[2]  = (result.alt_m / 100.0) as f32; // km × 10
+    state.dsky.verb = 16;
+    state.dsky.noun = 43;
+    state.dsky.r[0] = (result.lat_rad * RAD_TO_DEG * 100.0) as f32;
+    state.dsky.r[1] = (result.lon_rad * RAD_TO_DEG * 100.0) as f32;
+    state.dsky.r[2] = (result.alt_m / 100.0) as f32; // km × 10
     state.dsky.flashing = false;
 }

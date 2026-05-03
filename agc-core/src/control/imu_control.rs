@@ -349,16 +349,19 @@ pub fn refsmmat_from_star_sightings(
 /// `Comanche055/IMU_CALIBRATION_AND_ALIGNMENT.agc` — IMODES33/IMUMON monitor.
 pub fn is_gimbal_lock_warning(cdu: &[CduAngle; 3]) -> bool {
     const GIMBAL_LOCK_WARNING_BAND: u16 = 3641; // ≈ 20° in CDU counts
-    const NINETY_DEG: u16 = 16384;              // 90° in CDU counts
-    const TWO_SEVENTY_DEG: u16 = 49152;         // 270° (= -90°) in CDU counts
+    const NINETY_DEG: u16 = 16384; // 90° in CDU counts
+    const TWO_SEVENTY_DEG: u16 = 49152; // 270° (= -90°) in CDU counts
 
     let middle = cdu[2].0;
 
     // Wrapping distance to +90°: min of the two arc directions
-    let dist_pos90 = middle.wrapping_sub(NINETY_DEG).min(NINETY_DEG.wrapping_sub(middle));
+    let dist_pos90 = middle
+        .wrapping_sub(NINETY_DEG)
+        .min(NINETY_DEG.wrapping_sub(middle));
     // Wrapping distance to -90° / 270°
-    let dist_neg90 =
-        middle.wrapping_sub(TWO_SEVENTY_DEG).min(TWO_SEVENTY_DEG.wrapping_sub(middle));
+    let dist_neg90 = middle
+        .wrapping_sub(TWO_SEVENTY_DEG)
+        .min(TWO_SEVENTY_DEG.wrapping_sub(middle));
 
     dist_pos90 < GIMBAL_LOCK_WARNING_BAND || dist_neg90 < GIMBAL_LOCK_WARNING_BAND
 }
@@ -387,9 +390,12 @@ pub fn is_gimbal_lock_critical(cdu: &[CduAngle; 3]) -> bool {
 
     let middle = cdu[2].0;
 
-    let dist_pos90 = middle.wrapping_sub(NINETY_DEG).min(NINETY_DEG.wrapping_sub(middle));
-    let dist_neg90 =
-        middle.wrapping_sub(TWO_SEVENTY_DEG).min(TWO_SEVENTY_DEG.wrapping_sub(middle));
+    let dist_pos90 = middle
+        .wrapping_sub(NINETY_DEG)
+        .min(NINETY_DEG.wrapping_sub(middle));
+    let dist_neg90 = middle
+        .wrapping_sub(TWO_SEVENTY_DEG)
+        .min(TWO_SEVENTY_DEG.wrapping_sub(middle));
 
     dist_pos90 < GIMBAL_LOCK_CRITICAL_BAND || dist_neg90 < GIMBAL_LOCK_CRITICAL_BAND
 }
@@ -449,9 +455,21 @@ mod tests {
             misalignment: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
         };
         let result = apply_pipa_compensation(raw, &cal);
-        assert!(result[0].abs() < 1e-12, "TC-IMU-CTRL-2 X should be zero: {}", result[0]);
-        assert!(result[1].abs() < 1e-12, "TC-IMU-CTRL-2 Y should be zero: {}", result[1]);
-        assert!(result[2].abs() < 1e-12, "TC-IMU-CTRL-2 Z should be zero: {}", result[2]);
+        assert!(
+            result[0].abs() < 1e-12,
+            "TC-IMU-CTRL-2 X should be zero: {}",
+            result[0]
+        );
+        assert!(
+            result[1].abs() < 1e-12,
+            "TC-IMU-CTRL-2 Y should be zero: {}",
+            result[1]
+        );
+        assert!(
+            result[2].abs() < 1e-12,
+            "TC-IMU-CTRL-2 Z should be zero: {}",
+            result[2]
+        );
     }
 
     // ── TC-IMU-CTRL-3: Coarse align wrap-around ───────────────────────────────
@@ -503,9 +521,8 @@ mod tests {
         let s2_iner: Vec3 = [0.0, 1.0, 0.0];
         let s2_plat: Vec3 = [0.0, 1.0, 0.0];
 
-        let refsmmat =
-            refsmmat_from_star_sightings(s1_iner, s2_iner, s1_plat, s2_plat)
-                .expect("Non-collinear stars must produce a valid REFSMMAT");
+        let refsmmat = refsmmat_from_star_sightings(s1_iner, s2_iner, s1_plat, s2_plat)
+            .expect("Non-collinear stars must produce a valid REFSMMAT");
 
         // Orthonormality: R · R^T = I
         let product = mxm(refsmmat, transpose(refsmmat));
@@ -541,24 +558,48 @@ mod tests {
     fn tc_imu_ctrl_6_gimbal_lock_warning() {
         // At +90° (16384 counts) — inside both warning and critical zones
         let at_90 = [CduAngle(0), CduAngle(0), CduAngle(16384)];
-        assert!(is_gimbal_lock_warning(&at_90), "TC-IMU-CTRL-6: warning at 90°");
-        assert!(is_gimbal_lock_critical(&at_90), "TC-IMU-CTRL-6: critical at 90°");
+        assert!(
+            is_gimbal_lock_warning(&at_90),
+            "TC-IMU-CTRL-6: warning at 90°"
+        );
+        assert!(
+            is_gimbal_lock_critical(&at_90),
+            "TC-IMU-CTRL-6: critical at 90°"
+        );
 
         // At 70° (12288 counts): distance to 90° = 4096 > 3641 → outside warning zone
         let at_70 = [CduAngle(0), CduAngle(0), CduAngle(12288)];
-        assert!(!is_gimbal_lock_warning(&at_70), "TC-IMU-CTRL-6: no warning at 70°");
-        assert!(!is_gimbal_lock_critical(&at_70), "TC-IMU-CTRL-6: no critical at 70°");
+        assert!(
+            !is_gimbal_lock_warning(&at_70),
+            "TC-IMU-CTRL-6: no warning at 70°"
+        );
+        assert!(
+            !is_gimbal_lock_critical(&at_70),
+            "TC-IMU-CTRL-6: no critical at 70°"
+        );
 
         // At 75° (13653 counts): distance to 90° = 2731 < 3641 → inside warning zone
         //                         2731 > 910 → outside critical zone
         let at_75 = [CduAngle(0), CduAngle(0), CduAngle(13653)];
-        assert!(is_gimbal_lock_warning(&at_75), "TC-IMU-CTRL-6: warning at 75°");
-        assert!(!is_gimbal_lock_critical(&at_75), "TC-IMU-CTRL-6: no critical at 75°");
+        assert!(
+            is_gimbal_lock_warning(&at_75),
+            "TC-IMU-CTRL-6: warning at 75°"
+        );
+        assert!(
+            !is_gimbal_lock_critical(&at_75),
+            "TC-IMU-CTRL-6: no critical at 75°"
+        );
 
         // At 0° — safe (no warning, no critical)
         let at_0 = [CduAngle(0), CduAngle(0), CduAngle(0)];
-        assert!(!is_gimbal_lock_warning(&at_0), "TC-IMU-CTRL-6: no warning at 0°");
-        assert!(!is_gimbal_lock_critical(&at_0), "TC-IMU-CTRL-6: no critical at 0°");
+        assert!(
+            !is_gimbal_lock_warning(&at_0),
+            "TC-IMU-CTRL-6: no warning at 0°"
+        );
+        assert!(
+            !is_gimbal_lock_critical(&at_0),
+            "TC-IMU-CTRL-6: no critical at 0°"
+        );
     }
 
     // ── TC-IMU-CTRL-7: Gimbal lock critical threshold ─────────────────────────
@@ -569,18 +610,36 @@ mod tests {
     fn tc_imu_ctrl_7_gimbal_lock_critical() {
         // At 86° (15655 counts): distance to 90° = 729 < 910 → inside critical
         let at_86 = [CduAngle(0), CduAngle(0), CduAngle(15655)];
-        assert!(is_gimbal_lock_warning(&at_86), "TC-IMU-CTRL-7: warning at 86°");
-        assert!(is_gimbal_lock_critical(&at_86), "TC-IMU-CTRL-7: critical at 86°");
+        assert!(
+            is_gimbal_lock_warning(&at_86),
+            "TC-IMU-CTRL-7: warning at 86°"
+        );
+        assert!(
+            is_gimbal_lock_critical(&at_86),
+            "TC-IMU-CTRL-7: critical at 86°"
+        );
 
         // At 75° — warning only, not critical
         let at_75 = [CduAngle(0), CduAngle(0), CduAngle(13653)];
-        assert!(is_gimbal_lock_warning(&at_75), "TC-IMU-CTRL-7: warning at 75°");
-        assert!(!is_gimbal_lock_critical(&at_75), "TC-IMU-CTRL-7: no critical at 75°");
+        assert!(
+            is_gimbal_lock_warning(&at_75),
+            "TC-IMU-CTRL-7: warning at 75°"
+        );
+        assert!(
+            !is_gimbal_lock_critical(&at_75),
+            "TC-IMU-CTRL-7: no critical at 75°"
+        );
 
         // At 270° (49152 counts) — exactly at -90°, inside both zones
         let at_270 = [CduAngle(0), CduAngle(0), CduAngle(49152)];
-        assert!(is_gimbal_lock_warning(&at_270), "TC-IMU-CTRL-7: warning at 270°");
-        assert!(is_gimbal_lock_critical(&at_270), "TC-IMU-CTRL-7: critical at 270°");
+        assert!(
+            is_gimbal_lock_warning(&at_270),
+            "TC-IMU-CTRL-7: warning at 270°"
+        );
+        assert!(
+            is_gimbal_lock_critical(&at_270),
+            "TC-IMU-CTRL-7: critical at 270°"
+        );
     }
 
     // ── Additional: REFSMMAT collinear star rejection ─────────────────────────
@@ -608,7 +667,10 @@ mod tests {
         let dt_s = 0.12; // one T4RUPT cycle
         let pulses = fine_align_torque(error, dt_s);
         // Expected: 10 arcmin * (32768/TAU) * 0.12 ≈ 1.82 → rounds to 2
-        assert_eq!(pulses[0], 2_i16, "TC fine-align: expected 2 pulses for 10 arcmin");
+        assert_eq!(
+            pulses[0], 2_i16,
+            "TC fine-align: expected 2 pulses for 10 arcmin"
+        );
         assert_eq!(pulses[1], 0_i16);
         assert_eq!(pulses[2], 0_i16);
     }

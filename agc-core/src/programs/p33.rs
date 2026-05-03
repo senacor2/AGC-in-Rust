@@ -181,9 +181,7 @@ pub fn p33_run(state: &mut AgcState, dt_tpi: f64) -> JobPriority {
     // Step 1 — Staleness check (non-fatal).
     let target_epoch_cs = (state.rendezvous_nav.target_epoch * 100.0) as u64;
     let tig_cs_u64 = tig_cs.0 as u64;
-    if tig_cs_u64 > target_epoch_cs
-        && (tig_cs_u64 - target_epoch_cs) > TPI_STALE_TARGET_CS
-    {
+    if tig_cs_u64 > target_epoch_cs && (tig_cs_u64 - target_epoch_cs) > TPI_STALE_TARGET_CS {
         state.alarm.code = ALARM_P33_STALE_TARGET;
         state.alarm.lit = true;
         // Non-fatal: proceed with computation.
@@ -272,7 +270,7 @@ pub fn p33_run(state: &mut AgcState, dt_tpi: f64) -> JobPriority {
             state.dsky.verb = 6;
             state.dsky.noun = 55;
             state.dsky.r[0] = (elev_rad / 0.001) as f32; // mils
-            state.dsky.r[1] = (dt_tpi / 60.0) as f32;    // minutes
+            state.dsky.r[1] = (dt_tpi / 60.0) as f32; // minutes
             state.dsky.flashing = false;
             // Show ΔV via V06 N81.
             state.dsky.verb = 6;
@@ -457,13 +455,7 @@ mod tests {
     const R_LEO: f64 = 6_778_000.0; // m
 
     /// Build a minimal AgcState with chaser and target at the given epoch.
-    fn make_state(
-        r_c: Vec3,
-        v_c: Vec3,
-        r_t: Vec3,
-        v_t: Vec3,
-        epoch_s: f64,
-    ) -> AgcState {
+    fn make_state(r_c: Vec3, v_c: Vec3, r_t: Vec3, v_t: Vec3, epoch_s: f64) -> AgcState {
         let mut state = AgcState::new();
         state.csm_state = StateVector {
             position: r_c,

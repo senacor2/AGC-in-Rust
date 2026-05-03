@@ -210,7 +210,7 @@ mod tests {
         let sv_eci = StateVector {
             position: [3.18e8, 0.0, 0.0], // 318,000 km along X
             velocity: [0.0, 830.0, 0.0],  // approximate cislunar velocity
-            epoch: Met(25_920_000),        // ~3 days MET
+            epoch: Met(25_920_000),       // ~3 days MET
             frame: Frame::EarthInertial,
         };
 
@@ -218,8 +218,8 @@ mod tests {
         // Moon is at ~384,400 km from Earth on X-axis at this epoch (simplified)
         // so Moon-relative position ≈ 318,000 - 384,400 = -66,400 km
         let sv_mci = StateVector {
-            position: [-6.64e7, 0.0, 0.0],         // 66,400 km from Moon, opposite direction
-            velocity: [0.0, 830.0 - 1022.0, 0.0],  // relative to Moon's ~1022 m/s orbital velocity
+            position: [-6.64e7, 0.0, 0.0], // 66,400 km from Moon, opposite direction
+            velocity: [0.0, 830.0 - 1022.0, 0.0], // relative to Moon's ~1022 m/s orbital velocity
             epoch: Met(25_920_000),
             frame: Frame::MoonInertial,
         };
@@ -267,8 +267,7 @@ mod tests {
         // Convert a representative AGC DP pair to f64 velocity
         let w_hi: i16 = 11100;
         let w_lo: i16 = 0;
-        let velocity_mps =
-            (w_hi as f64) * 2.0_f64.powi(-7) + (w_lo as f64) * 2.0_f64.powi(-21);
+        let velocity_mps = (w_hi as f64) * 2.0_f64.powi(-7) + (w_lo as f64) * 2.0_f64.powi(-21);
         let expected = 86.71875_f64;
         assert!(
             (velocity_mps - expected).abs() < 1e-6,

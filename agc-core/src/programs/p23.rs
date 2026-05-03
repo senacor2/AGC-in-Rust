@@ -277,7 +277,7 @@ pub fn p23_init(state: &mut AgcState) -> JobPriority {
         Frame::EarthInertial | Frame::MoonInertial => {}
         Frame::StableMember => {
             state.alarm.code = ALARM_FRAME_MISMATCH;
-            state.alarm.lit  = true;
+            state.alarm.lit = true;
             state.csm_nav.tracking_active = false;
             return P23_PRIORITY;
         }
@@ -286,13 +286,13 @@ pub fn p23_init(state: &mut AgcState) -> JobPriority {
     // Precondition: non-zero CSM epoch (sanity check for initialised state vector).
     if state.csm_state.epoch.to_seconds() == 0.0 {
         state.alarm.code = ALARM_NO_CSM_SV;
-        state.alarm.lit  = true;
+        state.alarm.lit = true;
         state.csm_nav.tracking_active = false;
         return P23_PRIORITY;
     }
 
     state.major_mode = P23_MAJOR_MODE;
-    state.dsky.prog  = P23_MAJOR_MODE;
+    state.dsky.prog = P23_MAJOR_MODE;
 
     // W-matrix initialisation policy (OQ-5):
     // If the matrix is all zeros (fresh-start or first activation), initialise to
@@ -303,24 +303,24 @@ pub fn p23_init(state: &mut AgcState) -> JobPriority {
 
     // Reset bookkeeping counters — new navigation session.
     let now_s = state.time.to_seconds();
-    state.csm_nav.last_mark_time            = now_s;
-    state.csm_nav.mark_count               = 0;
-    state.csm_nav.reject_count             = 0;
+    state.csm_nav.last_mark_time = now_s;
+    state.csm_nav.mark_count = 0;
+    state.csm_nav.reject_count = 0;
     state.csm_nav.consecutive_reject_count = 0;
-    state.csm_nav.tracking_active          = true;
+    state.csm_nav.tracking_active = true;
 
     // Program entry display: V16 N49 (mark count / reject count).
-    state.dsky.verb  = 16;
-    state.dsky.noun  = 49;
-    state.dsky.r[0]  = 0.0;
-    state.dsky.r[1]  = 0.0;
-    state.dsky.r[2]  = 0.0;
+    state.dsky.verb = 16;
+    state.dsky.noun = 49;
+    state.dsky.r[0] = 0.0;
+    state.dsky.r[1] = 0.0;
+    state.dsky.r[2] = 0.0;
 
     // Install the periodic nav-cycle hook via the Waitlist.
     match state.waitlist.schedule(P23_CYCLE_CS_U16, p23_cycle_task) {
         ScheduleResult::Full => {
             state.alarm.code = ALARM_WAITLIST_FULL;
-            state.alarm.lit  = true;
+            state.alarm.lit = true;
         }
         _ => {}
     }
@@ -357,7 +357,7 @@ pub fn p23_cycle_task(state: &mut AgcState) {
         Frame::EarthInertial | Frame::MoonInertial => {}
         Frame::StableMember => {
             state.alarm.code = ALARM_FRAME_MISMATCH;
-            state.alarm.lit  = true;
+            state.alarm.lit = true;
             state.csm_nav.tracking_active = false;
             // Still reschedule — display continues even when tracking is suspended.
             reschedule(state);
@@ -381,11 +381,11 @@ pub fn p23_cycle_task(state: &mut AgcState) {
     }
 
     // DSKY update: V16 N49 — mark count (R1), reject count (R2).
-    state.dsky.verb  = 16;
-    state.dsky.noun  = 49;
-    state.dsky.r[0]  = state.csm_nav.mark_count  as f32;
-    state.dsky.r[1]  = state.csm_nav.reject_count as f32;
-    state.dsky.r[2]  = 0.0;
+    state.dsky.verb = 16;
+    state.dsky.noun = 49;
+    state.dsky.r[0] = state.csm_nav.mark_count as f32;
+    state.dsky.r[1] = state.csm_nav.reject_count as f32;
+    state.dsky.r[2] = 0.0;
 
     reschedule(state);
 }
@@ -419,21 +419,21 @@ pub fn p23_incorporate_star_horizon_mark(state: &mut AgcState, mark: StarHorizon
     let star_mag = norm(mark.star_direction);
     if !(0.999..=1.001).contains(&star_mag) {
         state.alarm.code = ALARM_NO_STAR_LOCK;
-        state.alarm.lit  = true;
+        state.alarm.lit = true;
         return;
     }
 
     // EC-3: observed angle must be in [0, π].
     if !(0.0..=core::f64::consts::PI).contains(&mark.angle_observed_rad) {
         state.alarm.code = ALARM_BAD_ANGLE;
-        state.alarm.lit  = true;
+        state.alarm.lit = true;
         return;
     }
 
-    let csm_pos   = state.csm_state.position;
-    let s_hat     = mark.star_direction;
-    let body_pos  = body_origin(mark.body);
-    let body_r    = body_radius(mark.body);
+    let csm_pos = state.csm_state.position;
+    let s_hat = mark.star_direction;
+    let body_pos = body_origin(mark.body);
+    let body_r = body_radius(mark.body);
 
     // Compute predicted measurement and sensitivity vector (§6.1).
     let (theta_pred, b) = match star_horizon_prediction(csm_pos, body_pos, body_r, s_hat) {
@@ -441,14 +441,14 @@ pub fn p23_incorporate_star_horizon_mark(state: &mut AgcState, mark: StarHorizon
         Err(HorizonPredError::TooCloseToBody) => {
             // EC-4: CSM inside R_body + R_MIN_HORIZON_M.
             state.alarm.code = ALARM_P23_TOO_CLOSE_TO_BODY;
-            state.alarm.lit  = true;
+            state.alarm.lit = true;
             return;
         }
         Err(HorizonPredError::DegenerateGeometry) => {
             // EC-5: star co-linear with body direction — unobservable.
             // Spec §9 EC-5: raise ALARM_BAD_ANGLE (01427) for degenerate geometry.
             state.alarm.code = ALARM_BAD_ANGLE;
-            state.alarm.lit  = true;
+            state.alarm.lit = true;
             return;
         }
     };
@@ -496,19 +496,19 @@ pub fn p23_incorporate_star_landmark_mark(state: &mut AgcState, mark: StarLandma
     let star_mag = norm(mark.star_direction);
     if !(0.999..=1.001).contains(&star_mag) {
         state.alarm.code = ALARM_NO_STAR_LOCK;
-        state.alarm.lit  = true;
+        state.alarm.lit = true;
         return;
     }
 
     // EC-3: observed angle must be in [0, π].
     if !(0.0..=core::f64::consts::PI).contains(&mark.angle_observed_rad) {
         state.alarm.code = ALARM_BAD_ANGLE;
-        state.alarm.lit  = true;
+        state.alarm.lit = true;
         return;
     }
 
-    let csm_pos          = state.csm_state.position;
-    let s_hat            = mark.star_direction;
+    let csm_pos = state.csm_state.position;
+    let s_hat = mark.star_direction;
     let landmark_inertial = mark.landmark_inertial;
 
     // Compute predicted measurement and sensitivity vector (§6.2).
@@ -517,14 +517,14 @@ pub fn p23_incorporate_star_landmark_mark(state: &mut AgcState, mark: StarLandma
         Err(LandmarkPredError::RangeTooSmall) => {
             // EC-6 range guard: CSM too close to landmark.
             state.alarm.code = ALARM_P23_LANDMARK_RANGE_ZERO;
-            state.alarm.lit  = true;
+            state.alarm.lit = true;
             return;
         }
         Err(LandmarkPredError::DegenerateGeometry) => {
             // EC-6: star co-linear with landmark direction — unobservable.
             // Spec §9 EC-6: raise ALARM_BAD_ANGLE (01427) for degenerate geometry.
             state.alarm.code = ALARM_BAD_ANGLE;
-            state.alarm.lit  = true;
+            state.alarm.lit = true;
             return;
         }
     };
@@ -565,11 +565,11 @@ pub fn p23_incorporate_star_landmark_mark(state: &mut AgcState, mark: StarLandma
 /// Spec: p23-spec.md §4.5
 pub fn p23_rectify_w_matrix(state: &mut AgcState) {
     init_w_matrix(state);
-    state.csm_nav.mark_count               = 0;
-    state.csm_nav.reject_count             = 0;
+    state.csm_nav.mark_count = 0;
+    state.csm_nav.reject_count = 0;
     state.csm_nav.consecutive_reject_count = 0;
-    state.csm_nav.last_mark_time           = state.time.to_seconds();
-    state.csm_nav.tracking_active          = true;
+    state.csm_nav.last_mark_time = state.time.to_seconds();
+    state.csm_nav.tracking_active = true;
 
     // Confirm action by showing V06 N49 on DSKY.
     state.dsky.verb = 6;
@@ -595,9 +595,10 @@ pub fn p23_rectify_w_matrix(state: &mut AgcState) {
 pub fn primary_body(frame: Frame) -> Body {
     match frame {
         Frame::EarthInertial => Body::Earth,
-        Frame::MoonInertial  => Body::Moon,
-        Frame::StableMember  =>
-            panic!("p23: primary_body called with StableMember frame — software fault"),
+        Frame::MoonInertial => Body::Moon,
+        Frame::StableMember => {
+            panic!("p23: primary_body called with StableMember frame — software fault")
+        }
     }
 }
 
@@ -646,7 +647,7 @@ fn body_origin(_body: Body) -> Vec3 {
 fn body_radius(body: Body) -> f64 {
     match body {
         Body::Earth => EARTH_RADIUS_M,
-        Body::Moon  => MOON_RADIUS_M,
+        Body::Moon => MOON_RADIUS_M,
     }
 }
 
@@ -671,10 +672,10 @@ enum HorizonPredError {
 ///
 /// Spec: p23-spec.md §6.1; EC-4, EC-5
 fn star_horizon_prediction(
-    csm_pos:       Vec3,
-    body_pos:      Vec3,
+    csm_pos: Vec3,
+    body_pos: Vec3,
     body_radius_m: f64,
-    s_hat:         Vec3,
+    s_hat: Vec3,
 ) -> Result<(f64, [f64; 6]), HorizonPredError> {
     // Step 1: relative position from body centre to CSM.
     let rho = [
@@ -699,7 +700,7 @@ fn star_horizon_prediction(
 
     // Step 6: predicted star-horizon angle.
     let cos_alpha = dot(s_hat, u_hat).clamp(-1.0, 1.0);
-    let alpha     = libm::acos(cos_alpha);
+    let alpha = libm::acos(cos_alpha);
     let sin_alpha = libm::sqrt((1.0 - cos_alpha * cos_alpha).max(0.0));
 
     // EC-5: star nearly co-linear with body-centre direction — measurement degenerate.
@@ -716,8 +717,8 @@ fn star_horizon_prediction(
     //   b[0..3] = A * u_hat - B * s_hat
     //   b[3..6] = 0
     let tangent_len = libm::sqrt(d * d - body_radius_m * body_radius_m);
-    let a_scalar    = (cos_alpha / sin_alpha + body_radius_m / tangent_len) / d;
-    let b_scalar    = 1.0 / (d * sin_alpha);
+    let a_scalar = (cos_alpha / sin_alpha + body_radius_m / tangent_len) / d;
+    let b_scalar = 1.0 / (d * sin_alpha);
 
     let mut b = [0.0_f64; 6];
     for i in 0..3 {
@@ -743,9 +744,9 @@ enum LandmarkPredError {
 ///
 /// Spec: p23-spec.md §6.2; EC-6
 fn star_landmark_prediction(
-    csm_pos:           Vec3,
+    csm_pos: Vec3,
     landmark_inertial: Vec3,
-    s_hat:             Vec3,
+    s_hat: Vec3,
 ) -> Result<(f64, [f64; 6]), LandmarkPredError> {
     // Step 1: vector from CSM to landmark (points toward the landmark).
     let v_lm = [
@@ -762,7 +763,7 @@ fn star_landmark_prediction(
         return Err(LandmarkPredError::RangeTooSmall);
     }
 
-    let l_hat    = unit(v_lm);
+    let l_hat = unit(v_lm);
     let cos_beta = dot(s_hat, l_hat).clamp(-1.0, 1.0);
     let sin_beta = libm::sqrt((1.0 - cos_beta * cos_beta).max(0.0));
 
@@ -794,8 +795,8 @@ fn star_landmark_prediction(
 ///
 /// Spec: p23-spec.md §6.3
 fn p23_scalar_update(
-    state:    &mut AgcState,
-    b:        [f64; 6],
+    state: &mut AgcState,
+    b: [f64; 6],
     residual: f64,
     sigma_sq: f64,
 ) -> UpdateOutcome {
@@ -808,13 +809,8 @@ fn p23_scalar_update(
         state.csm_state.velocity[2],
     ];
 
-    let outcome = scalar_measurement_update(
-        &mut x,
-        &mut state.csm_nav.w_matrix,
-        b,
-        residual,
-        sigma_sq,
-    );
+    let outcome =
+        scalar_measurement_update(&mut x, &mut state.csm_nav.w_matrix, b, residual, sigma_sq);
 
     if outcome == UpdateOutcome::Accepted || outcome == UpdateOutcome::AcceptedWOverflow {
         state.csm_state.position = [x[0], x[1], x[2]];
@@ -823,7 +819,7 @@ fn p23_scalar_update(
 
     if outcome == UpdateOutcome::AcceptedWOverflow {
         state.alarm.code = ALARM_W_OVERFLOW;
-        state.alarm.lit  = true;
+        state.alarm.lit = true;
         p23_rectify_w_matrix(state);
         return UpdateOutcome::Accepted;
     }
@@ -840,7 +836,7 @@ fn p23_scalar_update(
 fn check_consecutive_rejects(state: &mut AgcState) {
     if state.csm_nav.consecutive_reject_count >= 5 {
         state.alarm.code = ALARM_P23_REJECT_OVERRIDE;
-        state.alarm.lit  = true;
+        state.alarm.lit = true;
         state.csm_nav.tracking_active = false;
     }
 }
@@ -852,7 +848,7 @@ fn reschedule(state: &mut AgcState) {
     match state.waitlist.schedule(P23_CYCLE_CS_U16, p23_cycle_task) {
         ScheduleResult::Full => {
             state.alarm.code = ALARM_WAITLIST_FULL;
-            state.alarm.lit  = true;
+            state.alarm.lit = true;
         }
         _ => {}
     }
@@ -863,9 +859,9 @@ fn reschedule(state: &mut AgcState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AgcState;
     use crate::navigation::state_vector::{Frame, StateVector};
     use crate::types::Met;
+    use crate::AgcState;
 
     // ── TC-P23-1: p23_init happy path ─────────────────────────────────────────
 
@@ -886,10 +882,16 @@ mod tests {
 
         assert_eq!(state.major_mode, 23, "major_mode must be 23");
         assert_eq!(state.dsky.prog, 23, "dsky.prog must be 23");
-        assert!(state.csm_nav.tracking_active, "tracking_active must be true");
+        assert!(
+            state.csm_nav.tracking_active,
+            "tracking_active must be true"
+        );
         assert_eq!(state.csm_nav.mark_count, 0, "mark_count must be 0");
         assert_eq!(state.csm_nav.reject_count, 0, "reject_count must be 0");
-        assert_eq!(state.csm_nav.consecutive_reject_count, 0, "consecutive_reject_count must be 0");
+        assert_eq!(
+            state.csm_nav.consecutive_reject_count, 0,
+            "consecutive_reject_count must be 0"
+        );
         assert_eq!(
             state.csm_nav.w_matrix[0][0], P23_W_INIT_POS_VARIANCE,
             "w_matrix[0][0] must be P23_W_INIT_POS_VARIANCE"
@@ -898,7 +900,10 @@ mod tests {
             state.csm_nav.w_matrix[3][3], P23_W_INIT_VEL_VARIANCE,
             "w_matrix[3][3] must be P23_W_INIT_VEL_VARIANCE"
         );
-        assert_eq!(state.csm_nav.w_matrix[0][1], 0.0, "w_matrix[0][1] must be 0 (off-diagonal)");
+        assert_eq!(
+            state.csm_nav.w_matrix[0][1], 0.0,
+            "w_matrix[0][1] must be 0 (off-diagonal)"
+        );
         assert_eq!(state.alarm.code, 0, "alarm.code must be 0 on happy path");
         assert!(
             state.waitlist.len() >= 1,
@@ -917,9 +922,15 @@ mod tests {
 
         p23_init(&mut state);
 
-        assert_eq!(state.alarm.code, 0o01420, "alarm.code must be 0o01420 (NO_CSM_SV)");
+        assert_eq!(
+            state.alarm.code, 0o01420,
+            "alarm.code must be 0o01420 (NO_CSM_SV)"
+        );
         assert!(state.alarm.lit, "alarm.lit must be true");
-        assert!(!state.csm_nav.tracking_active, "tracking_active must be false");
+        assert!(
+            !state.csm_nav.tracking_active,
+            "tracking_active must be false"
+        );
     }
 
     // ── TC-P23-3: Star-horizon mark reduces W[1][1] ───────────────────────────
@@ -989,7 +1000,8 @@ mod tests {
         assert!(
             x_reduction >= 0.0 && x_reduction * 100.0 < y_reduction,
             "X-component reduction ({}) must be << Y-component reduction ({})",
-            x_reduction, y_reduction
+            x_reduction,
+            y_reduction
         );
 
         // Velocity rows unchanged (b[3..6] = 0).
@@ -1003,7 +1015,9 @@ mod tests {
             assert!(
                 libm::fabs(state.csm_state.position[i] - pos_before[i]) < 1.0,
                 "csm_state.position[{}] must change by at most 1.0 m; was {}, now {}",
-                i, pos_before[i], state.csm_state.position[i]
+                i,
+                pos_before[i],
+                state.csm_state.position[i]
             );
         }
     }
@@ -1039,16 +1053,26 @@ mod tests {
 
         p23_incorporate_star_horizon_mark(&mut state, mark);
 
-        assert_eq!(state.csm_nav.mark_count, 0, "mark_count must be 0 (not accepted)");
+        assert_eq!(
+            state.csm_nav.mark_count, 0,
+            "mark_count must be 0 (not accepted)"
+        );
         assert_eq!(state.csm_nav.reject_count, 1, "reject_count must be 1");
-        assert_eq!(state.csm_nav.consecutive_reject_count, 1, "consecutive_reject_count must be 1");
-        assert_eq!(state.alarm.code, 0, "single rejection must not raise an alarm");
+        assert_eq!(
+            state.csm_nav.consecutive_reject_count, 1,
+            "consecutive_reject_count must be 1"
+        );
+        assert_eq!(
+            state.alarm.code, 0,
+            "single rejection must not raise an alarm"
+        );
 
         // Position must be unchanged.
         for i in 0..3 {
             assert!(
                 libm::fabs(state.csm_state.position[i] - pos_before[i]) < 1e-9,
-                "csm_state.position[{}] must be unchanged after rejected mark", i
+                "csm_state.position[{}] must be unchanged after rejected mark",
+                i
             );
         }
 
@@ -1057,7 +1081,9 @@ mod tests {
             for j in 0..6 {
                 assert!(
                     libm::fabs(state.csm_nav.w_matrix[i][j] - w_before[i][j]) < 1e-9,
-                    "w_matrix[{}][{}] must be unchanged after rejected mark", i, j
+                    "w_matrix[{}][{}] must be unchanged after rejected mark",
+                    i,
+                    j
                 );
             }
         }
@@ -1094,17 +1120,27 @@ mod tests {
             p23_incorporate_star_horizon_mark(&mut state, mark);
         }
 
-        assert_eq!(state.csm_nav.consecutive_reject_count, 5, "consecutive_reject_count must be 5");
+        assert_eq!(
+            state.csm_nav.consecutive_reject_count, 5,
+            "consecutive_reject_count must be 5"
+        );
         assert_eq!(state.csm_nav.reject_count, 5, "reject_count must be 5");
-        assert!(!state.csm_nav.tracking_active, "tracking_active must be false after 5 rejects");
-        assert_eq!(state.alarm.code, 0o01431, "alarm.code must be 0o01431 (REJECT_OVERRIDE)");
+        assert!(
+            !state.csm_nav.tracking_active,
+            "tracking_active must be false after 5 rejects"
+        );
+        assert_eq!(
+            state.alarm.code, 0o01431,
+            "alarm.code must be 0o01431 (REJECT_OVERRIDE)"
+        );
         assert!(state.alarm.lit, "alarm.lit must be true");
 
         // All marks were rejected — position unchanged.
         for i in 0..3 {
             assert!(
                 libm::fabs(state.csm_state.position[i] - pos_before[i]) < 1e-9,
-                "csm_state.position[{}] must be unchanged after 5 rejected marks", i
+                "csm_state.position[{}] must be unchanged after 5 rejected marks",
+                i
             );
         }
 
@@ -1117,7 +1153,10 @@ mod tests {
         };
         let alarm_code_before_6th = state.alarm.code;
         p23_incorporate_star_horizon_mark(&mut state, mark6);
-        assert_eq!(state.csm_nav.mark_count, 0, "6th mark must be discarded (mark_count stays 0)");
+        assert_eq!(
+            state.csm_nav.mark_count, 0,
+            "6th mark must be discarded (mark_count stays 0)"
+        );
         assert_eq!(
             state.alarm.code, alarm_code_before_6th,
             "alarm code must be unchanged after silently discarded 6th mark"
@@ -1164,15 +1203,22 @@ mod tests {
 
         p23_incorporate_star_horizon_mark(&mut state, mark);
 
-        assert_eq!(state.alarm.code, 0o01430, "alarm.code must be 0o01430 (TOO_CLOSE_TO_BODY)");
+        assert_eq!(
+            state.alarm.code, 0o01430,
+            "alarm.code must be 0o01430 (TOO_CLOSE_TO_BODY)"
+        );
         assert!(state.alarm.lit, "alarm.lit must be true");
-        assert_eq!(state.csm_nav.mark_count, 0, "mark_count must be 0 (mark discarded)");
+        assert_eq!(
+            state.csm_nav.mark_count, 0,
+            "mark_count must be 0 (mark discarded)"
+        );
 
         // Position must be unchanged.
         for i in 0..3 {
             assert!(
                 libm::fabs(state.csm_state.position[i] - pos_before[i]) < 1e-9,
-                "csm_state.position[{}] must be unchanged after discarded mark", i
+                "csm_state.position[{}] must be unchanged after discarded mark",
+                i
             );
         }
     }
@@ -1227,7 +1273,8 @@ mod tests {
         assert!(
             libm::fabs(state.csm_nav.w_matrix[1][1] - w11_before) < 1.0,
             "w_matrix[1][1] must be essentially unchanged; was {}, now {}",
-            w11_before, state.csm_nav.w_matrix[1][1]
+            w11_before,
+            state.csm_nav.w_matrix[1][1]
         );
 
         // Near-zero residual → position changes by at most 1.0 m.
@@ -1235,7 +1282,9 @@ mod tests {
             assert!(
                 libm::fabs(state.csm_state.position[i] - pos_before[i]) < 1.0,
                 "csm_state.position[{}] must change by at most 1.0 m; was {}, now {}",
-                i, pos_before[i], state.csm_state.position[i]
+                i,
+                pos_before[i],
+                state.csm_state.position[i]
             );
         }
     }

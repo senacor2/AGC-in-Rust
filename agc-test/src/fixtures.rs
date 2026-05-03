@@ -52,8 +52,7 @@ pub struct GravityCase {
 /// Deserialize all gravity test cases from `agc-test/fixtures/gravity_cases.json`.
 pub fn load_gravity_cases() -> Vec<GravityCase> {
     let json = include_str!("../fixtures/gravity_cases.json");
-    serde_json::from_str(json)
-        .expect("Failed to parse gravity_cases.json — check fixture syntax")
+    serde_json::from_str(json).expect("Failed to parse gravity_cases.json — check fixture syntax")
 }
 
 // ── ServicerCase ──────────────────────────────────────────────────────────────
@@ -216,8 +215,7 @@ pub struct LambertCase {
 /// Deserialize all Lambert test cases from `agc-test/fixtures/lambert_cases.json`.
 pub fn load_lambert_cases() -> Vec<LambertCase> {
     let json = include_str!("../fixtures/lambert_cases.json");
-    serde_json::from_str(json)
-        .expect("Failed to parse lambert_cases.json — check fixture syntax")
+    serde_json::from_str(json).expect("Failed to parse lambert_cases.json — check fixture syntax")
 }
 
 // ── KeplerCase ────────────────────────────────────────────────────────────────
@@ -262,8 +260,7 @@ pub struct KeplerCase {
 /// Deserialize all Kepler propagation test cases from `agc-test/fixtures/kepler_cases.json`.
 pub fn load_kepler_cases() -> Vec<KeplerCase> {
     let json = include_str!("../fixtures/kepler_cases.json");
-    serde_json::from_str(json)
-        .expect("Failed to parse kepler_cases.json — check fixture syntax")
+    serde_json::from_str(json).expect("Failed to parse kepler_cases.json — check fixture syntax")
 }
 
 // ── KalmanCase ────────────────────────────────────────────────────────────────
@@ -314,8 +311,7 @@ pub struct KalmanCase {
 /// Deserialize all scalar Kalman update test cases from `agc-test/fixtures/kalman_cases.json`.
 pub fn load_kalman_cases() -> Vec<KalmanCase> {
     let json = include_str!("../fixtures/kalman_cases.json");
-    serde_json::from_str(json)
-        .expect("Failed to parse kalman_cases.json — check fixture syntax")
+    serde_json::from_str(json).expect("Failed to parse kalman_cases.json — check fixture syntax")
 }
 
 // ── RendezvousCase ────────────────────────────────────────────────────────────
@@ -383,8 +379,7 @@ pub struct TargetingCase {
 /// Deserialize all targeting primitive test cases from `agc-test/fixtures/targeting_cases.json`.
 pub fn load_targeting_cases() -> Vec<TargetingCase> {
     let json = include_str!("../fixtures/targeting_cases.json");
-    serde_json::from_str(json)
-        .expect("Failed to parse targeting_cases.json — check fixture syntax")
+    serde_json::from_str(json).expect("Failed to parse targeting_cases.json — check fixture syntax")
 }
 
 // ── Smoke tests ───────────────────────────────────────────────────────────────
@@ -419,16 +414,27 @@ mod tests {
     #[test]
     fn load_servicer_cases_parses() {
         let cases = load_servicer_cases();
-        assert!(!cases.is_empty(), "servicer_cycle_cases.json must not be empty");
+        assert!(
+            !cases.is_empty(),
+            "servicer_cycle_cases.json must not be empty"
+        );
         for c in &cases {
             assert!(!c.name.is_empty(), "Every servicer case must have a name");
             assert!(
                 c.pipa_sequence.len() == c.num_cycles,
                 "pipa_sequence.len() ({}) must equal num_cycles ({}) in case '{}'",
-                c.pipa_sequence.len(), c.num_cycles, c.name
+                c.pipa_sequence.len(),
+                c.num_cycles,
+                c.name
             );
-            assert!(c.position_tolerance_m > 0.0, "Position tolerance must be positive");
-            assert!(c.velocity_tolerance_m_s > 0.0, "Velocity tolerance must be positive");
+            assert!(
+                c.position_tolerance_m > 0.0,
+                "Position tolerance must be positive"
+            );
+            assert!(
+                c.velocity_tolerance_m_s > 0.0,
+                "Velocity tolerance must be positive"
+            );
         }
     }
 
@@ -436,12 +442,21 @@ mod tests {
     #[test]
     fn load_orbit_cases_parses() {
         let cases = load_orbit_cases();
-        assert!(!cases.is_empty(), "orbit_propagation_cases.json must not be empty");
+        assert!(
+            !cases.is_empty(),
+            "orbit_propagation_cases.json must not be empty"
+        );
         for c in &cases {
             assert!(!c.name.is_empty(), "Every orbit case must have a name");
             assert!(c.dt_s > 0.0, "dt_s must be positive");
-            assert!(c.position_tolerance_m > 0.0, "Position tolerance must be positive");
-            assert!(c.velocity_tolerance_m_s > 0.0, "Velocity tolerance must be positive");
+            assert!(
+                c.position_tolerance_m > 0.0,
+                "Position tolerance must be positive"
+            );
+            assert!(
+                c.velocity_tolerance_m_s > 0.0,
+                "Velocity tolerance must be positive"
+            );
         }
     }
 
@@ -455,7 +470,10 @@ mod tests {
             assert!(!c.name.is_empty(), "Every Lambert case must have a name");
             assert!(c.tof_s > 0.0, "tof_s must be positive");
             assert!(c.mu_m3_s2 > 0.0, "mu_m3_s2 must be positive");
-            assert!(c.velocity_tolerance_m_s > 0.0, "velocity_tolerance_m_s must be positive");
+            assert!(
+                c.velocity_tolerance_m_s > 0.0,
+                "velocity_tolerance_m_s must be positive"
+            );
         }
     }
 
@@ -469,8 +487,14 @@ mod tests {
             assert!(!c.name.is_empty(), "Every Kepler case must have a name");
             assert!(c.dt_s > 0.0, "dt_s must be positive");
             assert!(c.mu_m3_s2 > 0.0, "mu_m3_s2 must be positive");
-            assert!(c.position_tolerance_m > 0.0, "position_tolerance_m must be positive");
-            assert!(c.velocity_tolerance_m_s > 0.0, "velocity_tolerance_m_s must be positive");
+            assert!(
+                c.position_tolerance_m > 0.0,
+                "position_tolerance_m must be positive"
+            );
+            assert!(
+                c.velocity_tolerance_m_s > 0.0,
+                "velocity_tolerance_m_s must be positive"
+            );
         }
     }
 
@@ -506,10 +530,13 @@ mod tests {
                 c.body
             );
             // Target position must be non-zero (required by lvlh_matrix).
-            let r_mag = (c.r_target_m[0].powi(2)
-                + c.r_target_m[1].powi(2)
-                + c.r_target_m[2].powi(2)).sqrt();
-            assert!(r_mag > 1.0e6, "target r magnitude must be physically sane (> 1000 km)");
+            let r_mag =
+                (c.r_target_m[0].powi(2) + c.r_target_m[1].powi(2) + c.r_target_m[2].powi(2))
+                    .sqrt();
+            assert!(
+                r_mag > 1.0e6,
+                "target r magnitude must be physically sane (> 1000 km)"
+            );
         }
     }
 
@@ -527,9 +554,9 @@ mod tests {
                 c.body
             );
             // Position must be non-zero (lvlh_to_inertial requires it).
-            let r_mag = (c.position_m[0].powi(2)
-                + c.position_m[1].powi(2)
-                + c.position_m[2].powi(2)).sqrt();
+            let r_mag =
+                (c.position_m[0].powi(2) + c.position_m[1].powi(2) + c.position_m[2].powi(2))
+                    .sqrt();
             assert!(r_mag > 0.0, "position must be non-zero");
         }
     }

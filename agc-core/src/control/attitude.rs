@@ -153,9 +153,18 @@ pub fn compute_attitude_error(
 ///
 /// AGC source: `RCS_CSM_DIGITAL_AUTOPILOT.agc` rate-damping section.
 pub fn rate_damping_torque(rates: Vec3, gain: Vec3) -> Vec3 {
-    debug_assert!(gain[0] >= 0.0, "rate_damping_torque: gain[0] must be non-negative");
-    debug_assert!(gain[1] >= 0.0, "rate_damping_torque: gain[1] must be non-negative");
-    debug_assert!(gain[2] >= 0.0, "rate_damping_torque: gain[2] must be non-negative");
+    debug_assert!(
+        gain[0] >= 0.0,
+        "rate_damping_torque: gain[0] must be non-negative"
+    );
+    debug_assert!(
+        gain[1] >= 0.0,
+        "rate_damping_torque: gain[1] must be non-negative"
+    );
+    debug_assert!(
+        gain[2] >= 0.0,
+        "rate_damping_torque: gain[2] must be non-negative"
+    );
 
     [
         -gain[0] * rates[0],
@@ -289,16 +298,40 @@ mod tests {
 
         let error = compute_attitude_error(cdu, identity, identity);
 
-        assert!(error.roll.abs() < 1e-12, "roll error should be zero, got {}", error.roll);
-        assert!(error.pitch.abs() < 1e-12, "pitch error should be zero, got {}", error.pitch);
-        assert!(error.yaw.abs() < 1e-12, "yaw error should be zero, got {}", error.yaw);
+        assert!(
+            error.roll.abs() < 1e-12,
+            "roll error should be zero, got {}",
+            error.roll
+        );
+        assert!(
+            error.pitch.abs() < 1e-12,
+            "pitch error should be zero, got {}",
+            error.pitch
+        );
+        assert!(
+            error.yaw.abs() < 1e-12,
+            "yaw error should be zero, got {}",
+            error.yaw
+        );
 
         let rates: Vec3 = [0.0, 0.0, 0.0];
         let torque = attitude_hold_torque(error, rates, 0.5, 1.0);
 
-        assert!(torque[0].abs() < 1e-12, "torque[0] should be zero, got {}", torque[0]);
-        assert!(torque[1].abs() < 1e-12, "torque[1] should be zero, got {}", torque[1]);
-        assert!(torque[2].abs() < 1e-12, "torque[2] should be zero, got {}", torque[2]);
+        assert!(
+            torque[0].abs() < 1e-12,
+            "torque[0] should be zero, got {}",
+            torque[0]
+        );
+        assert!(
+            torque[1].abs() < 1e-12,
+            "torque[1] should be zero, got {}",
+            torque[1]
+        );
+        assert!(
+            torque[2].abs() < 1e-12,
+            "torque[2] should be zero, got {}",
+            torque[2]
+        );
     }
 
     // ── TC-ATT-02: Pure roll error ────────────────────────────────────────────
@@ -321,8 +354,16 @@ mod tests {
             "roll error should be ~5° (sin approx), got {}",
             error.roll
         );
-        assert!(error.pitch.abs() < 1e-6, "pitch error should be ~0, got {}", error.pitch);
-        assert!(error.yaw.abs() < 1e-6, "yaw error should be ~0, got {}", error.yaw);
+        assert!(
+            error.pitch.abs() < 1e-6,
+            "pitch error should be ~0, got {}",
+            error.pitch
+        );
+        assert!(
+            error.yaw.abs() < 1e-6,
+            "yaw error should be ~0, got {}",
+            error.yaw
+        );
 
         // Sign-convention check (CI-10 postcondition §4.2)
         assert!(
@@ -334,7 +375,10 @@ mod tests {
         let rates: Vec3 = [0.0, 0.0, 0.0];
         let torque = attitude_hold_torque(error, rates, 1.0, 0.0);
 
-        assert!(torque[0] < 0.0, "restoring torque must be negative for positive roll error");
+        assert!(
+            torque[0] < 0.0,
+            "restoring torque must be negative for positive roll error"
+        );
         assert!(
             torque[1].abs() < 1e-12,
             "pitch torque must be zero, got {}",
@@ -365,8 +409,16 @@ mod tests {
             omega_roll,
             torque[0]
         );
-        assert!(torque[1].abs() < 1e-15, "torque[1] should be zero, got {}", torque[1]);
-        assert!(torque[2].abs() < 1e-15, "torque[2] should be zero, got {}", torque[2]);
+        assert!(
+            torque[1].abs() < 1e-15,
+            "torque[1] should be zero, got {}",
+            torque[1]
+        );
+        assert!(
+            torque[2].abs() < 1e-15,
+            "torque[2] should be zero, got {}",
+            torque[2]
+        );
 
         // Round-trip via compute_body_rates
         let dt = 0.1_f64;
@@ -394,7 +446,11 @@ mod tests {
     fn tc_att_04_attitude_hold_pd() {
         let pitch_err = 1.0_f64.to_radians();
         let pitch_rate = 0.1_f64.to_radians();
-        let error = AttitudeError { roll: 0.0, pitch: pitch_err, yaw: 0.0 };
+        let error = AttitudeError {
+            roll: 0.0,
+            pitch: pitch_err,
+            yaw: 0.0,
+        };
         let rates: Vec3 = [0.0, pitch_rate, 0.0];
         let kp = 0.5_f64;
         let kd = 1.0_f64;
@@ -408,8 +464,16 @@ mod tests {
             expected_pitch,
             torque[1]
         );
-        assert!(torque[0].abs() < 1e-14, "roll torque should be zero, got {}", torque[0]);
-        assert!(torque[2].abs() < 1e-14, "yaw torque should be zero, got {}", torque[2]);
+        assert!(
+            torque[0].abs() < 1e-14,
+            "roll torque should be zero, got {}",
+            torque[0]
+        );
+        assert!(
+            torque[2].abs() < 1e-14,
+            "yaw torque should be zero, got {}",
+            torque[2]
+        );
     }
 
     // ── TC-ATT-05: Maneuver to 90° yaw target ────────────────────────────────
@@ -445,7 +509,11 @@ mod tests {
 
         // Zero-error case
         let zero_rate = maneuver_rate(current, current, max_rate);
-        assert_eq!(zero_rate, [0.0, 0.0, 0.0], "zero rate expected for current == target");
+        assert_eq!(
+            zero_rate,
+            [0.0, 0.0, 0.0],
+            "zero rate expected for current == target"
+        );
     }
 
     // ── TC-ATT-SIGN: CI-10 sign-convention validation ─────────────────────────

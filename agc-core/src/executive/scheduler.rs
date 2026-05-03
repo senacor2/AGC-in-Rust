@@ -125,7 +125,7 @@ impl Executive {
                 }
             }
 
-            // T4RUPT: advance MET by 12 cs (120 ms) and apply gyro drift.
+            // T4RUPT: advance MET by 12 cs (120 ms), apply gyro drift, emit DSKY.
             if T4_PENDING.swap(false, Ordering::Acquire) {
                 state.time = crate::types::Met(state.time.0.wrapping_add(12));
 
@@ -144,8 +144,13 @@ impl Executive {
                     }
                     state.last_drift_comp_time = state.time;
                 }
-                // DSKY display emission is deferred — the row-encoding design
-                // is a separate milestone.
+
+                // Emit the full DSKY row stream (21 rows + 10 lamps) every
+                // 120 ms. decode_dsky is pure-computation; emit_dsky_to_hw
+                // issues write_row / set_lamp calls to the bridge via UART.
+                let frame = crate::services::pinball::decode_dsky(&state.dsky);
+                crate::services::pinball::emit_dsky_to_hw(&frame, hw.dsky());
+                hw.dsky().set_flash(state.dsky.flashing);
             }
 
             // ── Drain DSKY keyqueue → V/N state machine ───────────────────────
@@ -167,6 +172,17 @@ impl Executive {
             // ── Translate staging fields written by tasks/jobs to HAL calls ───
             process_rcs_staging(state, hw);
             process_engine_staging(state, hw);
+
+            // ── Foreground PIPA accumulator ────────────────────────────────────
+            // read_pipa is destructive: returns counts since the last call and
+            // resets the hardware counters. Saturating-add into state.pipa_counts
+            // so servicer_task sees the cumulative 2-second total on its next
+            // dispatch. servicer_task resets the field after consuming (see
+            // services/average_g.rs step 2).
+            let new_pipa = hw.imu().read_pipa();
+            for (acc, &delta) in state.pipa_counts.iter_mut().zip(new_pipa.iter()) {
+                *acc = acc.saturating_add(delta);
+            }
 
             // ── Lazy T3 re-arm: only write timer registers if the front changed.
             let new_front = state.waitlist.front_delta();

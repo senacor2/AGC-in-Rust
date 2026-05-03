@@ -285,8 +285,7 @@ pub fn compute_csi_delta_v(
         let (r_c_cdh, v_c_cdh) = kepler_step(r_c, v_post_csi, dt_csi_to_cdh, mu);
 
         // c) Compute required CDH ΔV. Extract W-axis component.
-        let dv_cdh_w = match compute_cdh_delta_v(r_c_cdh, v_c_cdh, r_t_cdh, v_t_cdh, delta_h, mu)
-        {
+        let dv_cdh_w = match compute_cdh_delta_v(r_c_cdh, v_c_cdh, r_t_cdh, v_t_cdh, delta_h, mu) {
             Ok(r) => r.dv_lvlh[2],
             Err(CdhError::DegenerateState) => return Err(CsiError::DegenerateState),
             Err(CdhError::DegenerateGeometry) => return Err(CsiError::NotConverged),
@@ -311,10 +310,9 @@ pub fn compute_csi_delta_v(
             v_c[2] + (dv_s + eps) * s_hat[2],
         ];
         let (r_c_cdh_p, v_c_cdh_p) = kepler_step(r_c, v_perturbed, dt_csi_to_cdh, mu);
-        let dv_cdh_w_p =
-            compute_cdh_delta_v(r_c_cdh_p, v_c_cdh_p, r_t_cdh, v_t_cdh, delta_h, mu)
-                .map(|r| r.dv_lvlh[2])
-                .unwrap_or(dv_cdh_w);
+        let dv_cdh_w_p = compute_cdh_delta_v(r_c_cdh_p, v_c_cdh_p, r_t_cdh, v_t_cdh, delta_h, mu)
+            .map(|r| r.dv_lvlh[2])
+            .unwrap_or(dv_cdh_w);
 
         let d_dv_cdh_w_d_dv_s = (dv_cdh_w_p - dv_cdh_w) / eps;
 

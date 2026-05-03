@@ -199,7 +199,10 @@ mod tests {
             }
         }
         assert_eq!(state.imu_alignment_state, ImuAlignmentState::CoarseAligned);
-        assert!(!state.dsky.flashing, "flashing must clear after successful mark");
+        assert!(
+            !state.dsky.flashing,
+            "flashing must clear after successful mark"
+        );
         assert_eq!(state.dsky.noun, NOUN_REFSMMAT_OK);
         assert_eq!(state.alarm.code, 0, "no alarm on success");
     }
@@ -309,18 +312,17 @@ mod tests {
     fn tc_p52_4_collinear_preserves_refsmmat() {
         let mut state = AgcState::new();
         // Seed a non-identity REFSMMAT.
-        let prior = [
-            [0.0, 1.0, 0.0],
-            [-1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0],
-        ];
+        let prior = [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
         state.refsmmat = prior;
         state.imu_alignment_state = ImuAlignmentState::FineAligned;
 
         p52_mark_align(&mut state, E1, E1, E1, E1);
 
         assert_eq!(state.alarm.code, ALARM_COLLINEAR_STARS);
-        assert_eq!(state.refsmmat, prior, "refsmmat must survive collinear error");
+        assert_eq!(
+            state.refsmmat, prior,
+            "refsmmat must survive collinear error"
+        );
         assert_eq!(
             state.imu_alignment_state,
             ImuAlignmentState::FineAligned,

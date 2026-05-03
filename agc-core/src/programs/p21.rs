@@ -102,25 +102,25 @@ pub struct GroundTrackResult {
 /// Spec: p21_p22-spec.md §4.1
 pub fn p21_init(state: &mut AgcState) -> JobPriority {
     state.major_mode = P21_MAJOR_MODE;
-    state.dsky.prog  = P21_MAJOR_MODE;
+    state.dsky.prog = P21_MAJOR_MODE;
 
     // Precondition: non-zero CSM epoch.
     if state.csm_state.epoch.to_seconds() == 0.0 {
         state.alarm.code = ALARM_NO_CSM_SV;
-        state.alarm.lit  = true;
-        state.dsky.verb  = 6;
-        state.dsky.noun  = 43;
-        state.dsky.r[0]  = 0.0;
-        state.dsky.r[1]  = 0.0;
-        state.dsky.r[2]  = 0.0;
+        state.alarm.lit = true;
+        state.dsky.verb = 6;
+        state.dsky.noun = 43;
+        state.dsky.r[0] = 0.0;
+        state.dsky.r[1] = 0.0;
+        state.dsky.r[2] = 0.0;
         return P21_PRIORITY;
     }
 
-    let epoch_s      = state.csm_state.epoch.to_seconds();
+    let epoch_s = state.csm_state.epoch.to_seconds();
     let target_get_s = state.time.to_seconds();
-    let csm_pos      = state.csm_state.position;
-    let csm_vel      = state.csm_state.velocity;
-    let gha_epoch    = state.gha_epoch_rad;
+    let csm_pos = state.csm_state.position;
+    let csm_vel = state.csm_state.velocity;
+    let gha_epoch = state.gha_epoch_rad;
 
     let result = p21_compute_ground_track(csm_pos, csm_vel, epoch_s, target_get_s, gha_epoch);
 
@@ -129,11 +129,11 @@ pub fn p21_init(state: &mut AgcState) -> JobPriority {
     // R2: longitude (degrees × 100, cast to f32)
     // R3: altitude  (km × 10, cast to f32)
     const RAD_TO_DEG: f64 = 180.0 / core::f64::consts::PI;
-    state.dsky.verb  = 6;
-    state.dsky.noun  = 43;
-    state.dsky.r[0]  = (result.lat_rad * RAD_TO_DEG * 100.0) as f32;
-    state.dsky.r[1]  = (result.lon_rad * RAD_TO_DEG * 100.0) as f32;
-    state.dsky.r[2]  = (result.alt_m / 100.0) as f32; // km × 10
+    state.dsky.verb = 6;
+    state.dsky.noun = 43;
+    state.dsky.r[0] = (result.lat_rad * RAD_TO_DEG * 100.0) as f32;
+    state.dsky.r[1] = (result.lon_rad * RAD_TO_DEG * 100.0) as f32;
+    state.dsky.r[2] = (result.alt_m / 100.0) as f32; // km × 10
     state.dsky.flashing = false;
 
     P21_PRIORITY
@@ -161,10 +161,10 @@ pub fn p21_init(state: &mut AgcState) -> JobPriority {
 ///
 /// Spec: p21_p22-spec.md §6.1
 pub fn p21_compute_ground_track(
-    csm_pos:       Vec3,
-    csm_vel:       Vec3,
-    epoch_s:       f64,
-    target_get_s:  f64,
+    csm_pos: Vec3,
+    csm_vel: Vec3,
+    epoch_s: f64,
+    target_get_s: f64,
     gha_epoch_rad: f64,
 ) -> GroundTrackResult {
     // Step 1 — Propagate CSM state to target GET.
@@ -180,22 +180,25 @@ pub fn p21_compute_ground_track(
     // Step 2 — Compute GHA at target GET.
     // gha is unbounded; we normalise to [0, 2π) for the rotation step.
     let gha_raw = gha_epoch_rad + OMEGA_EARTH * target_get_s;
-    let two_pi  = 2.0 * core::f64::consts::PI;
-    let gha     = gha_raw - libm::floor(gha_raw / two_pi) * two_pi;
+    let two_pi = 2.0 * core::f64::consts::PI;
+    let gha = gha_raw - libm::floor(gha_raw / two_pi) * two_pi;
 
     // Step 3 — Rotate inertial position to Earth-fixed frame (Rz(+gha)).
     let cos_gha = libm::cos(gha);
     let sin_gha = libm::sin(gha);
     let pos_ef: Vec3 = [
-         pos_t[0] * cos_gha + pos_t[1] * sin_gha,
+        pos_t[0] * cos_gha + pos_t[1] * sin_gha,
         -pos_t[0] * sin_gha + pos_t[1] * cos_gha,
-         pos_t[2],
+        pos_t[2],
     ];
 
     // Step 4 — Extract geocentric latitude, longitude, and altitude.
     let r_mag = norm(pos_ef);
     // norm == 0 is physically impossible in orbit; panic is appropriate.
-    assert!(r_mag > 0.0, "P21: CSM position magnitude is zero — physically impossible");
+    assert!(
+        r_mag > 0.0,
+        "P21: CSM position magnitude is zero — physically impossible"
+    );
 
     let lat = libm::asin(pos_ef[2] / r_mag);
     let lon = libm::atan2(pos_ef[1], pos_ef[0]);
@@ -205,7 +208,7 @@ pub fn p21_compute_ground_track(
     GroundTrackResult {
         lat_rad: lat,
         lon_rad: lon,
-        alt_m:   alt,
+        alt_m: alt,
     }
 }
 
@@ -228,7 +231,8 @@ mod tests {
         let target_get_s = 1000.0_f64; // same epoch — no propagation
         let gha_epoch_rad = 0.0_f64;
 
-        let result = p21_compute_ground_track(csm_pos, csm_vel, epoch_s, target_get_s, gha_epoch_rad);
+        let result =
+            p21_compute_ground_track(csm_pos, csm_vel, epoch_s, target_get_s, gha_epoch_rad);
 
         // GHA at GET=1000 s = OMEGA_EARTH * 1000 ≈ 0.07292 rad.
         // The Earth has rotated east by that amount, so the sub-satellite longitude
@@ -320,7 +324,7 @@ mod tests {
         // At the northernmost point of the ground track:
         // csm_pos[2] = r * sin(inc), and the spacecraft is at the top of the orbital plane.
         let csm_pos_z = r * libm::sin(inc_rad); // ≈ 5_299_000 m
-        // X component chosen so that norm(csm_pos) = r.
+                                                // X component chosen so that norm(csm_pos) = r.
         let csm_pos_x = libm::sqrt(r * r - csm_pos_z * csm_pos_z);
         let csm_pos: Vec3 = [csm_pos_x, 0.0, csm_pos_z];
 
@@ -330,14 +334,18 @@ mod tests {
         let target_get_s = 0.0_f64; // same epoch — no propagation
         let gha_epoch_rad = 0.0_f64;
 
-        let result = p21_compute_ground_track(csm_pos, csm_vel, epoch_s, target_get_s, gha_epoch_rad);
+        let result =
+            p21_compute_ground_track(csm_pos, csm_vel, epoch_s, target_get_s, gha_epoch_rad);
 
         // Expected latitude: asin(csm_pos_z / r) = asin(sin(inc)) = inc.
         let expected_lat = libm::asin(csm_pos_z / r);
         assert!(
             libm::fabs(result.lat_rad - expected_lat) < 0.01,
             "lat_rad should be ≈ asin({}/{}) = {}; got {}",
-            csm_pos_z, r, expected_lat, result.lat_rad
+            csm_pos_z,
+            r,
+            expected_lat,
+            result.lat_rad
         );
     }
 }

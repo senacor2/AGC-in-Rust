@@ -96,11 +96,7 @@ pub fn lvlh_matrix(r_target: Vec3, v_target: Vec3) -> Mat3x3 {
         norm(r_target) != 0.0,
         "lvlh_matrix: r_target is the zero vector; LVLH frame undefined"
     );
-    let z_hat = unit([
-        -r_target[0],
-        -r_target[1],
-        -r_target[2],
-    ]);
+    let z_hat = unit([-r_target[0], -r_target[1], -r_target[2]]);
 
     // y_hat: out-of-plane (opposite angular momentum); panics for radial flight.
     assert!(
@@ -416,7 +412,7 @@ mod tests {
         let r_t: Vec3 = [7_000_000.0, 0.0, 0.0];
         let v_t: Vec3 = [0.0, 7500.0, 0.0];
         let r_a: Vec3 = [7_010_000.0, 0.0, 0.0]; // 10 km radially outside
-        let v_a: Vec3 = [-20.0, 7500.0, 0.0];    // −20 m/s radially inward
+        let v_a: Vec3 = [-20.0, 7500.0, 0.0]; // −20 m/s radially inward
 
         let rdot = range_rate(r_a, v_a, r_t, v_t);
 
@@ -493,8 +489,10 @@ mod tests {
         let los = los_angles_lvlh(&lvlh);
 
         // elevation = atan2(-1000, sqrt(1000^2 + 1000^2))
-        let expected_el =
-            libm::atan2(-1000.0_f64, libm::sqrt(1000.0_f64 * 1000.0 + 1000.0_f64 * 1000.0));
+        let expected_el = libm::atan2(
+            -1000.0_f64,
+            libm::sqrt(1000.0_f64 * 1000.0 + 1000.0_f64 * 1000.0),
+        );
         // azimuth = atan2(1000, 1000) = π/4
         let expected_az = core::f64::consts::FRAC_PI_4;
 
@@ -520,7 +518,7 @@ mod tests {
         let r_t: Vec3 = [7_000_000.0, 0.0, 0.0];
         let v_t: Vec3 = [0.0, 7500.0, 0.0];
         let r_a: Vec3 = [7_000_000.0, 10_000.0, 0.0]; // 10 km ahead in-track
-        let v_a: Vec3 = [0.0, 7490.0, 0.0];            // 10 m/s slower → closing
+        let v_a: Vec3 = [0.0, 7490.0, 0.0]; // 10 m/s slower → closing
 
         let tca = time_to_closest_approach(r_a, v_a, r_t, v_t);
 

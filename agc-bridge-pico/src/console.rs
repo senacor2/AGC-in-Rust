@@ -98,17 +98,83 @@ impl UsbConsole {
         let _ = self.serial.write(bytes);
     }
 
+    /// Decode a `DskyWriteRow` row number and data word into a human-readable
+    /// field description, according to the ADR-019 row-encoding table.
+    ///
+    /// Returns a `heapless::String<48>` suitable for appending to the log line.
+    /// Unknown row numbers fall back to a raw hex representation.
+    fn decode_dsky_row(row: u8, data: u16) -> heapless::String<48> {
+        use core::fmt::Write as FmtWrite;
+        let mut s = heapless::String::<48>::new();
+        let _ = match row {
+            0 => {
+                let tens = (data >> 4) & 0xF;
+                let units = data & 0xF;
+                write!(s, "PROG={}{}", tens, units)
+            }
+            1 => {
+                let tens = (data >> 4) & 0xF;
+                let units = data & 0xF;
+                write!(s, "VERB={}{}", tens, units)
+            }
+            2 => {
+                let tens = (data >> 4) & 0xF;
+                let units = data & 0xF;
+                write!(s, "NOUN={}{}", tens, units)
+            }
+            3 | 9 | 15 => {
+                let reg = match row {
+                    9 => "R2",
+                    15 => "R3",
+                    _ => "R1",
+                };
+                let sign = match data {
+                    1 => "+",
+                    2 => "-",
+                    _ => "blank",
+                };
+                write!(s, "{} sign={}", reg, sign)
+            }
+            4..=8 => {
+                let digit = data & 0xF;
+                let idx = row - 4;
+                if digit == 0xF {
+                    write!(s, "R1[{}]=blank", idx)
+                } else {
+                    write!(s, "R1[{}]={}", idx, digit)
+                }
+            }
+            10..=14 => {
+                let digit = data & 0xF;
+                let idx = row - 10;
+                if digit == 0xF {
+                    write!(s, "R2[{}]=blank", idx)
+                } else {
+                    write!(s, "R2[{}]={}", idx, digit)
+                }
+            }
+            16..=20 => {
+                let digit = data & 0xF;
+                let idx = row - 16;
+                if digit == 0xF {
+                    write!(s, "R3[{}]=blank", idx)
+                } else {
+                    write!(s, "R3[{}]={}", idx, digit)
+                }
+            }
+            _ => write!(s, "row={} data=0x{:04X}", row, data),
+        };
+        s
+    }
+
     /// Pretty-print one decoded AGC→bridge message to the console.
     pub fn log_agc_msg(&mut self, msg: &Msg) {
         use core::fmt::Write as FmtWrite;
         let mut buf = heapless::String::<128>::new();
         let _ = match msg {
             Msg::DskyWriteRow { row, data } => {
-                write!(
-                    buf,
-                    "AGC> DSKY_WRITE_ROW row={} data=0x{:03X}\r\n",
-                    row, data
-                )
+                let decoded = Self::decode_dsky_row(*row, *data);
+                write!(buf, "AGC> DSKY row={} {}\r\n", row, decoded.as_str())
             }
             Msg::DskyClearRow { row } => {
                 write!(buf, "AGC> DSKY_CLEAR_ROW row={}\r\n", row)

@@ -322,6 +322,33 @@ After the ISR drain loop, each iteration also: drains the DSKY key queue into `s
 
 ---
 
+## ADR-019: DSKY Row Encoding for the Bridge Link
+
+**Date**: 2026-05-03 | **Status**: Accepted
+
+**Decision**: Use a per-row, per-field encoding for `DskyWriteRow` messages rather than porting the original AGC relay matrix. The layout uses 21 rows (rows 0–20): rows 0–2 for PROG/VERB/NOUN (tens nibble in bits 7–4, units in bits 3–0), followed by sign + 5 digits for each of R1 (rows 3–8), R2 (rows 9–14), and R3 (rows 15–20). Digits are raw BCD (0x0–0x9); 0xF indicates a blank digit. Indicator lamps travel through the existing `DskySetLamp` messages; the V/N flash through `DskySetFlash`. All 21 rows are emitted on every T4RUPT (every 120 ms).
+
+**Why not the original relay matrix**: The Block 2 AGC DSKY relay matrix packed 5 digits plus sign across 12 relay coils per row in an SC-prefix scheme (14 rows per full display cycle). Porting that scheme would require the bridge firmware to decode a compact relay-coil bitmask back into digits before rendering — adding complexity with no benefit on modern hardware. The original design was a constraint of 1960s electromechanical relay technology.
+
+**Why 21 rows instead of 14**: The per-field design maps exactly one logical display element (one PROG/VERB/NOUN field, one register sign, or one digit) per row. This simplifies the bridge renderer: each incoming row is a direct field update. The 7-frame overhead (21 vs 14) is negligible at 460 800 baud — the 21 rows plus 10 lamp messages plus the flash message total roughly 24 frames of 6 bytes each = 144 bytes per 120 ms refresh, equivalent to ~1 KB/s, well under 1 % of link bandwidth.
+
+**Trade-off summary**:
+
+| Criterion              | AGC relay matrix (14 rows) | This design (21 rows) |
+|------------------------|----------------------------|-----------------------|
+| Wire bytes per refresh | ~84 (14 × 6)               | ~126 (21 × 6)         |
+| Bridge decode effort   | Non-trivial (coil bitmask) | Trivial (nibble split) |
+| Field granularity      | Multi-field per row         | One field per row     |
+| Extension cost         | Relay schema must be re-engineered | Add a new row number |
+
+**Affected files**:
+- `agc-core/src/services/pinball.rs` — `emit_dsky_to_hw` function
+- `agc-core/src/executive/scheduler.rs` — T4 drain calls `emit_dsky_to_hw` + `set_flash`
+- `agc-bridge-pico/src/console.rs` — `decode_dsky_row` pretty-printer
+- `docs/external-peripheral-protocol.md` — row encoding table
+
+---
+
 ## Open / Proposed ADRs
 
 | ID | Topic | Status |

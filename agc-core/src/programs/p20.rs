@@ -19,8 +19,9 @@
 
 use crate::executive::job::JobPriority;
 use crate::executive::waitlist::ScheduleResult;
-use crate::guidance::rendezvous::{los_angles_lvlh, range, range_rate, relative_state_lvlh,
-                                   LvlhState};
+use crate::guidance::rendezvous::{
+    los_angles_lvlh, range, range_rate, relative_state_lvlh, LvlhState,
+};
 use crate::math::kepler::kepler_step;
 use crate::math::linalg::{dot, norm, unit, vsub};
 use crate::navigation::gravity::{MU_EARTH, MU_MOON};
@@ -169,16 +170,19 @@ impl Default for RendezvousNavState {
     /// Spec: p20-spec.md §3.3
     fn default() -> Self {
         Self {
-            target_pos:              [0.0; 3],
-            target_vel:              [0.0; 3],
-            target_epoch:            0.0,
-            w_matrix:                [[0.0; 6]; 6],
-            last_mark_time:          0.0,
-            mark_count:              0,
-            reject_count:            0,
+            target_pos: [0.0; 3],
+            target_vel: [0.0; 3],
+            target_epoch: 0.0,
+            w_matrix: [[0.0; 6]; 6],
+            last_mark_time: 0.0,
+            mark_count: 0,
+            reject_count: 0,
             consecutive_reject_count: 0,
-            lvlh_state:              LvlhState { rho: [0.0; 3], rho_dot: [0.0; 3] },
-            tracking_active:         false,
+            lvlh_state: LvlhState {
+                rho: [0.0; 3],
+                rho_dot: [0.0; 3],
+            },
+            tracking_active: false,
         }
     }
 }
@@ -290,8 +294,8 @@ pub fn p20_init(state: &mut AgcState) -> JobPriority {
 
     // ── Precondition: non-zero target state ───────────────────────────────────
     // A zero position and zero velocity at epoch 0 identifies StateVector::ZERO.
-    let target_is_zero = state.target_state.position == [0.0_f64; 3]
-        && state.target_state.velocity == [0.0_f64; 3];
+    let target_is_zero =
+        state.target_state.position == [0.0_f64; 3] && state.target_state.velocity == [0.0_f64; 3];
     if target_is_zero {
         state.alarm.code = ALARM_NO_RADAR;
         state.alarm.lit = true;
@@ -308,12 +312,12 @@ pub fn p20_init(state: &mut AgcState) -> JobPriority {
     // ── Initialise RendezvousNavState from uplinked target SV ─────────────────
     let now_s = state.time.to_seconds();
 
-    state.rendezvous_nav.target_pos     = state.target_state.position;
-    state.rendezvous_nav.target_vel     = state.target_state.velocity;
-    state.rendezvous_nav.target_epoch   = state.target_state.epoch.to_seconds();
+    state.rendezvous_nav.target_pos = state.target_state.position;
+    state.rendezvous_nav.target_vel = state.target_state.velocity;
+    state.rendezvous_nav.target_epoch = state.target_state.epoch.to_seconds();
     state.rendezvous_nav.last_mark_time = now_s;
-    state.rendezvous_nav.mark_count     = 0;
-    state.rendezvous_nav.reject_count   = 0;
+    state.rendezvous_nav.mark_count = 0;
+    state.rendezvous_nav.reject_count = 0;
     state.rendezvous_nav.consecutive_reject_count = 0;
     state.rendezvous_nav.tracking_active = true;
 
@@ -331,7 +335,10 @@ pub fn p20_init(state: &mut AgcState) -> JobPriority {
 
     // ── Install the periodic nav-cycle hook via the Waitlist ──────────────────
     // Override 1: use Waitlist, not servicer_exit.
-    match state.waitlist.schedule(NAV_CYCLE_CS, p20_rendezvous_nav_cycle) {
+    match state
+        .waitlist
+        .schedule(NAV_CYCLE_CS, p20_rendezvous_nav_cycle)
+    {
         ScheduleResult::Full => {
             state.alarm.code = ALARM_WAITLIST_FULL;
             state.alarm.lit = true;
@@ -396,8 +403,8 @@ pub fn p20_rendezvous_nav_cycle(state: &mut AgcState) {
             dt_prop,
             mu,
         );
-        state.rendezvous_nav.target_pos   = new_pos;
-        state.rendezvous_nav.target_vel   = new_vel;
+        state.rendezvous_nav.target_pos = new_pos;
+        state.rendezvous_nav.target_vel = new_vel;
         state.rendezvous_nav.target_epoch = now_s;
     }
 
@@ -432,13 +439,13 @@ pub fn p20_rendezvous_nav_cycle(state: &mut AgcState) {
     //     opposite to range_rate sign, hence the negation).
     // R3: elevation angle (rad) from LVLH local horizontal to LOS.
     let rdot = range_rate(csm_pos, csm_vel, tgt_pos, tgt_vel);
-    let los  = los_angles_lvlh(&state.rendezvous_nav.lvlh_state);
+    let los = los_angles_lvlh(&state.rendezvous_nav.lvlh_state);
 
-    state.dsky.verb  = 16;
-    state.dsky.noun  = 54;
-    state.dsky.r[0]  = rng as f32;
-    state.dsky.r[1]  = (-rdot) as f32;  // positive = closing per N54 convention
-    state.dsky.r[2]  = los.elevation as f32;
+    state.dsky.verb = 16;
+    state.dsky.noun = 54;
+    state.dsky.r[0] = rng as f32;
+    state.dsky.r[1] = (-rdot) as f32; // positive = closing per N54 convention
+    state.dsky.r[2] = los.elevation as f32;
     state.dsky.flashing = false;
 
     // ── Step 5: Re-schedule if still in P20 ───────────────────────────────────
@@ -465,7 +472,7 @@ pub fn p20_incorporate_radar_mark(state: &mut AgcState, mark: RadarMark) {
     let tgt_pos = state.rendezvous_nav.target_pos;
 
     let rho_vec = vsub(tgt_pos, csm_pos);
-    let rng     = norm(rho_vec);
+    let rng = norm(rho_vec);
 
     // Edge case (b): terminal proximity.
     if rng < MIN_TRACKING_RANGE_M {
@@ -476,7 +483,7 @@ pub fn p20_incorporate_radar_mark(state: &mut AgcState, mark: RadarMark) {
     if mark.range_valid {
         // §6.2: predicted range.
         let z_predicted = rng;
-        let residual    = mark.range_m - z_predicted;
+        let residual = mark.range_m - z_predicted;
 
         // §6.4: sensitivity vector b for range.
         // b[0..3] = rho_vec / rng  (= los_hat)
@@ -508,9 +515,9 @@ pub fn p20_incorporate_radar_mark(state: &mut AgcState, mark: RadarMark) {
     if mark.range_rate_valid {
         let tgt_pos2 = state.rendezvous_nav.target_pos;
         let tgt_vel2 = state.rendezvous_nav.target_vel;
-        let rho2     = vsub(tgt_pos2, csm_pos);
-        let rhodot2  = vsub(tgt_vel2, csm_vel);
-        let rng2     = norm(rho2);
+        let rho2 = vsub(tgt_pos2, csm_pos);
+        let rhodot2 = vsub(tgt_vel2, csm_vel);
+        let rng2 = norm(rho2);
 
         if rng2 < MIN_TRACKING_RANGE_M {
             return;
@@ -518,7 +525,7 @@ pub fn p20_incorporate_radar_mark(state: &mut AgcState, mark: RadarMark) {
 
         // §6.2: predicted range-rate.
         let z_predicted = dot(rho2, rhodot2) / rng2;
-        let residual    = mark.range_rate_mps - z_predicted;
+        let residual = mark.range_rate_mps - z_predicted;
 
         // §6.4: sensitivity vector b for range-rate.
         // b[0..3] = rho_dot_vec / rng - (dot(rho, rho_dot) / rng^3) * rho
@@ -560,7 +567,7 @@ pub fn p20_incorporate_sextant_mark(state: &mut AgcState, mark: SextantMark) {
     let csm_pos = state.csm_state.position;
     let tgt_pos = state.rendezvous_nav.target_pos;
     let rho_vec = vsub(tgt_pos, csm_pos);
-    let rng     = norm(rho_vec);
+    let rng = norm(rho_vec);
 
     // Edge case (b): terminal proximity.
     if rng < MIN_TRACKING_RANGE_M {
@@ -575,7 +582,7 @@ pub fn p20_incorporate_sextant_mark(state: &mut AgcState, mark: SextantMark) {
         LosComponent::Z => 2_usize,
     };
     let z_predicted = los_hat[c];
-    let residual    = mark.los_inertial[c] - z_predicted;
+    let residual = mark.los_inertial[c] - z_predicted;
 
     // §6.4: sensitivity vector b for sextant LOS component c.
     // b[0..3] = (e_c - los_hat[c] * los_hat) / rng
@@ -612,16 +619,16 @@ pub fn p20_incorporate_sextant_mark(state: &mut AgcState, mark: SextantMark) {
 /// Spec: p20-spec.md §4.5
 pub fn p20_rectify_w_matrix(state: &mut AgcState) {
     p20_rectify_w_matrix_internal(state);
-    state.rendezvous_nav.mark_count  = 0;
+    state.rendezvous_nav.mark_count = 0;
     state.rendezvous_nav.reject_count = 0;
     state.rendezvous_nav.last_mark_time = state.time.to_seconds();
 
     // Confirm action by showing V06 N49 on DSKY (O'Brien p. 312, §8.5).
-    state.dsky.verb  = 6;
-    state.dsky.noun  = 49;
-    state.dsky.r[0]  = 0.0;
-    state.dsky.r[1]  = 0.0;
-    state.dsky.r[2]  = 0.0;
+    state.dsky.verb = 6;
+    state.dsky.noun = 49;
+    state.dsky.r[0] = 0.0;
+    state.dsky.r[1] = 0.0;
+    state.dsky.r[2] = 0.0;
 }
 
 // ── Private helpers ────────────────────────────────────────────────────────────
@@ -683,7 +690,7 @@ fn scalar_measurement_update(
 
     if outcome == UpdateOutcome::AcceptedWOverflow {
         state.alarm.code = ALARM_W_OVERFLOW;
-        state.alarm.lit  = true;
+        state.alarm.lit = true;
         p20_rectify_w_matrix(state);
         return UpdateOutcome::Accepted;
     }
@@ -700,7 +707,7 @@ fn scalar_measurement_update(
 fn check_consecutive_rejects(state: &mut AgcState) {
     if state.rendezvous_nav.consecutive_reject_count >= 5 {
         state.alarm.code = ALARM_REJECT_OVERRIDE;
-        state.alarm.lit  = true;
+        state.alarm.lit = true;
         state.rendezvous_nav.tracking_active = false;
     }
 }
@@ -715,10 +722,13 @@ fn reschedule_if_active(state: &mut AgcState) {
     if state.major_mode != P20_MAJOR_MODE {
         return;
     }
-    match state.waitlist.schedule(NAV_CYCLE_CS, p20_rendezvous_nav_cycle) {
+    match state
+        .waitlist
+        .schedule(NAV_CYCLE_CS, p20_rendezvous_nav_cycle)
+    {
         ScheduleResult::Full => {
             state.alarm.code = ALARM_WAITLIST_FULL;
-            state.alarm.lit  = true;
+            state.alarm.lit = true;
         }
         _ => {}
     }
@@ -727,8 +737,8 @@ fn reschedule_if_active(state: &mut AgcState) {
 /// Select gravitational parameter for the current navigation frame.
 fn mu_for_frame(frame: Frame) -> f64 {
     match frame {
-        Frame::MoonInertial  => MU_MOON,
-        _                    => MU_EARTH,
+        Frame::MoonInertial => MU_MOON,
+        _ => MU_EARTH,
     }
 }
 
@@ -737,9 +747,9 @@ fn mu_for_frame(frame: Frame) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AgcState;
     use crate::navigation::state_vector::{Frame, StateVector};
     use crate::types::Met;
+    use crate::AgcState;
 
     // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -782,7 +792,10 @@ mod tests {
         assert_eq!(state.dsky.prog, 20, "dsky.prog must be 20");
 
         // Tracking active, no alarm
-        assert!(state.rendezvous_nav.tracking_active, "tracking_active must be true");
+        assert!(
+            state.rendezvous_nav.tracking_active,
+            "tracking_active must be true"
+        );
         assert_eq!(state.alarm.code, 0, "no alarm on happy path");
 
         // Target position initialised from uplinked SV
@@ -810,7 +823,10 @@ mod tests {
         );
 
         // Counters reset
-        assert_eq!(state.rendezvous_nav.mark_count, 0, "mark_count must be 0 on init");
+        assert_eq!(
+            state.rendezvous_nav.mark_count, 0,
+            "mark_count must be 0 on init"
+        );
 
         // Nav cycle hook installed in waitlist (override 1: use Waitlist not servicer_exit)
         assert!(
@@ -838,10 +854,16 @@ mod tests {
 
         p20_init(&mut state);
 
-        assert!(!state.rendezvous_nav.tracking_active, "tracking_active must be false");
+        assert!(
+            !state.rendezvous_nav.tracking_active,
+            "tracking_active must be false"
+        );
         assert_eq!(state.alarm.code, ALARM_NO_RADAR, "alarm must be 00404");
         assert!(state.alarm.lit, "alarm.lit must be true");
-        assert_eq!(state.major_mode, 20, "major_mode IS advanced to 20 even on alarm");
+        assert_eq!(
+            state.major_mode, 20,
+            "major_mode IS advanced to 20 even on alarm"
+        );
     }
 
     // ── TC-P20-3: Three radar marks converge the estimate ─────────────────────
@@ -893,7 +915,10 @@ mod tests {
 
         // Counters
         assert_eq!(state.rendezvous_nav.mark_count, 3, "mark_count must be 3");
-        assert_eq!(state.rendezvous_nav.reject_count, 0, "reject_count must be 0");
+        assert_eq!(
+            state.rendezvous_nav.reject_count, 0,
+            "reject_count must be 0"
+        );
         assert_eq!(state.alarm.code, 0, "no alarm after clean marks");
 
         // Rough convergence: position estimate should be within 100 m of truth
@@ -954,14 +979,17 @@ mod tests {
         for i in 0..3 {
             assert!(
                 libm::fabs(state.rendezvous_nav.target_pos[i] - pos_after_mark2[i]) < 1e-9,
-                "target_pos[{}] must not change after rejected mark", i
+                "target_pos[{}] must not change after rejected mark",
+                i
             );
         }
         for i in 0..6 {
             for j in 0..6 {
                 assert!(
                     libm::fabs(state.rendezvous_nav.w_matrix[i][j] - w_after_mark2[i][j]) < 1e-9,
-                    "w_matrix[{}][{}] must not change after rejected mark", i, j
+                    "w_matrix[{}][{}] must not change after rejected mark",
+                    i,
+                    j
                 );
             }
         }
@@ -969,7 +997,10 @@ mod tests {
             state.rendezvous_nav.mark_count, mark_count_after_mark2,
             "mark_count must not increase after rejected mark"
         );
-        assert_eq!(state.rendezvous_nav.reject_count, 1, "reject_count must be 1");
+        assert_eq!(
+            state.rendezvous_nav.reject_count, 1,
+            "reject_count must be 1"
+        );
     }
 
     // ── TC-P20-5: Five consecutive rejects raise alarm 00405 ──────────────────
@@ -1020,7 +1051,10 @@ mod tests {
             "alarm code must be 00405 (ALARM_REJECT_OVERRIDE)"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");
-        assert!(!state.rendezvous_nav.tracking_active, "tracking_active must be false");
+        assert!(
+            !state.rendezvous_nav.tracking_active,
+            "tracking_active must be false"
+        );
     }
 
     // ── TC-P20-6: W-matrix rectification resets state ─────────────────────────
@@ -1055,7 +1089,10 @@ mod tests {
             p20_incorporate_radar_mark(&mut state, mark);
         }
 
-        assert_eq!(state.rendezvous_nav.mark_count, 3, "precondition: mark_count == 3");
+        assert_eq!(
+            state.rendezvous_nav.mark_count, 3,
+            "precondition: mark_count == 3"
+        );
 
         // Now rectify
         p20_rectify_w_matrix(&mut state);
@@ -1076,15 +1113,22 @@ mod tests {
                 if i != j {
                     assert_eq!(
                         state.rendezvous_nav.w_matrix[i][j], 0.0,
-                        "off-diagonal w_matrix[{}][{}] must be 0.0 after rectification", i, j
+                        "off-diagonal w_matrix[{}][{}] must be 0.0 after rectification",
+                        i, j
                     );
                 }
             }
         }
 
         // Counters reset
-        assert_eq!(state.rendezvous_nav.mark_count, 0, "mark_count must be 0 after rectification");
-        assert_eq!(state.rendezvous_nav.reject_count, 0, "reject_count must be 0 after rectification");
+        assert_eq!(
+            state.rendezvous_nav.mark_count, 0,
+            "mark_count must be 0 after rectification"
+        );
+        assert_eq!(
+            state.rendezvous_nav.reject_count, 0,
+            "reject_count must be 0 after rectification"
+        );
 
         // last_mark_time set to state.time
         assert!(
@@ -1109,7 +1153,10 @@ mod tests {
 
         // Init succeeds with matching frames
         p20_init(&mut state);
-        assert!(state.rendezvous_nav.tracking_active, "precondition: tracking active after init");
+        assert!(
+            state.rendezvous_nav.tracking_active,
+            "precondition: tracking active after init"
+        );
         assert_eq!(state.alarm.code, 0, "precondition: no alarm after init");
 
         // Record LVLH state before the mismatch cycle
@@ -1129,13 +1176,17 @@ mod tests {
             "alarm must be 00400 (ALARM_FRAME_MISMATCH)"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");
-        assert!(!state.rendezvous_nav.tracking_active, "tracking_active must be false");
+        assert!(
+            !state.rendezvous_nav.tracking_active,
+            "tracking_active must be false"
+        );
 
         // LVLH state should not have been updated
         for i in 0..3 {
             assert_eq!(
                 state.rendezvous_nav.lvlh_state.rho[i], lvlh_before[i],
-                "lvlh_state.rho[{}] must not be updated on frame mismatch", i
+                "lvlh_state.rho[{}] must not be updated on frame mismatch",
+                i
             );
         }
     }

@@ -243,7 +243,10 @@ mod tests {
         init_p40(&mut state);
 
         assert_eq!(state.alarm.code, ALARM_TIG_IN_PAST);
-        assert!(state.pending_maneuver.is_some(), "rejected maneuver must persist");
+        assert!(
+            state.pending_maneuver.is_some(),
+            "rejected maneuver must persist"
+        );
     }
 
     /// TC-P40-3: zero delta-V raises alarm 226.
