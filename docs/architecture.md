@@ -519,9 +519,11 @@ pub struct JobEntry {
     pub entry: fn(&mut AgcState),
     /// Major mode that owns this job (for restart dispatch).
     pub major_mode: u8,
-    /// Whether this job has a VAC area (scratch workspace).
-    pub has_vac: bool,
 }
+// Note: the original AGC distinguished NOVAC vs FINDVAC jobs via a `has_vac`
+// flag selecting whether a VAC scratchpad was allocated for the interpretive
+// language. The interpreter is eliminated in this port (ADR-001), so no VAC
+// pool exists and the field has been removed.
 ```
 
 The Executive's main loop (`EXEC`) scans the job table for the highest-priority

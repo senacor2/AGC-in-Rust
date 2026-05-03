@@ -16,10 +16,6 @@ pub struct JobEntry {
     /// Major mode (program number) that created this job.
     /// Used by the restart mechanism to re-dispatch after a power-on restart.
     pub major_mode: u8,
-    /// Whether this job was created via FINDVAC (true) or NOVAC (false).
-    /// Since the interpretive language is eliminated (ADR-001), this is a
-    /// static annotation for diagnostics and alarm 1210 reporting only.
-    pub has_vac: bool,
 }
 
 impl JobEntry {
@@ -28,6 +24,5 @@ impl JobEntry {
         priority: 0,
         entry: |_| {},
         major_mode: 0,
-        has_vac: false,
     };
 }

@@ -174,7 +174,7 @@ pub fn restart(state: &mut AgcState) {
             if let Some(job_fn) = entry.job_entry {
                 state
                     .executive
-                    .create_job(entry.job_priority, job_fn, entry.major_mode, false);
+                    .create_job(entry.job_priority, job_fn, entry.major_mode);
             }
         } else if phase.is_task() {
             // Positive odd phase → re-schedule as Waitlist task.
@@ -187,7 +187,7 @@ pub fn restart(state: &mut AgcState) {
             if let Some(job_fn) = entry.job_entry {
                 state
                     .executive
-                    .create_job(entry.job_priority, job_fn, entry.major_mode, false);
+                    .create_job(entry.job_priority, job_fn, entry.major_mode);
             } else if let Some(task_fn) = entry.task_entry {
                 state.waitlist.schedule(entry.task_delay, task_fn);
             }
@@ -283,7 +283,7 @@ mod tests {
     fn tc_rs_3_clears_scheduler() {
         let mut state = AgcState::new();
         fn dummy(_: &mut AgcState) {}
-        state.executive.create_job(10, dummy, 0, false);
+        state.executive.create_job(10, dummy, 0);
         state.waitlist.schedule(100, dummy);
 
         restart(&mut state);

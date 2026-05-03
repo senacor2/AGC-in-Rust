@@ -2,7 +2,10 @@
 
 /// Executive overflow — no free job slots (the Apollo 11 "1202" alarm).
 pub const EXEC_OVERFLOW: u16 = 1202;
-/// Executive overflow — no free VAC areas.
+/// Executive overflow — no free VAC areas. Unused: the interpretive language
+/// is eliminated in this port (ADR-001), so no VAC pool exists and FINDVAC
+/// has no Rust equivalent. Retained for reference only.
+#[allow(dead_code)]
 pub const NO_VAC: u16 = 1210;
 /// Waitlist overflow — no free task slots.
 pub const WAITLIST_OVERFLOW: u16 = 1211;
