@@ -30,6 +30,7 @@ pub fn init(state: &mut crate::AgcState) -> JobPriority {
 
     // Step 2: cancel any active SPS burn.
     state.burn.burn_active = false;
+    state.burn.armed = false;
     state.engine_thrusting = false;
 
     // Step 3: clear the burn-exit servicer hook.

@@ -161,15 +161,29 @@ pub fn p40_init(state: &mut crate::AgcState) -> JobPriority {
 /// Callback invoked when the crew presses PRO in response to the
 /// P40 V50 N99 engine-arm request.
 ///
-/// Transitions the DAP to Tvc mode (reinitialising the lead-lag
-/// filter at the current trim) and sets `engine_thrusting = true`.
-/// The ISR shim will observe the flag on its next iteration and
-/// assert the SPS-enable discrete.
+/// **Arms** the burn — sets `state.burn.armed = true` — but does NOT
+/// command the SPS on. Actual ignition is gated on `state.time` reaching
+/// `state.burn.tig` and is performed by the DAP's `dap_step` (which
+/// fires every 100 ms): when `armed && time >= tig` the gate sets
+/// `engine_thrusting = true`, transitions the DAP to `Tvc` mode, and
+/// clears `armed`. This matches the real Apollo TIG-countdown
+/// procedure: PRO is the crew arming action, ignition is automatic at
+/// TIG.
+///
+/// Also pre-warms the TVC filter at the current gimbal trim so that
+/// when ignition does occur the lead-lag compensator starts from a
+/// glitch-free state, and switches the DSKY to **V16 N40** — a
+/// continuous monitor of the burn ΔV totals (target / accumulated /
+/// remaining). The crew (or the dsky_sim render loop via
+/// `refresh_monitor_display`) sees R2 climb from 0 toward R1 and R3
+/// fall toward 0 once the burn ignites.
 pub fn p40_arm_engine(state: &mut crate::AgcState) {
-    state.dap_state.mode = DapMode::Tvc;
+    state.burn.armed = true;
     let trim = (state.tvc_state.trim_pitch, state.tvc_state.trim_yaw);
     tvc_init(&mut state.tvc_state, &mut state.tvc_filter, trim);
-    state.engine_thrusting = true;
+    state.dsky.verb = 16;
+    state.dsky.noun = NOUN_BURN_STATUS;
+    state.dsky.flashing = false;
 }
 
 // ── P41 ───────────────────────────────────────────────────────────────────────
@@ -315,10 +329,12 @@ mod tests {
         assert!(!state.engine_thrusting);
     }
 
-    /// TC-P40-6: PRO key in response to V50 N99 arms the SPS engine and
-    /// transitions the DAP to Tvc mode.
+    /// TC-P40-6: PRO key in response to V50 N99 ARMS the burn but does
+    /// not yet ignite the SPS. The DAP's per-cycle ignition gate fires
+    /// the engine only once `state.time >= burn.tig`.
     #[test]
     fn tc_p40_6_pro_arms_engine() {
+        use crate::control::dap::dap_step;
         use crate::services::v_n::{feed_key, Key};
 
         let mut state = AgcState::new();
@@ -331,14 +347,40 @@ mod tests {
         assert!(state.vn.pending_v50.is_some());
         assert_eq!(state.dap_state.mode, DapMode::Maneuver);
         assert!(!state.engine_thrusting);
+        assert!(!state.burn.armed);
 
         feed_key(&mut state, Key::Pro);
 
-        // Post-condition: V50 cleared, Tvc mode, engine thrusting.
+        // Post-PRO: V50 cleared, burn ARMED, but engine still off until TIG.
         assert!(state.vn.pending_v50.is_none());
         assert!(!state.dsky.flashing, "flashing clears on PRO");
-        assert_eq!(state.dap_state.mode, DapMode::Tvc);
+        assert!(
+            state.burn.armed,
+            "PRO must arm the burn for ignition at TIG"
+        );
+        assert!(
+            !state.engine_thrusting,
+            "engine must NOT be commanded on before TIG (state.time < burn.tig)"
+        );
+        // DAP stays in Maneuver until the ignition gate transitions it.
+        assert_eq!(state.dap_state.mode, DapMode::Maneuver);
+
+        // Run the DAP at a time still before TIG: gate must not fire.
+        state.time = Met(360_000 - 10);
+        dap_step(&mut state);
+        assert!(state.burn.armed);
+        assert!(!state.engine_thrusting);
+        assert_eq!(state.dap_state.mode, DapMode::Maneuver);
+
+        // Cross TIG: the next dap_step ignites the engine and switches to Tvc.
+        state.time = Met(360_000);
+        dap_step(&mut state);
+        assert!(
+            !state.burn.armed,
+            "armed must clear once the gate fires the engine"
+        );
         assert!(state.engine_thrusting);
+        assert_eq!(state.dap_state.mode, DapMode::Tvc);
     }
 
     // ── P41 ───────────────────────────────────────────────────────────────────

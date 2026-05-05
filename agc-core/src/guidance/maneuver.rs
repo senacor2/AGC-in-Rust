@@ -54,6 +54,23 @@ pub struct BurnState {
     /// Causes `is_burn_complete` to return `true` even if the delta-V target
     /// has not been reached (runaway engine protection).
     pub cutoff_time_met: bool,
+
+    /// `true` after the crew presses PRO in response to the V50 N99
+    /// engine-arm prompt but before TIG has been reached.
+    ///
+    /// Real-flight semantics: the crew arms the engine in the last few
+    /// seconds before TIG; the AGC must hold off on actually
+    /// commanding `SPS_ENABLE` until the time of ignition is reached
+    /// (firing early would consume burn duration before the targeting
+    /// solution intended). The DAP's per-cycle ignition gate clears
+    /// this flag and sets `state.engine_thrusting = true` when
+    /// `state.time >= burn.tig`. See `dap_step` in
+    /// `agc-core/src/control/dap.rs`.
+    ///
+    /// AGC correspondence: the "TIG-5" countdown logic in
+    /// Comanche055/P40-P47.agc that holds off the engine ON discrete
+    /// until TIME1 reaches `tig`.
+    pub armed: bool,
 }
 
 /// Construct a `BurnState` ready for ignition from a completed targeting solution.
@@ -86,6 +103,7 @@ pub fn burn_init(target: Maneuver) -> BurnState {
         tig: target.tig,
         burn_active: true,
         cutoff_time_met: false,
+        armed: false,
     }
 }
 

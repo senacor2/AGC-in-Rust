@@ -253,6 +253,19 @@ pub fn dap_step(state: &mut crate::AgcState) {
         return;
     }
 
+    // ── P40 ignition gate ─────────────────────────────────────────────────
+    // After PRO arms the burn (`burn.armed = true`), wait until mission
+    // time has reached TIG before commanding the SPS on. This matches
+    // the Apollo TIG-countdown behaviour: PRO is the crew arming
+    // action ~5 seconds before TIG; ignition is automatic at TIG.
+    // Firing earlier would consume burn time before the targeting
+    // solution intended.
+    if state.burn.armed && state.time >= state.burn.tig {
+        state.engine_thrusting = true;
+        state.dap_state.mode = DapMode::Tvc;
+        state.burn.armed = false;
+    }
+
     // Restart protection: phase 1 = "re-schedule as Waitlist task" on restart.
     state.restart.set_phase(GROUP_6, Phase::new(1));
 

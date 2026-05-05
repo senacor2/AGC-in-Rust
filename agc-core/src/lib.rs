@@ -283,6 +283,7 @@ impl AgcState {
                 tig: Met(0),
                 burn_active: false,
                 cutoff_time_met: false,
+                armed: false,
             },
             pending_maneuver: None,
             imu_alignment_state: ImuAlignmentState::Caged,

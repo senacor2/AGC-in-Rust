@@ -7,6 +7,7 @@
 pub mod dsky_ui;
 pub mod hardware;
 pub mod physics;
+pub mod runtime;
 pub mod scenario;
 
 pub use hardware::SimHardware;

@@ -88,6 +88,35 @@ pub enum VnPhase {
         /// Register values committed so far, scaled into target units.
         committed: [f64; 3],
     },
+    /// V71 (P27 block update) — accumulating the starting logical address.
+    /// First step of the P27 multi-keystroke sequence.
+    P27Address {
+        digits: u8,
+        buf: u32,
+    },
+    /// V71 (P27 block update) — accumulating the word count after the
+    /// starting address has been committed.
+    P27Count {
+        /// Starting address committed in the previous step.
+        address: u8,
+        digits: u8,
+        buf: u32,
+    },
+    /// V71 (P27 block update) — accumulating one signed data word at a
+    /// time. Each ENTR commits the word to `address + loaded` via
+    /// `p27_apply_word` and advances `loaded`. When `loaded == count`
+    /// the load completes and the phase returns to `Idle`.
+    P27Data {
+        /// Starting logical address.
+        address: u8,
+        /// Total words to load (1..=P27_MAX_ADDRESS).
+        count: u8,
+        /// Number of words loaded so far (0..count).
+        loaded: u8,
+        sign: i8,
+        digits: u8,
+        buf: u32,
+    },
     /// Operator error — awaiting RSET.
     OprErr,
 }
@@ -216,6 +245,46 @@ fn sync_display(state: &mut crate::AgcState) {
             // — `digits` is reserved for future per-digit display logic.
             let _ = digits;
         }
+        // V71 / P27 sequence — keep the V21 N02 cue lit and reflect
+        // whatever step / accumulator the crew is editing in R1..R3.
+        // R1 = address (committed once entered, otherwise live buf),
+        // R2 = count   (live or committed),
+        // R3 = current data word being edited.
+        P27Address { digits, buf } => {
+            state.dsky.verb = 21;
+            state.dsky.noun = 2;
+            state.dsky.flashing = true;
+            state.dsky.r[0] = if digits > 0 { buf as f32 } else { 0.0 };
+            state.dsky.r[1] = 0.0;
+            state.dsky.r[2] = 0.0;
+        }
+        P27Count {
+            address,
+            digits,
+            buf,
+        } => {
+            state.dsky.verb = 21;
+            state.dsky.noun = 2;
+            state.dsky.flashing = true;
+            state.dsky.r[0] = address as f32;
+            state.dsky.r[1] = if digits > 0 { buf as f32 } else { 0.0 };
+            state.dsky.r[2] = 0.0;
+        }
+        P27Data {
+            address,
+            loaded,
+            sign,
+            buf,
+            ..
+        } => {
+            state.dsky.verb = 21;
+            state.dsky.noun = 2;
+            state.dsky.flashing = true;
+            // R1 shows the address of the word currently being edited.
+            state.dsky.r[0] = (address + loaded) as f32;
+            state.dsky.r[1] = 0.0;
+            state.dsky.r[2] = (sign as i64 * buf as i64) as f32;
+        }
     }
 }
 
@@ -286,10 +355,14 @@ fn feed_key_inner(state: &mut crate::AgcState, key: Key) {
                     raise_opr_err(state);
                     return;
                 }
-                // Verbs that take no noun: V35 (lamp test), V34 (terminate).
+                // Verbs that take no noun: V34, V35, V71, ...
                 if verb_takes_no_noun(buf) {
                     dispatch_verb_noun(state, buf, 0);
-                    if state.vn.phase != OprErr {
+                    // Some no-noun verbs (e.g. V71) transition the phase
+                    // into a multi-step entry state of their own; only
+                    // fall through to Idle if dispatch left the machine
+                    // in the original EnteringVerb phase.
+                    if matches!(state.vn.phase, EnteringVerb { .. }) {
                         state.vn.phase = Idle;
                     }
                 } else {
@@ -416,14 +489,153 @@ fn feed_key_inner(state: &mut crate::AgcState, key: Key) {
             }
             _ => raise_opr_err(state),
         },
+
+        P27Address { digits, buf } => match key {
+            Key::Digit(dg) => {
+                if digits >= 2 {
+                    raise_opr_err(state);
+                    return;
+                }
+                state.vn.phase = P27Address {
+                    digits: digits + 1,
+                    buf: buf * 10 + dg as u32,
+                };
+            }
+            Key::Entr => {
+                if digits == 0 || buf == 0 || buf > P27_MAX_ADDRESS as u32 {
+                    raise_opr_err(state);
+                    return;
+                }
+                state.vn.phase = P27Count {
+                    address: buf as u8,
+                    digits: 0,
+                    buf: 0,
+                };
+            }
+            _ => raise_opr_err(state),
+        },
+
+        P27Count {
+            address,
+            digits,
+            buf,
+        } => match key {
+            Key::Digit(dg) => {
+                if digits >= 2 {
+                    raise_opr_err(state);
+                    return;
+                }
+                state.vn.phase = P27Count {
+                    address,
+                    digits: digits + 1,
+                    buf: buf * 10 + dg as u32,
+                };
+            }
+            Key::Entr => {
+                let count = buf as u8;
+                if digits == 0
+                    || count == 0
+                    || (address as u16 + count as u16) > (P27_MAX_ADDRESS as u16 + 1)
+                {
+                    raise_opr_err(state);
+                    return;
+                }
+                state.vn.phase = P27Data {
+                    address,
+                    count,
+                    loaded: 0,
+                    sign: 1,
+                    digits: 0,
+                    buf: 0,
+                };
+            }
+            _ => raise_opr_err(state),
+        },
+
+        P27Data {
+            address,
+            count,
+            loaded,
+            sign,
+            digits,
+            buf,
+        } => match key {
+            Key::Digit(dg) => {
+                if digits >= 5 {
+                    raise_opr_err(state);
+                    return;
+                }
+                state.vn.phase = P27Data {
+                    address,
+                    count,
+                    loaded,
+                    sign,
+                    digits: digits + 1,
+                    buf: buf * 10 + dg as u32,
+                };
+            }
+            Key::Plus => {
+                if digits != 0 {
+                    raise_opr_err(state);
+                    return;
+                }
+                state.vn.phase = P27Data {
+                    address,
+                    count,
+                    loaded,
+                    sign: 1,
+                    digits,
+                    buf,
+                };
+            }
+            Key::Minus => {
+                if digits != 0 {
+                    raise_opr_err(state);
+                    return;
+                }
+                state.vn.phase = P27Data {
+                    address,
+                    count,
+                    loaded,
+                    sign: -1,
+                    digits,
+                    buf,
+                };
+            }
+            Key::Entr => {
+                let value = sign as i64 * buf as i64;
+                let target = address + loaded;
+                if !p27_apply_word(state, target, value) {
+                    raise_opr_err(state);
+                    return;
+                }
+                let next = loaded + 1;
+                if next < count {
+                    // More words to load.
+                    state.vn.phase = P27Data {
+                        address,
+                        count,
+                        loaded: next,
+                        sign: 1,
+                        digits: 0,
+                        buf: 0,
+                    };
+                } else {
+                    // Block load complete.
+                    state.dsky.flashing = false;
+                    state.vn.phase = Idle;
+                }
+            }
+            _ => raise_opr_err(state),
+        },
     }
 }
 
 // ── Dispatch ──────────────────────────────────────────────────────────────────
 
-/// Returns true for verbs that do not require a noun (V34, V35, etc.).
+/// Returns true for verbs that do not require a noun (V34, V35, V71, ...).
 fn verb_takes_no_noun(verb: u8) -> bool {
-    matches!(verb, 34 | 35)
+    matches!(verb, 34 | 35 | 71)
 }
 
 /// Dispatch a completed VERB+NOUN (or noun-less VERB) command.
@@ -436,6 +648,7 @@ fn dispatch_verb_noun(state: &mut crate::AgcState, verb: u8, noun: u8) {
         34 => v34_terminate(state),
         35 => v35_lamp_test(state),
         37 => v37_program_select(state, noun),
+        71 => v71_p27_block_update(state),
         _ => raise_opr_err(state),
     }
 }
@@ -514,9 +727,16 @@ fn noun_display(state: &crate::AgcState, noun: u8) -> Option<(f32, f32, f32)> {
         // N43 — Lat/Lon/Alt. Placeholder — P21 writes these directly when active.
         43 => Some((0.0, 0.0, 0.0)),
 
-        // N44 — Apogee/Perigee/TFF.
-        //        R1 = apogee altitude (m), R2 = perigee altitude (m),
-        //        R3 = orbital half-period (s).
+        // N44 — Apogee / Perigee / Half-period.
+        //        R1 = apogee altitude (km),   R2 = perigee altitude (km),
+        //        R3 = orbital half-period (min).
+        //
+        // Apollo's N44 carried these in nautical miles ("XXXX.X nmi") and
+        // a "XXbXX min s" mixed format for TFF; the simulator picks plain
+        // SI units (km, min) so each register fits comfortably inside the
+        // DSKY's 5-digit display for any LEO/MEO/HEO orbit. A real-flight
+        // unit pass would re-encode this in nmi×10 / min:s once the DSKY
+        // register format spec lands.
         44 => {
             use crate::math::linalg::cross;
             let r = norm(state.csm_state.position);
@@ -534,12 +754,11 @@ fn noun_display(state: &crate::AgcState, noun: u8) -> Option<(f32, f32, f32)> {
                     // No apoapsis/period for a hyperbolic escape trajectory.
                     Some((0.0, 0.0, 0.0))
                 } else {
-                    let apo = apoapsis_altitude_earth(&el) as f32;
-                    let peri = periapsis_altitude_earth(&el) as f32;
+                    let apo_km = (apoapsis_altitude_earth(&el) / 1000.0) as f32;
+                    let peri_km = (periapsis_altitude_earth(&el) / 1000.0) as f32;
                     let mu = el.mu();
-                    let period_s = orbital_period(&el, mu) as f32;
-                    let half_period = period_s / 2.0;
-                    Some((apo, peri, half_period))
+                    let half_period_min = (orbital_period(&el, mu) / 120.0) as f32;
+                    Some((apo_km, peri_km, half_period_min))
                 }
             } else {
                 Some((0.0, 0.0, 0.0))
@@ -650,6 +869,78 @@ fn v37_program_select(state: &mut crate::AgcState, noun: u8) {
         }
         None => raise_opr_err(state),
     }
+}
+
+// ── V71 / P27 block-address state-vector update ──────────────────────────────
+
+/// Maximum P27 logical address. Six slots cover the full inertial
+/// position (1..=3) and velocity (4..=6) triple.
+const P27_MAX_ADDRESS: u8 = 6;
+
+/// Major mode number for P27 (Update Liaison). The real CMC entered
+/// P27 implicitly when V70/V71/V72/V73 fired; we mirror that behaviour
+/// so the DSKY PROG indicator reflects what is going on while the
+/// crew/uplink is mid-update.
+const P27_MAJOR_MODE: u8 = 27;
+
+/// V71 — P27 "block address" state-vector update.
+///
+/// Begins the multi-keystroke P27 block-update sequence that uplink (and,
+/// equivalently, a crew operator) uses to load consecutive components
+/// of the CSM state vector. Subsequent ENTRs advance through three phases:
+///
+/// ```text
+/// V71 ENTR             → P27Address  (waiting for starting address)
+/// <addr> ENTR          → P27Count    (waiting for word count)
+/// <count> ENTR         → P27Data     (waiting for first signed word)
+/// <±value> ENTR ...    → loops `count` times
+/// ```
+///
+/// The logical address space is simulator-specific (see
+/// [`p27_apply_word`]) because our state vector is stored as Rust
+/// fields rather than at fixed AGC erasable ECADRs. Conceptually
+/// equivalent to Comanche055 V71/V72/V73 in `PINBALL_NOUN_TABLES.agc`.
+fn v71_p27_block_update(state: &mut crate::AgcState) {
+    state.dsky.prog = P27_MAJOR_MODE;
+    // Display V21 N02 (specify address whole) with the FLASH on, the same
+    // pattern Apollo used to cue the operator for a P27 word load.
+    state.dsky.verb = 21;
+    state.dsky.noun = 2;
+    state.dsky.flashing = true;
+    state.dsky.r = [0.0; 3];
+    state.vn.phase = VnPhase::P27Address { digits: 0, buf: 0 };
+}
+
+/// Map a P27 logical address to a state-vector mutation.
+///
+/// Address space (six logical slots):
+///
+/// | Address | Field                 | Crew units |
+/// |---------|-----------------------|------------|
+/// | 1       | csm_state.position[0] | km         |
+/// | 2       | csm_state.position[1] | km         |
+/// | 3       | csm_state.position[2] | km         |
+/// | 4       | csm_state.velocity[0] | m/s        |
+/// | 5       | csm_state.velocity[1] | m/s        |
+/// | 6       | csm_state.velocity[2] | m/s        |
+///
+/// Returns `false` for out-of-range addresses (caller raises OPR ERR).
+/// Always forces `frame = EarthInertial` so a stale Moon-frame state
+/// vector cannot survive a partial position-only update.
+fn p27_apply_word(state: &mut crate::AgcState, address: u8, value: i64) -> bool {
+    use crate::navigation::state_vector::Frame;
+    let v = value as f64;
+    match address {
+        1 => state.csm_state.position[0] = v * 1000.0,
+        2 => state.csm_state.position[1] = v * 1000.0,
+        3 => state.csm_state.position[2] = v * 1000.0,
+        4 => state.csm_state.velocity[0] = v,
+        5 => state.csm_state.velocity[1] = v,
+        6 => state.csm_state.velocity[2] = v,
+        _ => return false,
+    }
+    state.csm_state.frame = Frame::EarthInertial;
+    true
 }
 
 // ── Noun scale table and commit handlers ─────────────────────────────────────
@@ -1177,6 +1468,159 @@ mod tests {
         );
     }
 
+    // ── V71 / P27 block update tests ─────────────────────────────────────
+
+    /// TC-V71-1: Load a 3-word block at address 1 (full position triple).
+    #[test]
+    fn tc_v71_1_block_position_load() {
+        use crate::navigation::state_vector::Frame;
+
+        let mut state = AgcState::new();
+        // Stale Moon frame — must be reset to EarthInertial by p27_apply_word.
+        state.csm_state.frame = Frame::MoonInertial;
+
+        // V71 E 01 E 03 E +6778 E +0 E +0 E
+        feed(&mut state, &[Key::Verb, d(7), d(1), Key::Entr]);
+        // Address = 1 (single-digit accepted)
+        feed_number(&mut state, 1);
+        feed_key(&mut state, Key::Entr);
+        // Count = 3
+        feed_number(&mut state, 3);
+        feed_key(&mut state, Key::Entr);
+        // Word 1 — pos[0] = +6778 km
+        feed_key(&mut state, Key::Plus);
+        feed_number(&mut state, 6778);
+        feed_key(&mut state, Key::Entr);
+        // Word 2 — pos[1] = +0
+        feed_key(&mut state, Key::Plus);
+        feed_number(&mut state, 0);
+        feed_key(&mut state, Key::Entr);
+        // Word 3 — pos[2] = +0
+        feed_key(&mut state, Key::Plus);
+        feed_number(&mut state, 0);
+        feed_key(&mut state, Key::Entr);
+
+        assert_eq!(state.vn.phase, VnPhase::Idle);
+        assert_eq!(state.csm_state.position, [6_778_000.0, 0.0, 0.0]);
+        assert_eq!(state.csm_state.frame, Frame::EarthInertial);
+        assert_eq!(state.dsky.prog, P27_MAJOR_MODE);
+        assert!(!state.dsky.flashing);
+    }
+
+    /// TC-V71-2: Load a 6-word block — full state vector via one V71.
+    #[test]
+    fn tc_v71_2_block_full_state_vector() {
+        let mut state = AgcState::new();
+
+        // V71 E 01 E 06 E [pos…] [vel…]
+        feed(&mut state, &[Key::Verb, d(7), d(1), Key::Entr]);
+        feed_number(&mut state, 1);
+        feed_key(&mut state, Key::Entr);
+        feed_number(&mut state, 6);
+        feed_key(&mut state, Key::Entr);
+
+        for value in [6778, 0, 0] {
+            feed_key(&mut state, Key::Plus);
+            feed_number(&mut state, value);
+            feed_key(&mut state, Key::Entr);
+        }
+        for value in [0, 7669, 0] {
+            feed_key(&mut state, Key::Plus);
+            feed_number(&mut state, value);
+            feed_key(&mut state, Key::Entr);
+        }
+
+        assert_eq!(state.vn.phase, VnPhase::Idle);
+        assert_eq!(state.csm_state.position, [6_778_000.0, 0.0, 0.0]);
+        assert_eq!(state.csm_state.velocity, [0.0, 7669.0, 0.0]);
+    }
+
+    /// TC-V71-3: Negative data words round-trip through the sign handling.
+    #[test]
+    fn tc_v71_3_minus_sign_word() {
+        let mut state = AgcState::new();
+        // V71 E 02 E 01 E -1500 E  → pos[1] = -1_500_000 m
+        feed(&mut state, &[Key::Verb, d(7), d(1), Key::Entr]);
+        feed_number(&mut state, 2);
+        feed_key(&mut state, Key::Entr);
+        feed_number(&mut state, 1);
+        feed_key(&mut state, Key::Entr);
+        feed_key(&mut state, Key::Minus);
+        feed_number(&mut state, 1500);
+        feed_key(&mut state, Key::Entr);
+
+        assert_eq!(state.vn.phase, VnPhase::Idle);
+        assert_eq!(state.csm_state.position[1], -1_500_000.0);
+    }
+
+    /// TC-V71-4: Address 0 is rejected with OPR ERR.
+    #[test]
+    fn tc_v71_4_address_zero_rejected() {
+        let mut state = AgcState::new();
+        feed(&mut state, &[Key::Verb, d(7), d(1), Key::Entr]);
+        feed_number(&mut state, 0);
+        feed_key(&mut state, Key::Entr);
+
+        assert!(state.dsky.opr_err);
+        assert_eq!(state.vn.phase, VnPhase::OprErr);
+    }
+
+    /// TC-V71-5: Address > P27_MAX_ADDRESS is rejected.
+    #[test]
+    fn tc_v71_5_address_out_of_range() {
+        let mut state = AgcState::new();
+        feed(&mut state, &[Key::Verb, d(7), d(1), Key::Entr]);
+        feed_number(&mut state, 7); // P27_MAX_ADDRESS = 6
+        feed_key(&mut state, Key::Entr);
+
+        assert!(state.dsky.opr_err);
+        assert_eq!(state.vn.phase, VnPhase::OprErr);
+    }
+
+    /// TC-V71-6: Address + count overrunning the address space is rejected.
+    #[test]
+    fn tc_v71_6_address_count_overflow() {
+        let mut state = AgcState::new();
+        feed(&mut state, &[Key::Verb, d(7), d(1), Key::Entr]);
+        feed_number(&mut state, 5); // start at velocity[1]
+        feed_key(&mut state, Key::Entr);
+        feed_number(&mut state, 3); // would reach addr 7 → out of range
+        feed_key(&mut state, Key::Entr);
+
+        assert!(state.dsky.opr_err);
+        assert_eq!(state.vn.phase, VnPhase::OprErr);
+    }
+
+    /// TC-V71-7: Count = 0 is rejected.
+    #[test]
+    fn tc_v71_7_zero_count_rejected() {
+        let mut state = AgcState::new();
+        feed(&mut state, &[Key::Verb, d(7), d(1), Key::Entr]);
+        feed_number(&mut state, 1);
+        feed_key(&mut state, Key::Entr);
+        feed_number(&mut state, 0);
+        feed_key(&mut state, Key::Entr);
+
+        assert!(state.dsky.opr_err);
+    }
+
+    /// TC-V71-8: VERB during P27Data restarts the entry cleanly.
+    #[test]
+    fn tc_v71_8_verb_during_data_restarts() {
+        let mut state = AgcState::new();
+        feed(&mut state, &[Key::Verb, d(7), d(1), Key::Entr]);
+        feed_number(&mut state, 1);
+        feed_key(&mut state, Key::Entr);
+        feed_number(&mut state, 3);
+        feed_key(&mut state, Key::Entr);
+
+        // Pressing VERB mid-load aborts the P27 sequence.
+        feed_key(&mut state, Key::Verb);
+        assert_eq!(state.vn.phase, VnPhase::EnteringVerb { digits: 0, buf: 0 });
+        // No state-vector mutation should have happened yet.
+        assert_eq!(state.csm_state.position, [0.0, 0.0, 0.0]);
+    }
+
     /// TC-VND-4: V25 N81 without prior TIG raises alarm 240.
     #[test]
     fn tc_vnd_4_n81_without_tig_alarms() {
@@ -1515,14 +1959,15 @@ mod tests {
     }
 
     /// TC-VN-ND-5: V06 N44 computes apogee/perigee/half-period from CSM state
-    /// in a circular LEO orbit. For a circular orbit apogee ≈ perigee within 1 km.
+    /// in a circular LEO orbit. For a circular orbit apogee ≈ perigee within 1 km
+    /// and half-period must fit in the 5-digit DSKY register (no overflow).
     #[test]
     fn tc_vn_nd_5_v06_n44_apogee_perigee_circular_leo() {
         use crate::navigation::gravity::MU_EARTH;
         use crate::navigation::state_vector::{Frame, StateVector};
 
         let mut state = AgcState::new();
-        let r_mag = 6_671_000.0_f64;
+        let r_mag = 6_671_000.0_f64; // ~ 293 km altitude
         let v_circ = libm::sqrt(MU_EARTH / r_mag);
         state.csm_state = StateVector {
             position: [r_mag, 0.0, 0.0],
@@ -1536,26 +1981,36 @@ mod tests {
             &[Key::Verb, d(0), d(6), Key::Noun, d(4), d(4), Key::Entr],
         );
 
-        let apo = state.dsky.r[0];
-        let peri = state.dsky.r[1];
-        let half_period = state.dsky.r[2];
+        // R1 / R2 are altitudes in kilometres; R3 is the half-period in minutes.
+        let apo_km = state.dsky.r[0];
+        let peri_km = state.dsky.r[1];
+        let half_period_min = state.dsky.r[2];
 
         assert!(
-            apo > 0.0,
-            "TC-VN-ND-5: apogee altitude must be positive, got {apo}"
+            apo_km > 0.0,
+            "TC-VN-ND-5: apogee altitude must be positive, got {apo_km} km"
         );
         assert!(
-            peri > 0.0,
-            "TC-VN-ND-5: perigee altitude must be positive, got {peri}"
+            peri_km > 0.0,
+            "TC-VN-ND-5: perigee altitude must be positive, got {peri_km} km"
         );
         assert!(
-            half_period > 0.0,
-            "TC-VN-ND-5: half-period must be positive, got {half_period}"
+            half_period_min > 0.0,
+            "TC-VN-ND-5: half-period must be positive, got {half_period_min} min"
         );
         assert!(
-            (apo - peri).abs() < 1000.0,
-            "TC-VN-ND-5: circular orbit apogee ≈ perigee within 1 km, |apo-peri| = {}",
-            (apo - peri).abs()
+            (apo_km - peri_km).abs() < 1.0,
+            "TC-VN-ND-5: circular orbit apogee ≈ perigee within 1 km, |apo-peri| = {} km",
+            (apo_km - peri_km).abs()
+        );
+        // All three registers must be representable in the 5-digit display
+        // (i.e. < 100 000) — the original `m` / `s` units overflowed for any
+        // non-trivial Earth orbit.
+        assert!(apo_km < 100_000.0, "apogee in km must fit in 5 digits");
+        assert!(peri_km < 100_000.0, "perigee in km must fit in 5 digits");
+        assert!(
+            half_period_min < 100_000.0,
+            "half-period in min must fit in 5 digits"
         );
     }
 

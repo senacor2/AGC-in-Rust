@@ -7,6 +7,8 @@ use agc_core::hal::{
 };
 use agc_core::types::CduAngle;
 
+use crate::physics::Spacecraft;
+
 // ── Sub-system stubs ──────────────────────────────────────────────────────────
 
 /// Simulated mission timer.  Tracks a `base_cs` value and an `epoch`
@@ -180,6 +182,9 @@ pub struct SimHardware {
     pub rcs: SimRcs,
     pub uplink: SimUplink,
     pub telemetry: SimTelemetry,
+    /// Ground-truth spacecraft dynamics. Drives the IMU's PIPA pulse
+    /// stream when the SPS is commanded on.
+    pub spacecraft: Spacecraft,
 }
 
 impl SimHardware {
@@ -212,6 +217,24 @@ impl SimHardware {
                 words: Default::default(),
             },
             telemetry: SimTelemetry { log: Vec::new() },
+            spacecraft: Spacecraft::new(),
+        }
+    }
+
+    /// Advance the simulator by `dt_seconds`.
+    ///
+    /// Reads `self.engine.thrusting`, integrates Δv on the
+    /// [`Spacecraft`], drains accumulated PIPA pulses, and
+    /// saturating-adds them into `self.imu.pipa` so the next
+    /// `Imu::read_pipa` call returns them like real hardware would.
+    /// Coast phases (engine off) leave the IMU pulse counters
+    /// untouched — PIPAs are non-gravitational accelerometers.
+    pub fn tick(&mut self, dt_seconds: f64) {
+        let engine_on = self.engine.thrusting;
+        self.spacecraft.tick(dt_seconds, engine_on);
+        let pulses = self.spacecraft.drain_pipa_pulses();
+        for (acc, &p) in self.imu.pipa.iter_mut().zip(pulses.iter()) {
+            *acc = acc.saturating_add(p);
         }
     }
 }
