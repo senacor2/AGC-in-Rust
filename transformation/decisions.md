@@ -241,6 +241,14 @@ Map the BMI088's strapdown samples to the AGC's gimballed-platform `Imu` trait b
 
 **Trade-off**: The emulator's "platform" is virtual — there is no physical isolation between the body and the inertial reference, so disturbance torques on the spacecraft body do not torque the platform via its gimbals (because there are no gimbals). In practice this only changes the failure modes, not the math: gyro drift still translates to attitude error; gimbal-lock geometry is preserved through the Euler extraction; the AGC's NBD compensation works against the strapdown gyros via `Imu::torque_gyro` exactly as it would against the original gyros.
 
+**Alternatives considered — bridge-hosted IMU**: Routing the BMI088 through `agc-bridge-pico` instead of keeping it local on SPI3 was evaluated and rejected. The appeal was a uniform "all peripherals over the bridge" architecture matching DSKY/optics/RCS. Three issues sank it:
+
+1. **Bandwidth.** Streaming raw samples at 1 kHz × ~16 B + 6 B framing ≈ 22 kB/s consumes ≈ 38 % of the 460 800 baud link, leaving little headroom alongside DSKY (21 rows + lamps + flash per T4RUPT), 100 Hz optics CDU, RCS, telemetry, and heartbeats.
+2. **Link-jitter on integration `dt`.** Either the AGC integrates raw samples (link queue depth, STX-in-payload reframes, and CRC retransmits become attitude-integration `dt` jitter, which drifts the virtual platform) or the platform emulator moves to the bridge (relocating safety-relevant attitude state into a "stub bridge" and pushing it further from the executive's deterministic ISR cadence).
+3. **No bridge FPU.** The `agc-imu-platform` quaternion math is f64. The RP2040 (Cortex-M0+) has no hardware FPU; soft-float at 1 kHz would dominate the bridge's CPU budget.
+
+The IMU stays local. The `Imu` trait already abstracts location, so the architectural inconsistency is cosmetic — flight code does not know or care which peripherals are local vs remote. This also matches the original AGC topology, in which the IMU was a directly-wired peripheral, not on the uplink.
+
 **Affected files**:
 - `agc-imu-platform/` (new crate)
 - `agc-board-nucleo-f722/src/local/imu/` (BMI088 driver + Imu trait impl)
