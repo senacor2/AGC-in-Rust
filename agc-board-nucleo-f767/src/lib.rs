@@ -200,3 +200,23 @@ fn pet_watchdog_global() {
         });
     }
 }
+
+// ── Panic handler ─────────────────────────────────────────────────────────────
+//
+// A Rust panic is treated as GOJAM: the only safe response is a hardware restart.
+// Debug builds emit the panic message over RTT (`defmt`) first so the cause is
+// visible to an attached probe; release builds skip the print to minimise the
+// window between fault and reset.
+
+#[cfg(debug_assertions)]
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    defmt::error!("PANIC: {}", defmt::Display2Format(info));
+    cortex_m::peripheral::SCB::sys_reset()
+}
+
+#[cfg(not(debug_assertions))]
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    cortex_m::peripheral::SCB::sys_reset()
+}

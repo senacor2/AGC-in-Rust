@@ -1,9 +1,9 @@
+# Linker rustflags live in the workspace `.cargo/config.toml`. See the note
+# in agc-board-nucleo-f767/.cargo/config.toml — duplicating them here causes
+# cargo to concatenate, producing a doubled `-Tlink.x` and a redefined FLASH.
+
 [target.thumbv6m-none-eabi]
 runner = "probe-rs run --chip RP2040"
-rustflags = [
-  "-C", "link-arg=--nmagic",
-  "-C", "link-arg=-Tlink.x",
-]
 
 [build]
 target = "thumbv6m-none-eabi"

@@ -26,7 +26,7 @@ use core::sync::atomic::Ordering;
 use cortex_m::interrupt::Mutex;
 use cortex_m_rt::{entry, exception};
 use defmt_rtt as _;
-use panic_probe as _;
+// Panic handler lives in `agc_board_nucleo_f767` (lib.rs).
 // `interrupt` re-exported from the PAC verifies the name at compile time (ADR-010).
 use stm32f7xx_hal::pac::interrupt;
 use stm32f7xx_hal::{pac, prelude::*, rcc::RccExt, spi};

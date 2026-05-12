@@ -7,9 +7,10 @@
 # from.
 #
 # The per-crate `.cargo/config.toml` files set `[build] target = "..."` so a
-# bare `cargo build` inside the crate picks the right target without a flag;
-# those files duplicate the rustflags below for the same reason. The two must
-# stay in sync — but in practice the workspace config is authoritative.
+# bare `cargo build` inside the crate picks the right target without a flag.
+# They deliberately do NOT redefine these rustflags: cargo concatenates
+# rustflags arrays across nested configs, which would double `-Tlink.x` and
+# cause `memory.x` to be included twice (FLASH region redefined).
 
 [target.thumbv7em-none-eabihf]
 runner = "probe-rs run --chip STM32F767ZITx"

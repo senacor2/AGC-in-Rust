@@ -32,16 +32,19 @@ Where these conflict, fidelity wins. Navigation errors kill people.
 
 ## 2. Crate and Module Structure
 
-The project is organized as a Cargo workspace. The top-level workspace contains
-the core `no_std` crate and several supporting crates for testing and simulation.
+The project is organized as a Cargo workspace. `agc-core` holds the flight
+software as a portable `no_std` library; concrete hardware drivers, the wire
+protocol, the IMU platform emulator, the bridge firmware, the host simulator,
+and the integration tests each live in their own crate. This split keeps the
+flight software independent of any specific MCU and lets host-side tests link
+`agc-core` without pulling in bare-metal dependencies.
 
 ```
 agc-in-rust/                     (workspace root)
   Cargo.toml                     (workspace definition)
-  agc-core/                      (the flight software -- #![no_std], #![no_main])
+  agc-core/                      (the flight software -- #![no_std] library)
     src/
-      lib.rs                     (crate root, feature gates, global panic handler)
-      main.rs                    (entry point: hardware init, FRESH START / RESTART)
+      lib.rs                     (crate root, feature gates, AgcState definition)
       
       types/
         mod.rs
@@ -132,6 +135,58 @@ agc-in-rust/                     (workspace root)
         noun_table.rs            (Noun definitions: addresses, components, scale factors)
         verb_table.rs            (Verb definitions: routine entry points)
         alarm_codes.rs           (Alarm code definitions and severity)
+  
+  agc-protocol/                  (Bridge wire format -- #![no_std], used by both MCUs)
+    src/
+      lib.rs                     (re-exports; PROTO_VERSION constant)
+      msg.rs                     (Msg enum: every message carried over the link)
+      frame.rs                   (STX/length/seq framing, encode/decode)
+      crc.rs                     (CRC-16/CCITT: poly=0x1021, init=0xFFFF)
+  
+  agc-imu-platform/              (Virtual stable platform emulator -- #![no_std])
+    src/
+      lib.rs                     (CDU_PULSE_RAD, GYRO_PULSE_RAD, PIPA_SCALE constants)
+      platform.rs                (PlatformEmulator: gimballed-platform abstraction;
+                                  caged/coarse/fine states; destructive PIPA reads)
+      quat.rs                    (UnitQuaternion: rotation math for platform attitude)
+  
+  agc-board-nucleo-f767/         (Bare-metal HAL for Nucleo-F767ZI -- #![no_std])
+    src/
+      lib.rs                     (Board struct: AgcHardware impl; global singletons
+                                  for LINK/BRIDGE/PLATFORM/BMI088/TIMER_HANDLES;
+                                  #[panic_handler] -- defmt+sys_reset in dev, sys_reset in rel)
+      state.rs                   (BridgeState: cached values from bridge messages;
+                                  uplink and key queues; critical-section protected, ADR-008)
+      bin/
+        agc.rs                   (firmware entry point: clocks, USART6, IWDG, SPI3+BMI088,
+                                  TIM2/3/5/7, SysTick, FRESH START / RESTART dispatch)
+      link/
+        mod.rs
+        uart.rs                  (USART6 driver, PC6/PC7, 460800 baud, 8N1)
+        dispatch.rs              (Inbound frame -> BridgeState updates, ISR-side)
+      local/                     (peripherals owned by the AGC MCU itself)
+        mod.rs
+        timers.rs                (T3/T4/T5/T6 trait impls backed by STM32 TIM2/3/4/5/7)
+        watchdog.rs              (IWDG wrapper: 1.024 s timeout)
+        imu/
+          mod.rs                 (BoardImu: Imu trait impl wiring BMI088 + platform emulator)
+          bmi088.rs              (SPI3 driver for the accel + gyro dice)
+      remote/                    (peripherals reached over the bridge link, ADR-009)
+        mod.rs
+        dsky.rs                  (Dsky trait impl -- Msg::Dsky* + BridgeState.key_queue)
+        optics.rs                (Optics trait impl -- CDU + mark flag from BridgeState)
+        engine.rs                (Engine trait impl -- SPS enable + gimbal Msg)
+        rcs.rs                   (Rcs trait impl -- jet on/off Msg)
+        uplink.rs                (Uplink trait impl -- BridgeState.uplink_queue)
+        telemetry.rs             (Telemetry trait impl -- downlink word Msg)
+  
+  agc-bridge-pico/               (RP2040 bridge firmware -- #![no_std], non-flight helper)
+    src/
+      main.rs                    (entry point: UART0 link, USB-CDC console, heartbeat)
+      link.rs                    (UART0 frame encode/decode at 460800 baud, GPIO0/1)
+      console.rs                 (USB CDC-ACM developer console; non-blocking)
+      keymap.rs                  (ASCII -> DSKY key code mapping, KEYTEMP1 5-bit codes)
+      state.rs                   (BridgeState: tx_seq counter and other shared data)
   
   agc-sim/                       (Host-side simulator -- std allowed)
     src/
@@ -1033,25 +1088,36 @@ to activate it).
 ### 12.1 Rust Panic Handler
 
 The `#[panic_handler]` triggers GOJAM (hardware restart). The handler is
-profile-specific: debug builds log the panic message via semihosting so the
-cause is visible to a developer; release builds restart immediately with no
-output overhead.
+profile-specific: debug builds log the panic message via `defmt` (RTT) so the
+cause is visible to an attached probe; release builds restart immediately with
+no output overhead.
 
-Do **not** add `panic-halt` or any other panic-handler crate as a dependency --
-only one `#[panic_handler]` is permitted per binary and these crates provide
-one automatically, causing a link error.
+The handler lives in the board crate (`agc-board-nucleo-f767/src/lib.rs`), not
+in `agc-core`. `agc-core` is compiled with `std` enabled under `cfg(test)` so
+host-side unit tests can use the standard panic; defining `#[panic_handler]`
+there would conflict with that. The board crate is `#![no_std]` unconditionally
+and is the only crate linked into the firmware binary, so it is the natural
+home for the handler.
+
+Do **not** add `panic-probe`, `panic-halt`, or any other panic-handler crate as
+a dependency -- only one `#[panic_handler]` is permitted per binary, and those
+crates provide one automatically (causing a link error). Their default
+behaviour is also wrong for flight: `panic-probe` halts at a `udf` for the
+debugger and `panic-halt` spins in `loop {}`. Neither resets, so the immediate
+GOJAM the design requires would be replaced by an indeterminate wait for the
+IWDG watchdog.
 
 ```rust
-// dev profile: log the message, then restart
-// A debugger can set a breakpoint on `rust_begin_unwind` to inspect the cause.
+// dev profile: log the message over RTT, then restart.
+// A probe attached via `probe-rs` will receive the defmt frame before reset.
 #[cfg(debug_assertions)]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    cortex_m_semihosting::hprintln!("PANIC: {}", info).ok();
+    defmt::error!("PANIC: {}", defmt::Display2Format(info));
     cortex_m::peripheral::SCB::sys_reset()
 }
 
-// release profile: restart immediately; no output, minimal binary size
+// release profile: restart immediately; no output, minimal binary size.
 #[cfg(not(debug_assertions))]
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {

@@ -1,9 +1,10 @@
+# Linker rustflags live in the workspace `.cargo/config.toml`. Cargo
+# concatenates rustflags arrays across nested configs, so duplicating them
+# here would pass `-Tlink.x -Tdefmt.x` twice and the linker would include
+# `memory.x` twice (FLASH region redefined).
+
 [target.thumbv7em-none-eabihf]
 runner = "probe-rs run --chip STM32F767ZITx"
-rustflags = [
-  "-C", "link-arg=-Tlink.x",
-  "-C", "link-arg=-Tdefmt.x",
-]
 
 [build]
 target = "thumbv7em-none-eabihf"
