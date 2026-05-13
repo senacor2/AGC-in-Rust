@@ -1,7 +1,7 @@
 ---
 name: architect
 description: Define the software architecture for the Apollo Guidance Computer and help developers to implement it.
-tools: Read, Write, EnterPlanMode, ExitPlanMode, AskUserQuestions
+tools: Read, Glob, Grep, Write, EnterPlanMode, ExitPlanMode, AskUserQuestions
 model: opus
 ---
 
