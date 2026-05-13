@@ -74,11 +74,13 @@ impl Executive {
     /// and a `&mut self` receiver would cause a split-borrow conflict when
     /// dispatching a job that mutates other fields of `state`.
     pub fn run<H: AgcHardware>(state: &mut crate::AgcState, hw: &mut H) -> ! {
-        use crate::hal::runtime::{T3_PENDING, T4_PENDING, T6_PENDING};
+        use crate::control::dap::{dap_step, DAP_PERIOD_CS};
+        use crate::control::DapMode;
+        use crate::hal::runtime::{T3_PENDING, T4_PENDING, T5_PENDING, T6_PENDING};
         use crate::services::pinball::DskyFrame;
         use core::sync::atomic::Ordering;
 
-        // Arm T3 for any tasks already on the waitlist (e.g. from dap_init).
+        // Arm T3 for any tasks already on the waitlist.
         if let Some(cs) = state.waitlist.front_delta() {
             hw.timers().arm_t3(cs);
         }
@@ -90,8 +92,20 @@ impl Executive {
         // Rate-limit DSKY emission: only push to hardware when the frame changes.
         let mut last_dsky_frame: Option<DskyFrame> = None;
 
+        // Track whether TIM4 (T5RUPT) is currently armed for a DAP cycle.
+        // Set to true whenever we arm T5; cleared when T5_PENDING fires.
+        // Allows Off→on DAP transitions (e.g. dap_init called after run() started)
+        // to re-arm T5 on the next iteration without coupling to dap_init.
+        let mut t5_armed = false;
+
         loop {
             hw.pet_watchdog();
+
+            // ── DAP arming: kick TIM4 whenever DAP is active and not yet armed ──
+            if state.dap_state.mode != DapMode::Off && !t5_armed {
+                hw.timers().arm_t5(DAP_PERIOD_CS);
+                t5_armed = true;
+            }
 
             // ── Drain ISR-posted flags in AGC priority order ──────────────────
             // (T6 highest, then T5, T3, T4)
@@ -101,13 +115,21 @@ impl Executive {
                 hw.rcs().quench_all();
             }
 
-            // T3RUPT: pre-read CDU, dispatch one waitlist task, re-arm T3.
+            // T5RUPT: pre-read CDU, run one DAP cycle, re-arm T5 (ADR-022).
+            if T5_PENDING.swap(false, Ordering::Acquire) {
+                t5_armed = false;
+                state.current_cdu = hw.imu().read_cdu();
+                dap_step(state);
+                if state.dap_state.mode != DapMode::Off {
+                    hw.timers().arm_t5(DAP_PERIOD_CS);
+                    t5_armed = true;
+                }
+            }
+
+            // T3RUPT: dispatch one waitlist task, re-arm T3.
             if T3_PENDING.swap(false, Ordering::Acquire) {
-                // Fresh CDU snapshot before any waitlist task runs; dap_step reads
-                // state.current_cdu rather than calling hw.imu() directly (Strategy D).
                 // PIPA is NOT read here — destructive semantics require the 2-second
                 // SERVICER accumulation pipeline (next milestone).
-                state.current_cdu = hw.imu().read_cdu();
 
                 // pop_task avoids the split-borrow conflict: borrowing
                 // state.waitlist mutably while also passing &mut state is

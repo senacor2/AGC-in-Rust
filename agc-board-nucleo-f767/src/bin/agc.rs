@@ -10,8 +10,8 @@
 //!      derived from the measured gravity vector; platform uncaged.
 //!   6. TIM7 configured at 1 kHz; NVIC unmasked at priority 0x80.
 //!   7. SysTick configured at 1 kHz.
-//!   8. TIM2/3/4/5 initialised; NVIC priorities set and unmasked (TIM4 configured
-//!      but interrupt not enabled — T5 path retired per ADR-020).
+//!   8. TIM2/3/4/5 initialised; NVIC priorities set and unmasked. TIM4
+//!      (T5RUPT, DAP cycle) is wired up per ADR-022.
 //!   9. CDU pre-read; DAP brought up in AttitudeHold mode.
 //!  10. `HelloAck` sent to confirm the bridge link.
 //!  11. Memory layout logged via defmt.
@@ -38,7 +38,7 @@ use agc_board_nucleo_f767::{
 };
 use agc_core::{
     executive::scheduler::Executive,
-    hal::runtime::{T3_PENDING, T4_PENDING, T6_PENDING},
+    hal::runtime::{T3_PENDING, T4_PENDING, T5_PENDING, T6_PENDING},
     services::fresh_start::fresh_start,
     AgcState,
 };
@@ -312,23 +312,24 @@ fn main() -> ! {
     let _timers = LocalTimers::init(dp.TIM2, dp.TIM3, dp.TIM4, dp.TIM5);
 
     // SAFETY: NVIC writes during single-threaded init before these ISRs fire.
-    // TIM4 (T5RUPT) is configured in LocalTimers::init but its interrupt is NOT
-    // unmasked here — the T5 path is retired per ADR-020.
     unsafe {
         // Priority order matches AGC Interrupt enum discriminants:
         //   T6RUPT (TIM5) = highest AGC priority → NVIC 0x10
+        //   T5RUPT (TIM4) -- DAP cycle           → NVIC 0x20  (ADR-022)
         //   T3RUPT (TIM2)                        → NVIC 0x30
         //   T4RUPT (TIM3)                        → NVIC 0x40
         cp.NVIC.set_priority(pac::Interrupt::TIM5, 0x10);
+        cp.NVIC.set_priority(pac::Interrupt::TIM4, 0x20);
         cp.NVIC.set_priority(pac::Interrupt::TIM2, 0x30);
         cp.NVIC.set_priority(pac::Interrupt::TIM3, 0x40);
 
         cortex_m::peripheral::NVIC::unmask(pac::Interrupt::TIM5);
+        cortex_m::peripheral::NVIC::unmask(pac::Interrupt::TIM4);
         cortex_m::peripheral::NVIC::unmask(pac::Interrupt::TIM2);
         cortex_m::peripheral::NVIC::unmask(pac::Interrupt::TIM3);
     }
 
-    defmt::info!("TIM2/3/5: AGC scheduling timers started (TIM4/T5 retired per ADR-020)");
+    defmt::info!("TIM2/3/4/5: AGC scheduling timers started (T5RUPT/TIM4 restored per ADR-022)");
 
     // ── FRESH START or RESTART ────────────────────────────────────────────────
     // SAFETY: `AGC_STATE` is a `static mut`. We obtain a raw pointer then
@@ -462,6 +463,15 @@ fn TIM2() {
         h.tim2.sr.modify(|_, w| w.uif().clear_bit());
     });
     T3_PENDING.store(true, Ordering::Release);
+}
+
+/// TIM4 → T5RUPT (DAP cycle). Priority 0x20 (ADR-022).
+#[interrupt]
+fn TIM4() {
+    with_timers(|h| {
+        h.tim4.sr.modify(|_, w| w.uif().clear_bit());
+    });
+    T5_PENDING.store(true, Ordering::Release);
 }
 
 /// TIM3 → T4RUPT (periodic I/O, 120 ms). Priority 0x40.

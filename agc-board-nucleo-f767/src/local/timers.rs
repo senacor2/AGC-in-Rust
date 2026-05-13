@@ -130,17 +130,17 @@ impl LocalTimers {
             // Periodic mode (OPM=0, the reset default), ARPE=1, start now.
             t3.cr1.write(|w| w.arpe().set_bit().cen().set_bit());
 
-            // ── TIM4: T5RUPT one-shot ────────────────────────────────────────
+            // ── TIM4: T5RUPT one-shot (DAP cycle) ────────────────────────────
             // PSC=10799 → 10 kHz timer clock.
             // 1 cs = 100 ticks; ARR max = 65535 ticks = 655 cs ≈ 6.5 s.
-            // TIM4 configured but not enabled — T5 path retired in Phase 7 per ADR-020.
+            // T5RUPT path restored per ADR-022 — the DAP runs on a dedicated
+            // T5RUPT, independent of Waitlist saturation.
             let t4 = &*stm32f7xx_hal::pac::TIM4::ptr();
             t4.psc.write(|w| w.psc().bits(10799));
             t4.arr.write(|w| w.arr().bits(9999));
             t4.egr.write(|w| w.ug().set_bit());
             t4.sr.modify(|_, w| w.uif().clear_bit());
-            // UIE intentionally NOT set — update interrupt disabled; arm_t5 is
-            // available for future use but will not fire until re-enabled.
+            t4.dier.write(|w| w.uie().set_bit());
             // OPM=1 (one-shot), ARPE=1, do NOT start yet.
             t4.cr1.write(|w| w.opm().set_bit().arpe().set_bit());
 

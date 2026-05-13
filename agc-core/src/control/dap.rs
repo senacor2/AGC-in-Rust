@@ -8,7 +8,7 @@ use crate::types::{CduAngle, Vec3};
 /// The mode encoding below follows the Comanche055 DAPDATR register conventions.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum DapMode {
-    /// DAP is off — no attitude control. T5 is not re-armed by dap_step.
+    /// DAP is off — no attitude control. The scheduler stops re-arming TIM4.
     /// AGC correspondence: CMDAPMOD = 0 (off / idle).
     #[default]
     Off,
@@ -150,22 +150,21 @@ const DEFAULT_INERTIA: Vec3 = [120_000.0, 120_000.0, 100_000.0];
 
 // ── Public functions ──────────────────────────────────────────────────────────
 
-/// Initialise the DAP and schedule the first `dap_step` cycle.
+/// Initialise the DAP. The scheduler arms TIM4/T5 on the next loop iteration.
 ///
-/// Must be called once by the owning program (e.g. P00/P40) before T5 is armed.
 /// Sets initial mode, captures the current CDU as baseline, applies default
-/// deadbands, and places `dap_step` on the Waitlist at `DAP_PERIOD_CS`.
+/// deadbands, and marks restart group 6 active. Does NOT touch the Waitlist:
+/// `dap_step` runs on its own T5RUPT path (ADR-022), so initialisation has no
+/// failure mode — DAP is independent of Waitlist saturation.
 ///
 /// # Preconditions
 /// - `initial_mode != DapMode::Off` (enforced by debug_assert).
-/// - `state.current_cdu` has been freshly populated by the T5 ISR shim.
+/// - `state.current_cdu` has been freshly populated by the caller.
 ///
 /// AGC source: Comanche055/RCS-CSM_DAP_EXECUTIVE_PROGRAMS.agc — DAPINIT routine.
 pub fn dap_init(state: &mut crate::AgcState, initial_mode: DapMode) {
     use crate::control::tvc::tvc_init;
-    use crate::executive::waitlist::ScheduleResult;
     use crate::executive::{Phase, GROUP_6};
-    use crate::tables::alarm_codes::WAITLIST_OVERFLOW;
 
     debug_assert!(
         initial_mode != DapMode::Off,
@@ -196,25 +195,15 @@ pub fn dap_init(state: &mut crate::AgcState, initial_mode: DapMode) {
         tvc_init(&mut state.tvc_state, &mut state.tvc_filter, trim);
     }
 
-    // Mark GROUP 6 as active (phase 1 = Waitlist task restart).
+    // Mark GROUP 6 as active (phase 1 = DAP cycling on T5RUPT).
     state.restart.set_phase(GROUP_6, Phase::new(1));
-
-    // Schedule the first dap_step — caller's T5 ISR shim arms TIME5 if needed.
-    if state.waitlist.schedule(DAP_PERIOD_CS, dap_step) == ScheduleResult::Full {
-        // Waitlist saturated: DAP cannot start. Roll back to a safe state and
-        // raise alarm 1211 (WAITLIST_OVERFLOW).
-        state.dap_state.mode = DapMode::Off;
-        state.restart.set_phase(GROUP_6, Phase::IDLE);
-        state.alarm.raise(WAITLIST_OVERFLOW);
-    }
 }
 
 /// Stop the DAP (flag-then-exit pattern, AD-6).
 ///
-/// Sets mode to `Off` and clears all output staging fields. The currently
-/// pending `dap_step` entry in the Waitlist is NOT removed — on its next
-/// invocation it will observe `Off` mode and return without rescheduling,
-/// naturally terminating the periodic chain.
+/// Sets mode to `Off` and clears all output staging fields. The scheduler
+/// observes `mode == Off` after the next `dap_step` completes and stops
+/// re-arming TIM4, naturally terminating the periodic chain.
 ///
 /// Note: quenching any in-progress jet pulse is the ISR shim's responsibility
 /// (it reads `rcs_commanded_jets == 0` on the next shim iteration).
@@ -227,22 +216,19 @@ pub fn dap_stop(state: &mut crate::AgcState) {
     state.sps_gimbal_cmd = (0, 0);
 }
 
-/// DAP Waitlist task — executes one T5RUPT cycle of attitude/rate control.
+/// One T5RUPT cycle of attitude/rate control.
 ///
-/// This is the main dispatcher. It is a `fn(&mut AgcState)` with no hardware
-/// access (Strategy D). All CDU reads come from `state.current_cdu` (populated
-/// by the T5 ISR shim); all jet/gimbal commands are written to staging fields
-/// for the ISR shim to act on after this function returns.
-///
-/// The function terminates without rescheduling when `mode == Off` (CI-9
-/// flag-then-exit).
+/// Called from the scheduler's T5_PENDING drain branch (ADR-017 + ADR-022).
+/// `fn(&mut AgcState)` with no hardware access (Strategy D): all CDU reads come
+/// from `state.current_cdu` (the scheduler refreshes it just before this call);
+/// all jet/gimbal commands are written to staging fields for the ISR shim to
+/// act on after this function returns. The scheduler re-arms TIM4 on exit
+/// when `mode != Off`.
 ///
 /// AGC source: Comanche055/RCS-CSM_DIGITAL_AUTOPILOT.agc — T5RUPT handler / DAPIDLER.
 pub fn dap_step(state: &mut crate::AgcState) {
     use crate::control::attitude::compute_body_rates;
-    use crate::executive::waitlist::ScheduleResult;
     use crate::executive::{Phase, GROUP_6};
-    use crate::tables::alarm_codes::WAITLIST_OVERFLOW;
 
     // CI-9: flag-then-exit — Off mode terminates without rescheduling.
     if state.dap_state.mode == DapMode::Off {
@@ -304,18 +290,8 @@ pub fn dap_step(state: &mut crate::AgcState) {
     // ── Update prev_cdu for the next cycle ────────────────────────────────
     state.dap_state.prev_cdu = current_cdu;
 
-    // ── Reschedule self ───────────────────────────────────────────────────
-    // If the result is OkReloadT3(delta) the T5 ISR shim arms TIME5 externally.
-    // Saturated waitlist: shut the DAP down and raise alarm 1211 — silent
-    // termination would leave attitude control floating without warning.
-    if state.waitlist.schedule(DAP_PERIOD_CS, dap_step) == ScheduleResult::Full {
-        state.dap_state.mode = DapMode::Off;
-        state.rcs_commanded_jets = 0;
-        state.rcs_commanded_pulse_cs = 0;
-        state.sps_gimbal_cmd = (0, 0);
-        state.restart.set_phase(GROUP_6, Phase::IDLE);
-        state.alarm.raise(WAITLIST_OVERFLOW);
-    }
+    // The scheduler re-arms TIM4 after this returns when mode != Off; we do
+    // not touch the Waitlist (ADR-022).
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
@@ -443,12 +419,12 @@ mod tests {
         AgcState::new()
     }
 
-    // ── TC-DAP-01: Off mode → no staging fields modified, no reschedule ───
+    // ── TC-DAP-01: Off mode → staging fields cleared, GROUP_6 IDLE ────────
 
     /// When dap_step is called with mode == Off it must:
-    /// - not modify rcs_commanded_jets or rcs_commanded_pulse_cs beyond clearing,
-    /// - not reschedule itself (waitlist count stays at 0),
-    /// - set GROUP_6 phase to IDLE.
+    /// - clear rcs_commanded_jets and rcs_commanded_pulse_cs,
+    /// - set GROUP_6 phase to IDLE,
+    /// - leave the Waitlist alone (DAP runs on T5RUPT, not Waitlist — ADR-022).
     #[test]
     fn tc_dap_01_off_mode_no_side_effects() {
         let mut state = make_state();
@@ -468,11 +444,11 @@ mod tests {
             state.rcs_commanded_pulse_cs, 0,
             "Off mode must clear rcs_commanded_pulse_cs"
         );
-        // No reschedule — waitlist stays empty.
+        // dap_step must not touch the Waitlist.
         assert_eq!(
             state.waitlist.len(),
             0,
-            "Off mode must not reschedule dap_step"
+            "dap_step must not touch the Waitlist (ADR-022)"
         );
         // Restart group must be IDLE.
         use crate::executive::{Phase, GROUP_6};
@@ -658,15 +634,15 @@ mod tests {
         );
     }
 
-    // ── TC-DAP-08: dap_init alarms 1211 when waitlist is saturated ────────
+    // ── TC-DAP-08: dap_init is Waitlist-independent (ADR-022) ─────────────
 
-    /// When the waitlist is full at the moment `dap_init` runs, the function
-    /// must roll back: mode → Off, GROUP_6 → IDLE, alarm 1211 raised and lit.
+    /// After ADR-022 moved DAP back onto a dedicated T5RUPT path, `dap_init`
+    /// must succeed even when the Waitlist is completely full: it no longer
+    /// schedules itself there.
     #[test]
-    fn tc_dap_08_init_alarms_on_full_waitlist() {
+    fn tc_dap_08_init_is_waitlist_independent() {
         use crate::executive::waitlist::MAX_WAITLIST_TASKS;
-        use crate::executive::{Phase, ScheduleResult, GROUP_6};
-        use crate::tables::alarm_codes::WAITLIST_OVERFLOW;
+        use crate::executive::ScheduleResult;
 
         fn nop(_: &mut crate::AgcState) {}
 
@@ -684,75 +660,12 @@ mod tests {
 
         assert_eq!(
             state.dap_state.mode,
-            DapMode::Off,
-            "saturated init must roll mode back to Off"
+            DapMode::AttitudeHold,
+            "dap_init must succeed regardless of Waitlist occupancy"
         );
         assert_eq!(
-            state.restart.phase(GROUP_6),
-            Phase::IDLE,
-            "saturated init must clear GROUP_6 to IDLE"
+            state.alarm.code, 0,
+            "dap_init must not raise alarms on a full Waitlist"
         );
-        assert_eq!(
-            state.alarm.code, WAITLIST_OVERFLOW,
-            "alarm code must be 1211 (WAITLIST_OVERFLOW)"
-        );
-        assert!(state.alarm.lit, "alarm.lit must be true");
-    }
-
-    // ── TC-DAP-09: dap_step alarms 1211 + IDLE on reschedule failure ──────
-
-    /// When `dap_step` runs with a saturated waitlist, the self-reschedule
-    /// fails. The DAP must shut down (mode → Off, staging cleared,
-    /// GROUP_6 → IDLE) and alarm 1211 must be raised — silent termination
-    /// would leave attitude control floating without crew warning.
-    #[test]
-    fn tc_dap_09_step_alarms_on_reschedule_failure() {
-        use crate::executive::waitlist::MAX_WAITLIST_TASKS;
-        use crate::executive::{Phase, GROUP_6};
-        use crate::tables::alarm_codes::WAITLIST_OVERFLOW;
-
-        fn nop(_: &mut crate::AgcState) {}
-
-        let mut state = make_state();
-        state.dap_state.mode = DapMode::AttitudeHold;
-        state.dap_state.deadband = 1000.0; // suppress jet output noise
-        state.current_cdu = [CduAngle(0), CduAngle(0), CduAngle(0)];
-        state.dap_state.prev_cdu = [CduAngle(0), CduAngle(0), CduAngle(0)];
-
-        // Saturate the waitlist after the DAP would have wanted to reschedule.
-        for i in 0..MAX_WAITLIST_TASKS {
-            state.waitlist.schedule((i + 1) as u16, nop);
-        }
-
-        dap_step(&mut state);
-
-        assert_eq!(
-            state.dap_state.mode,
-            DapMode::Off,
-            "saturated reschedule must shut DAP down (mode → Off)"
-        );
-        assert_eq!(
-            state.rcs_commanded_jets, 0,
-            "saturated reschedule must clear rcs_commanded_jets"
-        );
-        assert_eq!(
-            state.rcs_commanded_pulse_cs, 0,
-            "saturated reschedule must clear rcs_commanded_pulse_cs"
-        );
-        assert_eq!(
-            state.sps_gimbal_cmd,
-            (0, 0),
-            "saturated reschedule must clear sps_gimbal_cmd"
-        );
-        assert_eq!(
-            state.restart.phase(GROUP_6),
-            Phase::IDLE,
-            "saturated reschedule must clear GROUP_6 to IDLE"
-        );
-        assert_eq!(
-            state.alarm.code, WAITLIST_OVERFLOW,
-            "alarm code must be 1211 (WAITLIST_OVERFLOW)"
-        );
-        assert!(state.alarm.lit, "alarm.lit must be true");
     }
 }

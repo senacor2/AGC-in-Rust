@@ -465,11 +465,14 @@ fn TIM3() {
 }
 
 #[interrupt]
+fn TIM4() {
+    // T5RUPT -- 100 ms DAP cycle (ADR-022)
+}
+
+#[interrupt]
 fn TIM5() {
     // T6RUPT -- RCS jet pulse timer (32-bit @ 108 MHz, 0.625 ms ticks)
 }
-// TIM4 / T5RUPT is configured but its IRQ is not unmasked --
-// the DAP runs as a Waitlist task instead (ADR-020).
 ```
 
 #### HardFault Handler
@@ -1417,9 +1420,9 @@ Running on `cortex-m-rt` with no OS imposes hard rules:
   This gives compile-time verification that the interrupt name exists on the
   target device. The four AGC scheduler interrupts map to STM32F7 timers as
   follows: **T3RUPT → TIM2** (32-bit, for the ≤163 s Waitlist range),
-  **T4RUPT → TIM3** (periodic 120 ms), **T5RUPT → TIM4** (configured but IRQ
-  not unmasked — DAP moved to the Waitlist per ADR-020), **T6RUPT → TIM5**
-  (32-bit at 108 MHz for the 0.625 ms RCS jet tick). The +1 offset is forced
+  **T4RUPT → TIM3** (periodic 120 ms), **T5RUPT → TIM4** (100 ms DAP cycle,
+  ADR-022), **T6RUPT → TIM5** (32-bit at 108 MHz for the 0.625 ms RCS jet
+  tick). The +1 offset is forced
   by hardware: only TIM2 and TIM5 are 32-bit on F7, and they're claimed by the
   two T-RUPTs that need long range (T3) and fast tick (T6). Authoritative
   mapping table: `agc-board-nucleo-f767/src/local/timers.rs`.

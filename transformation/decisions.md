@@ -310,18 +310,18 @@ ADR-010 (PAC-sourced `#[interrupt]`).
 
 ## ADR-018: Phase-5 Flight-Code Wiring Strategy
 
-**Date**: 2026-05-02 | **Status**: Accepted
+**Date**: 2026-05-02 | **Status**: Accepted (the DAP-on-Waitlist clause is superseded by ADR-022)
 
 **Decision**: Wire the real flight code through the ISR-posted AtomicBool flags set up in Phase 3 (ADR-017). The `Executive::run` loop drains the flags in priority order and performs the following work per flag:
 
 - **T6** — `hw.rcs().quench_all()` (jet pulse terminated by hardware timer).
-- **T5** — No flight code uses T5 directly in this port; placeholder retained.
+- **T5** — DAP cycle (`dap_step`), re-arm TIM4 if `dap_state.mode != Off`. **Note:** the original ADR-018 left T5 as a placeholder; ADR-022 revisits this and routes the DAP through T5RUPT.
 - **T3** — Pre-read CDU into `state.current_cdu`, call `state.waitlist.pop_task()`, invoke the popped task, re-arm T3 with the next delta.
 - **T4** — Advance MET by 12 cs, compute and apply gyro drift compensation via `compute_gyro_drift` + `hw.imu().torque_gyro`.
 
 After the ISR drain loop, each iteration also: drains the DSKY key queue into `services::v_n::feed_key`, dispatches one Executive job, translates `rcs_commanded_jets`/`rcs_commanded_pulse_cs` staging fields to `hw.rcs().fire_sm_jets` + `hw.timers().arm_t6`, and translates `engine_thrusting`/`sps_gimbal_cmd` to `hw.engine().sps_enable`/`sps_gimbal`. T3 is re-armed lazily: the last-armed value is tracked in a local `Option<u16>`; `arm_t3` register writes are skipped when the waitlist front hasn't changed.
 
-**Why DAP runs on the waitlist (T3) rather than T5**: `dap_step` is a `fn(&mut AgcState)` Waitlist task that reschedules itself at `DAP_PERIOD_CS = 10 cs` on every invocation (ADR-017, Strategy D). T5 therefore has no flight code consumer in this port. Keeping DAP on the waitlist means T5 can be repurposed or retired in a future milestone without touching any DAP code.
+**Why DAP runs on the waitlist (T3) rather than T5**: *Superseded by ADR-022.* The original justification was software-flexibility: keeping DAP on the Waitlist meant T5 could be retired in a future milestone without touching DAP code. ADR-022 reverses this — running attitude control on a queue that can saturate (1211 alarm) is the wrong safety trade-off. DAP now has its own T5RUPT path, matching the AGC's original architecture.
 
 **Why PIPA/SERVICER stays out of scope**: `hw.imu().read_pipa()` is a destructive read — the hardware counters are zeroed on access. The SERVICER must accumulate PIPA counts over a precise 2-second window with software integration glue (`services/average_g.rs`). The cadence, accumulator reset, and integration ordering are a separate design concern that must be coordinated with the SERVICER cycle. Putting a destructive read in the T3 path with no accumulator would corrupt navigation.
 
@@ -376,7 +376,7 @@ After the ISR drain loop, each iteration also: drains the DSKY key queue into `s
 
 4. **DSKY refresh rate-limiting** — The T4 drain emitted all 21 rows + 10 lamps + 1 flash every 120 ms regardless of whether anything changed. A `last_dsky_frame: Option<DskyFrame>` local in `Executive::run` caches the last emission; the frame is only pushed to hardware when it differs. This reduces UART traffic by ~90 % in steady state. Trade-off: bridge consumers no longer receive a heartbeat from DSKY rows; `BridgeHeartbeat` (every 200 ms, already implemented) fills that role.
 
-5. **T5/TIM4 retirement** — No flight code uses T5 directly. The `T5_PENDING` AtomicBool and the `arm_t5` trait method are retained at zero cost for future use, but TIM4's update interrupt is no longer enabled in `LocalTimers::init`, the TIM4 ISR is removed from `bin/agc.rs`, and TIM4's NVIC priority and unmask calls are removed. This simplifies the interrupt table and removes a redundant path that duplicates the Waitlist's T3-based dispatch.
+5. **T5/TIM4 retirement** — *Superseded by ADR-022.* This item retired the T5 path on the rationale that no flight code used it. ADR-022 restores TIM4's UIE, ISR, NVIC priority (0x20), and unmask: the DAP now runs on a dedicated T5RUPT path, independent of the Waitlist. The "simplification" of removing T5 came at the cost of coupling attitude control to Waitlist saturation — see ADR-022 for the full reasoning.
 
 6. **Memory layout defmt log** — A one-time `defmt::info!` at boot reports stack region (base, top, size), `.bss` size, and `.data` size using cortex-m-rt linker symbols (`_stack_start`, `_stack_end`, `__sbss`, `__ebss`, `__sdata`, `__edata`). Helps detect linker-script misconfiguration without attaching a debugger.
 
@@ -482,6 +482,39 @@ the Cortex-M4F), defeating the entire purpose of picking Cortex-M7.
   be brought current then.
 
 **Affected files**: see commit message of the migration commit.
+
+---
+
+## ADR-022: Revert DAP onto a dedicated T5RUPT path
+
+**Date**: 2026-05-13 | **Status**: Accepted (supersedes ADR-018's DAP-on-Waitlist clause and ADR-020 §5 "T5/TIM4 retirement")
+
+**Decision**: The DAP runs on its own T5RUPT path again, matching the original AGC. TIM4's UIE is enabled in `LocalTimers::init`, a `TIM4` ISR sets `T5_PENDING`, TIM4 is unmasked at NVIC priority 0x20 (between T6 = 0x10 and T3 = 0x30 — matching the AGC's T6/T5/T3/T4 priority order). The `Executive::run` foreground drain has a dedicated T5 branch that pre-reads the CDU, calls `dap_step(state)`, and re-arms TIM4 if `state.dap_state.mode != Off`. `dap_init` and `dap_step` no longer touch the Waitlist.
+
+**Why this reverses ADR-018 / ADR-020**: ADR-018 moved DAP onto the Waitlist on the rationale that T5 could then be retired without touching DAP code — a software-flexibility argument. ADR-020 §5 then retired T5 because nothing used it. The reasoning was circular and neither ADR addressed the safety properties of the original AGC's choice. Two specific issues with DAP-on-Waitlist:
+
+1. **Waitlist saturation stops the DAP.** `dap_step` previously re-scheduled itself on the Waitlist each cycle. A full Waitlist (alarm 1211) would silently stop the DAP — attitude control would float. With a dedicated T5RUPT, the DAP re-arms its own hardware timer and is immune to queue pressure.
+
+2. **DAP would queue behind other Waitlist tasks.** Even when the Waitlist is not saturated, a foreground iteration could pop a non-DAP task ahead of the DAP, delaying the next attitude-control cycle by the time taken to run that task plus one more Executive job. A dedicated T5 drain branch serves DAP in priority order ahead of T3-Waitlist work.
+
+The AGC's designers split DAP off the Waitlist onto T5RUPT precisely for these two properties. ADR-022 restores that AGC-faithful structure.
+
+**Strategy D is preserved**: ADR-017's discipline still holds. The TIM4 ISR is minimal (clear UIF, set `T5_PENDING`); all DAP work runs in the foreground drain, and `AgcState` is only mutated by foreground code.
+
+**Initial-arm and Off→on transitions**: the scheduler tracks `t5_armed: bool` locally. At the top of every loop iteration, if `dap_state.mode != Off && !t5_armed`, the scheduler arms TIM4. This lets the firmware bootstrap call `dap_init` once before entering `Executive::run`, and lets programs that turn the DAP on later (e.g. transitions from `Off` to `AttitudeHold`) restart the cycle without any explicit hardware call from outside the scheduler.
+
+**Tests changed**:
+- `TC-DAP-09` (Waitlist-saturated reschedule failure) — deleted. The failure mode no longer exists.
+- `TC-DAP-08` — repurposed: verifies `dap_init` succeeds on a full Waitlist (proving DAP independence).
+- `TC-DAP-01` — assertion message updated; `waitlist.len() == 0` is now an invariant, not a side-effect check.
+
+**Affected files**:
+- `agc-core/src/control/dap.rs` — `dap_init` and `dap_step` no longer touch the Waitlist; updated doc-comments; tests adjusted.
+- `agc-core/src/executive/scheduler.rs` — `T5_PENDING` drain branch added; `t5_armed` tracking; CDU pre-read moved from T3 to T5 branch.
+- `agc-board-nucleo-f767/src/local/timers.rs` — TIM4 UIE re-enabled; ADR-022 comment.
+- `agc-board-nucleo-f767/src/bin/agc.rs` — `TIM4` ISR restored; NVIC priority 0x20 and unmask added; boot-sequence comment and defmt log updated; `T5_PENDING` added to runtime imports.
+- `docs/architecture.md` — §4.2 example block restored to include `fn TIM4()`; §14.3 timer-mapping bullet updated.
+- `transformation/decisions.md` — supersession notes added to ADR-018 and ADR-020 §5.
 
 ---
 
