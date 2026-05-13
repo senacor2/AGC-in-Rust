@@ -48,15 +48,16 @@ agc-in-rust/                     (workspace root)
       
       types/
         mod.rs
-        angle.rs                 (CduAngle: u16 counts, scale B-1 revolutions)
+        angle.rs                 (CduAngle: i16 signed counts, full revolution = 2^16; Met centiseconds)
         vector.rs                (Vec3: [f64; 3] -- position, velocity, delta-V)
         matrix.rs                (Mat3x3: [[f64; 3]; 3] -- coordinate transforms)
       
       hal/
         mod.rs                   (AgcHardware trait -- bounds on the embedded-hal impl)
         interrupts.rs            (Interrupt enum, INHINT/RELINT critical section)
+        runtime.rs               (Strategy-D foreground drain: T3/T4/T5/T6_PENDING atomic flags, ADR-017)
         timers.rs                (Scheduler timers: T3, T4, T5, T6 period management)
-        dsky.rs                  (DSKY relay/display peripheral interface)
+        dsky.rs                  (DSKY 21-row per-field display interface, ADR-019)
         imu.rs                   (IMU CDU angles, gyro torque commands, PIPA reads)
         optics.rs                (CM optics shaft/trunnion drive and readback)
         engine.rs                (SPS enable, gimbal commands)
@@ -84,6 +85,7 @@ agc-in-rust/                     (workspace root)
         integration.rs           (Cowell numerical integration, Encke method)
         gravity.rs               (Earth/Moon gravity models, oblateness)
         conics.rs                (Conic trajectory routines: Kepler, Lambert)
+        kalman.rs                (Scalar Kalman update shared by P20/P22 nav)
         star_catalog.rs          (Fixed star table for IMU alignment)
         planetary.rs             (Planetary/lunar ephemeris)
         time.rs                  (Mission elapsed time, ground elapsed time)
@@ -95,6 +97,7 @@ agc-in-rust/                     (workspace root)
         midcourse.rs             (Midcourse correction guidance)
         entry.rs                 (CM entry guidance -- skip/ballistic targeting)
         lambert.rs               (Lambert aim point computation)
+        rendezvous.rs            (LVLH range/range-rate; shared by P20/P34/P35)
       
       control/
         mod.rs
@@ -111,10 +114,15 @@ agc-in-rust/                     (workspace root)
         p06.rs                   (Power-down)
         p11.rs                   (Earth orbit insertion monitor)
         p15.rs                   (TLI initiate/cutoff)
-        p20_p22.rs               (Rendezvous navigation / tracking, including P21 ground track)
+        p20.rs                   (Rendezvous navigation -- VHF/optics marks)
+        p21.rs                   (Ground track determination)
+        p22.rs                   (Orbital landmark navigation)
         p23.rs                   (Cislunar midcourse navigation -- star/landmark)
         p30.rs                   (External Delta-V targeting)
-        p31_p34.rs               (Rendezvous maneuver computation)
+        p31.rs                   (Lambert pre-thrust)
+        p32.rs                   (CSI pre-thrust)
+        p33.rs                   (CDH pre-thrust)
+        p34.rs                   (TPI pre-thrust)
         p37.rs                   (Return to Earth)
         p40_p41.rs               (SPS/RCS thrusting)
         p47.rs                   (Thrust monitor)
@@ -125,9 +133,11 @@ agc-in-rust/                     (workspace root)
         mod.rs
         average_g.rs             (SERVICER: 2-second navigation cycle using PIPAs)
         v_n.rs                   (Verb-Noun processor: DSKY command interpreter)
-        display.rs               (PINBALL: display formatting, flashing, blanking)
+        display.rs               (display formatting helpers)
+        pinball.rs               (DSKY frame encoder -- 21 rows, ADR-019)
         alarm.rs                 (Program alarm system: 1202, 1210, etc.)
         fresh_start.rs           (FRESH START and RESTART sequences)
+        backup.rs                (Battery-backed BKPSRAM state for RESTART)
         t4rupt.rs                (T4RUPT periodic I/O: DSKY, IMU monitoring, gyro drift comp)
       
       tables/
@@ -839,32 +849,37 @@ Rather than using global mutable statics scattered across modules, all mutable
 state is collected into a single structure that is threaded through the call
 hierarchy. This makes the data flow explicit and testable.
 
+The full struct is defined in `agc-core/src/lib.rs`. The excerpt below is
+illustrative -- the actual `AgcState` has roughly 30 fields covering TVC
+filter state, SPS burn state, IMU alignment lifecycle, RCS staging fields,
+PIPA calibration, P20/P22 rendezvous state, entry state, the V/N processor,
+and more. Refer to `lib.rs` for the authoritative list.
+
 ```rust
 pub struct AgcState {
-    // Executive state
+    // ── Scheduler ─────────────────────────────────────────────────────────
     pub executive: Executive,
     pub waitlist: Waitlist,
     pub restart: RestartProtection,
-    
-    // Navigation state
+
+    // ── Navigation ────────────────────────────────────────────────────────
     pub csm_state: StateVector,      // CSM position (m) and velocity (m/s)
     pub target_state: StateVector,   // Target vehicle state (LM or landmark)
     pub refsmmat: Mat3x3,            // Reference stable member matrix
-    pub time: Met,                   // Mission elapsed time (centiseconds, integer)
-    
-    // Guidance state
+    pub time: Met,                   // Mission elapsed time (centiseconds)
+
+    // ── Guidance and control ──────────────────────────────────────────────
     pub major_mode: u8,              // Current program number
-    pub dap_state: DapState,         // Digital autopilot state
-    pub tvc_state: TvcState,         // Thrust vector control state
-    
-    // Display state
+    pub dap_state: DapState,
+    pub tvc_state: TvcState,
+    pub burn: BurnState,             // SPS burn execution (P40)
+
+    // ── Crew interface, alarms, flags ─────────────────────────────────────
     pub dsky: DskyState,             // Current display, verb, noun, registers
-    
-    // Alarm state
     pub alarm: AlarmState,
-    
-    // Flags (FLAGWRD0-FLAGWRD11 -- bit fields, not arithmetic values)
-    pub flagwords: [u16; 12],
+    pub flagwords: [u16; 12],        // FLAGWRD0..FLAGWRD11 bit-field words
+
+    // ... (~20 more fields; see agc-core/src/lib.rs)
 }
 ```
 
@@ -1240,9 +1255,8 @@ ecosystem. Key dependencies:
 | [`cortex-m`](https://github.com/rust-embedded/cortex-m) | Core Cortex-M primitives: interrupt enable/disable, SysTick, `Mutex`, critical sections |
 | [`cortex-m-rt`](https://github.com/rust-embedded/cortex-m-rt) | Startup, reset handler, `#[entry]`, `#[exception]` macros |
 | [`embedded-hal`](https://github.com/rust-embedded/embedded-hal) | Trait abstractions for GPIO, SPI, I2C, UART (used in `agc-hal`) |
-| [`stm32f4`](https://github.com/stm32-rs/stm32-rs) | Device PAC -- provides `#[interrupt]` attribute with compile-time name verification; re-exported as `pac` |
-| [`cortex-m-semihosting`](https://github.com/rust-embedded/cortex-m-semihosting) | Debug logging to host via probe (dev builds only) |
-| [`defmt`](https://github.com/knurling-rs/defmt) | Efficient structured logging over probe (development only) |
+| [`stm32f7xx-hal`](https://github.com/stm32-rs/stm32f7xx-hal) | F7 device HAL + re-exported PAC -- provides `#[interrupt]` attribute with compile-time name verification (used by the board crate only; see C-PAC-LOCAL in §4.1) |
+| [`defmt`](https://github.com/knurling-rs/defmt) + [`defmt-rtt`](https://github.com/knurling-rs/defmt) | Efficient structured logging over RTT (development and panic handler; cf. ADR-009) |
 
 The minimum target is **Cortex-M7 with double-precision FPU** (e.g.,
 STM32H743, STM32F767) to guarantee hardware `f64` operations within the DAP
@@ -1391,10 +1405,13 @@ Running on `cortex-m-rt` with no OS imposes hard rules:
 
 ```
 MEMORY {
-    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 512K   /* program + const tables */
-    RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 128K   /* AgcState + stacks */
+    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 2048K  /* program + const tables (F767ZI) */
+    RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 512K   /* AgcState + stacks */
 }
 ```
+
+The numbers match the Nucleo-F767ZI (ADR-021). The verbatim script lives in
+`agc-board-nucleo-f767/memory.x`.
 
 The `AgcState` struct is placed in a named RAM section so the linker can
 verify it fits. Stack size is set conservatively and measured with a watermark
