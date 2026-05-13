@@ -169,14 +169,15 @@ agc-in-rust/                     (workspace root)
                                   uplink and key queues; critical-section protected, ADR-008)
       bin/
         agc.rs                   (firmware entry point: clocks, USART6, IWDG, SPI3+BMI088,
-                                  TIM2/3/5/7, SysTick, FRESH START / RESTART dispatch)
+                                  TIM2/3/4/5 (T-RUPTs) + TIM7 (IMU 1 kHz), SysTick,
+                                  FRESH START / RESTART dispatch)
       link/
         mod.rs
         uart.rs                  (USART6 driver, PC6/PC7, 460800 baud, 8N1)
         dispatch.rs              (Inbound frame -> BridgeState updates, ISR-side)
       local/                     (peripherals owned by the AGC MCU itself)
         mod.rs
-        timers.rs                (T3/T4/T5/T6 trait impls backed by STM32 TIM2/3/4/5/7)
+        timers.rs                (T3/T4/T5/T6 trait impls backed by STM32 TIM2/3/4/5)
         watchdog.rs              (IWDG wrapper: 1.024 s timeout)
         imu/
           mod.rs                 (BoardImu: Imu trait impl wiring BMI088 + platform emulator)
@@ -436,29 +437,39 @@ hardware. Each interrupt handler is a plain Rust function. The Executive owns
 all interrupt service routines, which it registers at startup via the HAL.
 
 The `#[interrupt]` attribute must be re-exported from the **device PAC crate**
-(e.g., `stm32f4`), not used directly from `cortex-m-rt`. Using the PAC's
-re-export causes the compiler to verify that the interrupt name actually exists
-on the target device, catching typos at compile time instead of silently
-producing an unregistered handler at runtime:
+(`stm32f7xx_hal::pac::interrupt` for this project — see C-PAC-LOCAL in §4.1
+and ADR-010), not used directly from `cortex-m-rt`. Using the PAC's re-export
+causes the compiler to verify that the interrupt name actually exists on the
+target device, catching typos at compile time instead of silently producing
+an unregistered handler at runtime.
+
+The AGC interrupt names do **not** map trivially onto STM32 timer names. The
++1 offset below (TN-RUPT → TIM(N-1)) is forced by the F7 timer pool: only
+TIM2 and TIM5 are 32-bit, and they're claimed by the two T-RUPTs that need
+the range (T3 ≤ 163 s) or the tick rate (T6 = 0.625 ms at 108 MHz). The 16-bit
+TIM3 and TIM4 take the remaining T4 and T5 slots. The authoritative mapping
+table lives in `agc-board-nucleo-f767/src/local/timers.rs`.
 
 ```rust
-// Correct: use the device crate's re-exported attribute
-use stm32f4::interrupt;
+// Correct: use the device crate's re-exported attribute (ADR-010)
+use stm32f7xx_hal::pac::interrupt;
 
 #[interrupt]
-fn TIM3() {
-    // T3RUPT -- Waitlist task dispatch
+fn TIM2() {
+    // T3RUPT -- Waitlist task dispatch (32-bit, ≤163 s range)
 }
 
 #[interrupt]
-fn TIM4() {
-    // T4RUPT -- periodic I/O (DSKY, IMU monitoring)
+fn TIM3() {
+    // T4RUPT -- periodic 120 ms I/O drain (DSKY, gyro drift comp)
 }
 
 #[interrupt]
 fn TIM5() {
-    // T5RUPT -- Digital autopilot cycle
+    // T6RUPT -- RCS jet pulse timer (32-bit @ 108 MHz, 0.625 ms ticks)
 }
+// TIM4 / T5RUPT is configured but its IRQ is not unmasked --
+// the DAP runs as a Waitlist task instead (ADR-020).
 ```
 
 #### HardFault Handler
@@ -1396,10 +1407,16 @@ Running on `cortex-m-rt` with no OS imposes hard rules:
   call chain (SERVICER -> orbit integrator -> Kepler solver -> linalg) must be
   bounded and measured.
 - **Interrupt vectors**: Defined via `#[interrupt]` re-exported from the device
-  PAC crate (e.g., `stm32f4`), not from `cortex-m-rt` directly. This gives
-  compile-time verification that the interrupt name exists on the target device.
-  T3RUPT, T4RUPT, T5RUPT, T6RUPT map to hardware timer interrupts (e.g.,
-  `TIM3`, `TIM4`, `TIM5` on STM32F4).
+  PAC crate (`stm32f7xx_hal::pac::interrupt`), not from `cortex-m-rt` directly.
+  This gives compile-time verification that the interrupt name exists on the
+  target device. The four AGC scheduler interrupts map to STM32F7 timers as
+  follows: **T3RUPT → TIM2** (32-bit, for the ≤163 s Waitlist range),
+  **T4RUPT → TIM3** (periodic 120 ms), **T5RUPT → TIM4** (configured but IRQ
+  not unmasked — DAP moved to the Waitlist per ADR-020), **T6RUPT → TIM5**
+  (32-bit at 108 MHz for the 0.625 ms RCS jet tick). The +1 offset is forced
+  by hardware: only TIM2 and TIM5 are 32-bit on F7, and they're claimed by the
+  two T-RUPTs that need long range (T3) and fast tick (T6). Authoritative
+  mapping table: `agc-board-nucleo-f767/src/local/timers.rs`.
 
 ### 14.4 Linker Script
 
