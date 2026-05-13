@@ -52,7 +52,7 @@ Maximum frame size: 252 bytes.
 
 ### CRC Algorithm
 
-CRC-16 (polynomial 0x1021, initial value 0x0000, no input/output reflection).
+CRC-16/CCITT (polynomial 0x1021, initial value 0xFFFF, no input/output reflection, no XOR-out).
 Covers bytes from LEN through end of PAYLOAD (STX and the two CRC bytes are
 excluded).
 

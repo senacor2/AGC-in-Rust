@@ -13,6 +13,10 @@ pub const WAITLIST_OVERFLOW: u16 = 1211;
 pub const IMU_NOT_ALIGNED: u16 = 0o210;
 /// Celestial body too close to Sun for optical sighting.
 pub const BODY_TOO_CLOSE_TO_SUN: u16 = 0o206;
+/// Optics error — mark rejected. Raised by P22/P23 when a sighting fails
+/// the editing test (sigma > limit).
+#[allow(dead_code)]
+pub const OPTICS_MARK_REJECTED: u16 = 0o220;
 /// Navigation integration failed to converge.
 pub const NAV_NO_CONVERGE: u16 = 0o401;
 /// Invalid orbit (sub-parabolic or degenerate conic).

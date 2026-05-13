@@ -259,6 +259,8 @@ pub fn lambert(r1: Vec3, r2: Vec3, tof: f64, mu: f64, prograde: bool) -> (Vec3, 
 /// Evaluate the non-dimensional TOF T(x,λ) and its first two derivatives w.r.t. x
 /// for single-revolution transfers (x ∈ (−1, 1)).
 ///
+/// Implements **Izzo 2015, Eq. 18** for `T(x,λ)`; derivatives use Eq. 22.
+///
 /// Returns `(T, dT/dx, d²T/dx²)`.
 ///
 /// # Mathematics

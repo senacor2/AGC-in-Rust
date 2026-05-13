@@ -174,7 +174,7 @@ T   = tof × sqrt(2μ / s³)                   // non-dimensional time
 **Step 3 — Initial guess for x**
 
 Izzo's parameter x ∈ (−1, 1) is related to the semi-major axis. The closed-form
-initial guess (from Izzo 2015, Eq. 20–22) reads:
+initial guess (from Izzo 2015, Eqs. 19, 21, 30) reads:
 
 ```
 // Compute T at x=0 (parabolic reference) and x=1 boundary
@@ -186,7 +186,7 @@ x0  = clamp(x0, −1 + ε, 1 − ε)
 
 **Step 4 — Halley iteration on x**
 
-The function `t(x)` (Izzo 2015, Eq. 9) gives the non-dimensional TOF as a
+The function `T(x,λ)` (Izzo 2015, Eq. 18) gives the non-dimensional TOF as a
 function of x. Iterate using Halley's method:
 
 ```

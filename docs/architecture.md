@@ -334,7 +334,9 @@ Example sub-trait:
 ```rust
 pub trait Imu {
     /// Read accumulated PIPA delta-V counts since last call (x, y, z).
-    /// Destructive: counters are zeroed on read. Called only by `services::average_g`.
+    /// Destructive at the hardware level. Called by `Executive::run` every
+    /// foreground iteration; counts are saturating-accumulated into
+    /// `AgcState::pipa_counts`, which the SERVICER consumes every 2 s.
     fn read_pipa(&mut self) -> [i16; 3];
     /// Read the three CDU gimbal angles (outer, inner, middle).
     fn read_cdu(&self) -> [CduAngle; 3];

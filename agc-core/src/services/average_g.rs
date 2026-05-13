@@ -1,20 +1,20 @@
 //! SERVICER — the 2-second navigation cycle (Average-G integration).
 //!
-//! Reads PIPA delta-V counts from the staging field `AgcState::pipa_counts`
-//! (written by the T3RUPT handler or hardware shim before dispatch — Strategy B
-//! from the spec §6.3), compensates them for calibration errors, rotates the
-//! resulting delta-V into the inertial reference frame via REFSMMAT, and drives
+//! Reads PIPA delta-V counts from the staging field `AgcState::pipa_counts`,
+//! compensates them for calibration errors, rotates the resulting delta-V into
+//! the inertial reference frame via REFSMMAT, and drives
 //! `navigation::integration::average_g_step`.
 //!
 //! # Hardware access design choice
 //!
 //! Waitlist tasks have the signature `fn(&mut AgcState)` — no hardware parameter.
-//! This module uses **Strategy B** (spec §6.3): the T3RUPT handler reads the PIPA
-//! counters and stores the raw counts in `AgcState::pipa_counts` before calling
-//! `Waitlist::dispatch`. `servicer_task` reads from that staging field, so it
-//! needs no direct hardware access. Rescheduling only needs `Waitlist::schedule`,
-//! which is available via `state.waitlist`; the T3RUPT handler is responsible for
-//! calling `hw.timers().arm_t3` after `dispatch` returns the next delta.
+//! `Executive::run` calls `hw.imu().read_pipa()` on every foreground iteration
+//! and saturating-adds the counts into `AgcState::pipa_counts`. `servicer_task`
+//! reads (and resets) that staging field on its 2-second cycle, so it needs no
+//! direct hardware access. The foreground accumulator handles the destructive-
+//! read semantics correctly: PIPA counters are read frequently, but counts are
+//! summed in software rather than lost. Rescheduling only needs
+//! `Waitlist::schedule`, which is available via `state.waitlist`.
 //!
 //! # AGC source references
 //!

@@ -11,8 +11,11 @@ pub trait Imu {
     /// call (destructive read — counters are zeroed). Returns [x, y, z] counts;
     /// each count ≈ 0.0585 m/s on the real AGC.
     ///
-    /// Called only by `services::average_g` (SERVICER) every 2 seconds.
-    /// Calling more frequently reads partial counts and corrupts navigation.
+    /// Called by `Executive::run` on every foreground iteration; the counts
+    /// are saturating-accumulated into `AgcState::pipa_counts`. The SERVICER
+    /// (`services::average_g`) consumes that staging field on its 2-second
+    /// cycle and resets it. This pattern handles the destructive-read
+    /// semantics correctly without requiring exactly-on-time SERVICER calls.
     fn read_pipa(&mut self) -> [i16; 3];
 
     /// Read the three IMU CDU gimbal angles (outer, inner, middle).

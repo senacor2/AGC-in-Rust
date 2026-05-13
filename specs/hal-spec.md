@@ -714,7 +714,7 @@ cells CDUXCMD/CDUYCMD/CDUZCMD (octal 0050–0052) carry the commanded angle.
 | Return | `[x, y, z]` in raw pulse counts (signed; positive = positive delta-V on that axis) |
 | Side effect | Resets counter cells to zero (destructive read) |
 | Scale | ~0.0585 m/s per count (mission-calibrated; exact factor applied in `imu_control`) |
-| Called from | `services/average_g.rs` (SERVICER) every 2 seconds |
+| Called from | `executive/scheduler.rs` (`Executive::run` foreground loop, every iteration). Counts are saturating-accumulated into `AgcState::pipa_counts`; the SERVICER reads and resets that staging field every 2 s. |
 
 **Preconditions**: The IMU must be powered. Calling while the IMU is uncaged
 or during coarse alignment produces implementation-defined values.

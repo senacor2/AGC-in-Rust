@@ -173,9 +173,10 @@ pub struct AgcState {
 
     /// Raw PIPA counts staging field.
     ///
-    /// Written by the T3RUPT handler (Strategy B) or hardware shim before
-    /// dispatching `servicer_task`. Consumed by the SERVICER each 2-second cycle.
-    /// Units: raw PIPA pulse counts (platform frame, destructive read).
+    /// Saturating-accumulated by `Executive::run` on every foreground
+    /// iteration from `hw.imu().read_pipa()` (which is destructive at the
+    /// hardware level). Consumed and reset by the SERVICER each 2-second
+    /// cycle. Units: raw PIPA pulse counts (platform frame).
     pub pipa_counts: [i16; 3],
 
     /// Optional program-specific callback invoked at the end of each SERVICER cycle.
