@@ -11,10 +11,10 @@ pub struct BridgeState {
     pub key_queue: Deque<u8, 16>,
 
     /// Last-cached optics trunnion CDU angle (bridge → AGC).
-    pub optics_cdu_trunnion: u16,
+    pub optics_cdu_trunnion: i16,
 
     /// Last-cached optics shaft CDU angle (bridge → AGC).
-    pub optics_cdu_shaft: u16,
+    pub optics_cdu_shaft: i16,
 
     /// Sticky mark-pressed flag. Set by `OpticsMark`, cleared on first read.
     pub optics_mark_pending: bool,

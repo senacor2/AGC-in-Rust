@@ -120,7 +120,7 @@ fn rt_dsky_key() {
 fn rt_optics_cdu() {
     roundtrip(
         Msg::OpticsCdu {
-            trunnion: 0xAAAA,
+            trunnion: 0xAAAAu16 as i16,
             shaft: 0x5555,
         },
         0x0E,

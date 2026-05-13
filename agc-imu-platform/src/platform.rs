@@ -107,18 +107,15 @@ impl PlatformEmulator {
         ])
     }
 
-    /// Read gimbal CDU angles as wrapping u16 counts.
+    /// Read gimbal CDU angles as wrapping i16 counts ([-180°, +180°)).
     ///
     /// CDU index mapping per specs/imu-control-spec.md §2.1:
     ///   index 0 = outer = roll
     ///   index 1 = inner = pitch
     ///   index 2 = middle = yaw
-    pub fn read_cdu(&self) -> [u16; 3] {
+    pub fn read_cdu(&self) -> [i16; 3] {
         let euler = self.attitude.to_euler_zyx(); // [roll, pitch, yaw]
-        let to_cdu = |rad: f64| -> u16 {
-            // Wrapping: (rad / CDU_PULSE_RAD) as i32 interpreted as i16 then reinterpret as u16
-            (rad / CDU_PULSE_RAD) as i32 as i16 as u16
-        };
+        let to_cdu = |rad: f64| -> i16 { (rad / CDU_PULSE_RAD) as i32 as i16 };
         [to_cdu(euler[0]), to_cdu(euler[1]), to_cdu(euler[2])]
     }
 

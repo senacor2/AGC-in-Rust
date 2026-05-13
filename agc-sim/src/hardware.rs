@@ -385,10 +385,12 @@ mod tests {
     #[test]
     fn tc_optics_02_injected_angles() {
         let mut hw = SimHardware::new();
+        // 4096 = +22.5°; -32768 = -180° (i16::MIN, the same physical angle as the
+        // pre-i16-migration test value 32768).
         hw.optics.trunnion = CduAngle(4096);
-        hw.optics.shaft = CduAngle(32768);
+        hw.optics.shaft = CduAngle(i16::MIN);
         assert_eq!(hw.optics().trunnion_angle().0, 4096);
-        assert_eq!(hw.optics().shaft_angle().0, 32768);
+        assert_eq!(hw.optics().shaft_angle().0, i16::MIN);
     }
 
     #[test]

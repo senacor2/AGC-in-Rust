@@ -66,7 +66,7 @@ pub struct DapState {
     /// Used to compute body rates by finite difference.
     /// Updated at the END of each dap_step call.
     /// AGC: CDUX (octal 0130), CDUY (0131), CDUZ (0132).
-    /// Units: CduAngle (u16 counts); full revolution = 65536 counts = 2π rad.
+    /// Units: CduAngle (i16 counts); full revolution = 65536 counts = 2π rad.
     pub prev_cdu: [CduAngle; 3],
 
     // ── Deadbands ─────────────────────────────────────────────────────────────
@@ -495,7 +495,7 @@ mod tests {
         // delta_counts = rate_rad_s × dt × (65536 / 2π)
         let rate_rad_s = 5.0_f64.to_radians();
         let delta_counts =
-            (rate_rad_s * DAP_PERIOD_S * 65536.0 / core::f64::consts::TAU).round() as u16;
+            (rate_rad_s * DAP_PERIOD_S * 65536.0 / core::f64::consts::TAU).round() as i16;
 
         state.dap_state.mode = DapMode::RateDamping;
         state.dap_state.rate_deadband = 0.001; // 0.001 rad/s — well below 5°/s

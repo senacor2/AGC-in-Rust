@@ -231,8 +231,8 @@ fn main() -> ! {
             // Advance synthetic CDU angles: ~1 count per 100 ms on each axis.
             // Divide by 100 ms: one count per 10 polls.
             let elapsed_100ms = now / 100;
-            state.cdu_trunnion = elapsed_100ms as u16;
-            state.cdu_shaft = elapsed_100ms.wrapping_add(32768) as u16;
+            state.cdu_trunnion = elapsed_100ms as i16;
+            state.cdu_shaft = elapsed_100ms.wrapping_add(32768) as i16;
 
             state.last_cdu_tx = now;
 

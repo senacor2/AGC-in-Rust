@@ -1,18 +1,23 @@
 use super::vector::Vec3;
 
 /// CDU (Coupling Data Unit) gimbal angle from the IMU or optics.
-/// Stored as a raw u16 twos-complement count; full revolution = 2^15 counts
-/// (scale factor B-1 revolutions, i.e. 1 count ≈ 0.0055°).
+///
+/// Stored as a signed 16-bit count. The full `i16` range wraps over one
+/// revolution: `i16::MIN` = -180°, `0` = 0°, `i16::MAX` ≈ +180° − 1 LSB.
+/// 1 LSB = 360° / 2^16 ≈ 0.0055°.
+///
+/// This is the Rust analogue of the AGC's i15 signed-fraction CDU encoding,
+/// in the same way `f64` replaces the AGC's double-precision fixed point.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
-pub struct CduAngle(pub u16);
+pub struct CduAngle(pub i16);
 
 impl CduAngle {
-    /// Convert to radians.
+    /// Convert to radians in the range [-π, +π).
     pub fn to_radians(self) -> f64 {
         (self.0 as f64) * (core::f64::consts::TAU / 65536.0)
     }
 
-    /// Convert to degrees.
+    /// Convert to degrees in the range [-180, +180).
     pub fn to_degrees(self) -> f64 {
         self.to_radians() * (180.0 / core::f64::consts::PI)
     }
@@ -64,33 +69,44 @@ mod tests {
 
     #[test]
     fn tc_cdu_1_zero() {
-        assert!((CduAngle(0x0000).to_radians() - 0.0).abs() < EPS);
-        assert!((CduAngle(0x0000).to_degrees() - 0.0).abs() < EPS);
+        assert!((CduAngle(0).to_radians() - 0.0).abs() < EPS);
+        assert!((CduAngle(0).to_degrees() - 0.0).abs() < EPS);
     }
 
     #[test]
-    fn tc_cdu_2_quarter_rev() {
-        assert!((CduAngle(0x4000).to_radians() - PI / 2.0).abs() < EPS);
-        assert!((CduAngle(0x4000).to_degrees() - 90.0).abs() < 1e-8);
+    fn tc_cdu_2_plus_quarter_rev() {
+        // +90° = +2^14 counts
+        assert!((CduAngle(16384).to_radians() - PI / 2.0).abs() < EPS);
+        assert!((CduAngle(16384).to_degrees() - 90.0).abs() < 1e-8);
     }
 
     #[test]
-    fn tc_cdu_3_half_rev() {
-        assert!((CduAngle(0x8000).to_radians() - PI).abs() < EPS);
-        assert!((CduAngle(0x8000).to_degrees() - 180.0).abs() < 1e-8);
+    fn tc_cdu_3_minus_half_rev() {
+        // i16::MIN = -32768 = -180° exact
+        assert!((CduAngle(i16::MIN).to_radians() - (-PI)).abs() < EPS);
+        assert!((CduAngle(i16::MIN).to_degrees() - (-180.0)).abs() < 1e-8);
     }
 
     #[test]
-    fn tc_cdu_4_three_quarter_rev() {
-        assert!((CduAngle(0xC000).to_radians() - 3.0 * PI / 2.0).abs() < EPS);
-        assert!((CduAngle(0xC000).to_degrees() - 270.0).abs() < 1e-8);
+    fn tc_cdu_4_minus_quarter_rev() {
+        // -90° = -2^14 counts
+        assert!((CduAngle(-16384).to_radians() - (-PI / 2.0)).abs() < EPS);
+        assert!((CduAngle(-16384).to_degrees() - (-90.0)).abs() < 1e-8);
     }
 
     #[test]
-    fn tc_cdu_5_max_count() {
-        let expected_rad = TAU * (65535.0 / 65536.0);
-        assert!((CduAngle(0xFFFF).to_radians() - expected_rad).abs() < EPS);
-        assert!((CduAngle(0xFFFF).to_degrees() - 359.9945068359375).abs() < 1e-6);
+    fn tc_cdu_5_minus_one_lsb() {
+        // CduAngle(-1) = -1 * TAU/65536 ≈ -0.0055°
+        let expected_rad = -TAU / 65536.0;
+        assert!((CduAngle(-1).to_radians() - expected_rad).abs() < EPS);
+        assert!((CduAngle(-1).to_degrees() - (-360.0 / 65536.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn tc_cdu_6_plus_max_count() {
+        // i16::MAX = 32767 ≈ +180° − 1 LSB
+        let expected_rad = TAU * (32767.0 / 65536.0);
+        assert!((CduAngle(i16::MAX).to_radians() - expected_rad).abs() < EPS);
     }
 
     // ── Met tests (TC-MET-1 through TC-MET-7) ───────────────────────────────

@@ -16,7 +16,7 @@ pub enum Msg {
     AgcHeartbeat { mission_time_cs: u32 },
     // bridge → AGC
     DskyKey { code: u8, dsky: u8 },
-    OpticsCdu { trunnion: u16, shaft: u16 },
+    OpticsCdu { trunnion: i16, shaft: i16 },
     OpticsMark,
     EngineThrustOn { on: u8 },
     UplinkWord { word: u16 },
@@ -213,8 +213,8 @@ impl Msg {
             0xA0 => {
                 check_len(payload, 4)?;
                 Msg::OpticsCdu {
-                    trunnion: u16_le(&payload[0..]),
-                    shaft: u16_le(&payload[2..]),
+                    trunnion: i16_le(&payload[0..]),
+                    shaft: i16_le(&payload[2..]),
                 }
             }
             0xA1 => {

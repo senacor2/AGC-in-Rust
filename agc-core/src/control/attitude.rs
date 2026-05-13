@@ -59,8 +59,8 @@ impl AttitudeError {
 
 /// Estimate body angular rates in rad/s from two successive CDU readings.
 ///
-/// Uses two's-complement (wrapping) subtraction on the raw `u16` counts to
-/// handle the 0/65536 wrap-around correctly, then converts to rad/s.
+/// Uses two's-complement (wrapping) subtraction on the raw `i16` counts to
+/// handle the ±180° wrap-around correctly, then converts to rad/s.
 ///
 /// # Preconditions
 /// - `dt > 0.0`.  A zero or negative interval is a programming error; the
@@ -78,9 +78,9 @@ pub fn compute_body_rates(cdu_new: [CduAngle; 3], cdu_old: [CduAngle; 3], dt: f6
 
     let mut rates = [0.0_f64; 3];
     for i in 0..3 {
-        // Two's-complement subtraction: cast to i16 after wrapping_sub gives a
-        // signed delta in (-32768, +32767], correctly handling 0/TAU wrap-around.
-        let delta_counts = (cdu_new[i].0.wrapping_sub(cdu_old[i].0) as i16) as f64;
+        // i16::wrapping_sub returns a signed delta in [-32768, +32767],
+        // correctly handling the ±180° wrap-around.
+        let delta_counts = cdu_new[i].0.wrapping_sub(cdu_old[i].0) as f64;
         let delta_rad = delta_counts * (TAU / 65536.0);
         rates[i] = delta_rad / dt;
     }
@@ -341,7 +341,7 @@ mod tests {
     /// The PD torque must be negative on the roll axis (restoring) and zero elsewhere.
     #[test]
     fn tc_att_02_pure_roll_error() {
-        let five_deg_counts = (5.0_f64.to_radians() * 65536.0 / TAU) as u16;
+        let five_deg_counts = (5.0_f64.to_radians() * 65536.0 / TAU) as i16;
         let cdu = [CduAngle(five_deg_counts), CduAngle(0), CduAngle(0)];
 
         let error = compute_attitude_error(cdu, linalg::IDENTITY, linalg::IDENTITY);
@@ -422,8 +422,8 @@ mod tests {
 
         // Round-trip via compute_body_rates
         let dt = 0.1_f64;
-        let delta: u16 = ((omega_roll * dt) * 65536.0 / TAU).round() as u16;
-        let cdu_old = [CduAngle(0u16), CduAngle(0), CduAngle(0)];
+        let delta: i16 = ((omega_roll * dt) * 65536.0 / TAU).round() as i16;
+        let cdu_old = [CduAngle(0), CduAngle(0), CduAngle(0)];
         let cdu_new = [CduAngle(delta), CduAngle(0), CduAngle(0)];
         let estimated = compute_body_rates(cdu_new, cdu_old, dt);
 
@@ -524,7 +524,7 @@ mod tests {
     #[test]
     fn tc_att_sign_ci10_roll_sign_convention() {
         // Encode +1° as CDU counts for the outer (roll) gimbal
-        let one_deg_counts = (1.0_f64.to_radians() * 65536.0 / TAU).round() as u16;
+        let one_deg_counts = (1.0_f64.to_radians() * 65536.0 / TAU).round() as i16;
         let cdu = [CduAngle(one_deg_counts), CduAngle(0), CduAngle(0)];
 
         let error = compute_attitude_error(cdu, linalg::IDENTITY, linalg::IDENTITY);

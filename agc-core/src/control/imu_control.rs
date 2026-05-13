@@ -219,9 +219,9 @@ pub fn compute_gyro_drift(dt_cs: u32, nbd: [f64; 3]) -> [i16; 3] {
 /// `Comanche055/IMU_CALIBRATION_AND_ALIGNMENT.agc` — coarse-align CDU drive loop.
 pub fn coarse_align_step(target: [CduAngle; 3], current: [CduAngle; 3]) -> [i16; 3] {
     [
-        target[0].0.wrapping_sub(current[0].0) as i16,
-        target[1].0.wrapping_sub(current[1].0) as i16,
-        target[2].0.wrapping_sub(current[2].0) as i16,
+        target[0].0.wrapping_sub(current[0].0),
+        target[1].0.wrapping_sub(current[1].0),
+        target[2].0.wrapping_sub(current[2].0),
     ]
 }
 
@@ -349,20 +349,12 @@ pub fn refsmmat_from_star_sightings(
 /// `Comanche055/IMU_CALIBRATION_AND_ALIGNMENT.agc` — IMODES33/IMUMON monitor.
 pub fn is_gimbal_lock_warning(cdu: &[CduAngle; 3]) -> bool {
     const GIMBAL_LOCK_WARNING_BAND: u16 = 3641; // ≈ 20° in CDU counts
-    const NINETY_DEG: u16 = 16384; // 90° in CDU counts
-    const TWO_SEVENTY_DEG: u16 = 49152; // 270° (= -90°) in CDU counts
+    const PLUS_NINETY_DEG: i16 = 16384;
+    const MINUS_NINETY_DEG: i16 = -16384;
 
     let middle = cdu[2].0;
-
-    // Wrapping distance to +90°: min of the two arc directions
-    let dist_pos90 = middle
-        .wrapping_sub(NINETY_DEG)
-        .min(NINETY_DEG.wrapping_sub(middle));
-    // Wrapping distance to -90° / 270°
-    let dist_neg90 = middle
-        .wrapping_sub(TWO_SEVENTY_DEG)
-        .min(TWO_SEVENTY_DEG.wrapping_sub(middle));
-
+    let dist_pos90 = middle.wrapping_sub(PLUS_NINETY_DEG).unsigned_abs();
+    let dist_neg90 = middle.wrapping_sub(MINUS_NINETY_DEG).unsigned_abs();
     dist_pos90 < GIMBAL_LOCK_WARNING_BAND || dist_neg90 < GIMBAL_LOCK_WARNING_BAND
 }
 
@@ -385,18 +377,12 @@ pub fn is_gimbal_lock_warning(cdu: &[CduAngle; 3]) -> bool {
 /// `Comanche055/IMU_CALIBRATION_AND_ALIGNMENT.agc` — IMUMON phase 3 critical check.
 pub fn is_gimbal_lock_critical(cdu: &[CduAngle; 3]) -> bool {
     const GIMBAL_LOCK_CRITICAL_BAND: u16 = 910; // ≈ 5° in CDU counts
-    const NINETY_DEG: u16 = 16384;
-    const TWO_SEVENTY_DEG: u16 = 49152;
+    const PLUS_NINETY_DEG: i16 = 16384;
+    const MINUS_NINETY_DEG: i16 = -16384;
 
     let middle = cdu[2].0;
-
-    let dist_pos90 = middle
-        .wrapping_sub(NINETY_DEG)
-        .min(NINETY_DEG.wrapping_sub(middle));
-    let dist_neg90 = middle
-        .wrapping_sub(TWO_SEVENTY_DEG)
-        .min(TWO_SEVENTY_DEG.wrapping_sub(middle));
-
+    let dist_pos90 = middle.wrapping_sub(PLUS_NINETY_DEG).unsigned_abs();
+    let dist_neg90 = middle.wrapping_sub(MINUS_NINETY_DEG).unsigned_abs();
     dist_pos90 < GIMBAL_LOCK_CRITICAL_BAND || dist_neg90 < GIMBAL_LOCK_CRITICAL_BAND
 }
 
@@ -479,7 +465,8 @@ mod tests {
     #[test]
     fn tc_imu_ctrl_3_coarse_align_wraparound() {
         let target = [CduAngle(0), CduAngle(0), CduAngle(0)];
-        let current = [CduAngle(1000), CduAngle(500), CduAngle(65000)];
+        // 65000 as u16 == -536 as i16 — both denote ≈ -2.95° (or +357.05°).
+        let current = [CduAngle(1000), CduAngle(500), CduAngle(-536)];
         let cmds = coarse_align_step(target, current);
         // 0.wrapping_sub(1000) as i16 = -1000
         assert_eq!(cmds[0], -1000_i16, "TC-IMU-CTRL-3 outer axis");
@@ -628,8 +615,8 @@ mod tests {
             "TC-IMU-CTRL-7: no critical at 75°"
         );
 
-        // At 270° (49152 counts) — exactly at -90°, inside both zones
-        let at_270 = [CduAngle(0), CduAngle(0), CduAngle(49152)];
+        // At -90° (-16384 counts) — the second gimbal-lock singularity
+        let at_270 = [CduAngle(0), CduAngle(0), CduAngle(-16384)];
         assert!(
             is_gimbal_lock_warning(&at_270),
             "TC-IMU-CTRL-7: warning at 270°"

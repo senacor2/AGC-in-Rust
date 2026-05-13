@@ -17,7 +17,7 @@ fn stationary() {
         p.tick([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 0.01);
     }
     let cdu = p.read_cdu();
-    assert_eq!(cdu, [0u16, 0, 0], "stationary CDU");
+    assert_eq!(cdu, [0i16, 0, 0], "stationary CDU");
     let pipa = p.read_pipa();
     assert_eq!(pipa.0, [0i16, 0, 0], "stationary PIPA");
 }
@@ -94,7 +94,7 @@ fn coarse_align_arbitrary() {
     p0.uncage(UnitQuaternion::IDENTITY);
     p0.coarse_align([1024, 0, 0]);
     let cdu0 = p0.read_cdu();
-    let expected0 = (1024.0 * ratio) as i32 as i16 as u16;
+    let expected0 = (1024.0 * ratio) as i32 as i16;
     let d0 = (cdu0[0] as i32 - expected0 as i32).unsigned_abs();
     assert!(
         d0 <= 1,
@@ -108,7 +108,7 @@ fn coarse_align_arbitrary() {
     p1.uncage(UnitQuaternion::IDENTITY);
     p1.coarse_align([0, 2048, 0]);
     let cdu1 = p1.read_cdu();
-    let expected1 = (2048.0 * ratio) as i32 as i16 as u16;
+    let expected1 = (2048.0 * ratio) as i32 as i16;
     let d1 = (cdu1[1] as i32 - expected1 as i32).unsigned_abs();
     assert!(
         d1 <= 1,
@@ -124,7 +124,7 @@ fn coarse_align_arbitrary() {
     let cdu2 = p2.read_cdu();
     assert_eq!(
         cdu2,
-        [0u16, 0, 0],
+        [0i16, 0, 0],
         "coarse_align zero command leaves CDU at zero"
     );
 }
@@ -151,5 +151,5 @@ fn caged_no_integration() {
     );
     // CDU must read zeros
     let cdu = p.read_cdu();
-    assert_eq!(cdu, [0u16, 0, 0], "caged: CDU must be zero");
+    assert_eq!(cdu, [0i16, 0, 0], "caged: CDU must be zero");
 }

@@ -9,10 +9,10 @@ pub struct BridgeState {
     pub last_heartbeat_tx: u32,
     /// `heartbeat_ms` value at the last OpticsCdu transmission.
     pub last_cdu_tx: u32,
-    /// Synthetic trunnion CDU angle (slow drift, 1 count ≈ 0.176 arc-sec).
-    pub cdu_trunnion: u16,
+    /// Synthetic trunnion CDU angle (slow drift, 1 count ≈ 0.0055°).
+    pub cdu_trunnion: i16,
     /// Synthetic shaft CDU angle.
-    pub cdu_shaft: u16,
+    pub cdu_shaft: i16,
     /// `mission_time_cs` from the AGC's most recent AgcHeartbeat, if any.
     pub last_agc_heartbeat: Option<u32>,
     /// Whether the startup Hello has been acknowledged by the AGC.
