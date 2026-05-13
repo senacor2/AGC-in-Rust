@@ -29,6 +29,46 @@ Where these conflict, fidelity wins. Navigation errors kill people.
 | Arithmetic | 15-bit ones-complement, fractional | `f64` for navigation/guidance math; `i16`/`u16` for I/O and hardware registers |
 | Real-time | Hard deadlines (T3RUPT variable for Waitlist, T4RUPT 120ms cycle, T5RUPT ~100ms for DAP, T6RUPT on-demand for RCS jet timing) | Interrupt-driven with priority; same timing contracts |
 
+### 1.5 System Context
+
+The CSM guidance computer sits at the centre of a small constellation of
+peripherals and external actors. The AGC board itself owns the IMU locally
+(ADR-016); every other peripheral and the ground link are reached over the
+bridge MCU running `agc-bridge-pico` (ADR-015, ADR-019).
+
+*The diagram below shows the AGC computer (centre, highlighted) and the entities
+it exchanges data with. Arrow labels describe the direction of significant data
+flow.*
+
+```mermaid
+graph LR
+    Crew["Crew"]
+    DSKY["DSKY<br/>(display + keyboard)"]
+    IMU["IMU<br/>BMI088 + platform emulator<br/>(strapdown -> gimballed CDU/PIPA)"]
+    AGC["AGC computer<br/>Nucleo-F767ZI<br/>agc-core + agc-board-nucleo-f767"]
+    Bridge["Bridge MCU<br/>RP2040<br/>agc-bridge-pico"]
+    Optics["Optics<br/>(sextant + scanning telescope)"]
+    SPS["SPS engine<br/>(main propulsion)"]
+    RCS["RCS thrusters<br/>(SM quads + CM rings)"]
+    Ground["Ground / Mission Control"]
+
+    Crew -- "key presses" --> DSKY
+    DSKY -- "PROG / VERB / NOUN<br/>R1 / R2 / R3 / lamps" --> Crew
+
+    IMU -- "PIPA counts, CDU angles" --> AGC
+    AGC -- "gyro torque, coarse-align" --> IMU
+
+    AGC <-- "framed protocol<br/>(USART, 460800 8N1)" --> Bridge
+
+    Bridge <-- "21 rows + lamps<br/>+ key codes" --> DSKY
+    Bridge <-- "shaft / trunnion<br/>mark flag" --> Optics
+    Bridge -- "gimbal command, ignition" --> SPS
+    Bridge -- "jet on / off" --> RCS
+    Bridge <-- "uplink / downlink" --> Ground
+
+    style AGC fill:#ffd966,stroke:#b8860b,stroke-width:3px,color:#000
+```
+
 
 ## 2. Crate and Module Structure
 
@@ -38,6 +78,42 @@ protocol, the IMU platform emulator, the bridge firmware, the host simulator,
 and the integration tests each live in their own crate. This split keeps the
 flight software independent of any specific MCU and lets host-side tests link
 `agc-core` without pulling in bare-metal dependencies.
+
+*The diagram below shows the seven workspace crates and their `uses`
+relationships. An arrow A -> B means "A depends on B". External crates
+(`cortex-m`, `stm32f7xx-hal`, `defmt`, `heapless`, etc.) are intentionally
+omitted; see the per-crate `Cargo.toml` for those.*
+
+```mermaid
+graph TD
+    subgraph flight["Flight software (on-board)"]
+        core["agc-core"]
+        board["agc-board-nucleo-f767"]
+        platform["agc-imu-platform"]
+    end
+
+    subgraph bridge["Bridge firmware"]
+        pico["agc-bridge-pico"]
+    end
+
+    subgraph host["Host-side simulation and test"]
+        sim["agc-sim"]
+        test["agc-test"]
+    end
+
+    protocol["agc-protocol"]
+
+    board --> core
+    board --> protocol
+    board --> platform
+
+    pico --> protocol
+
+    sim --> core
+
+    test --> core
+    test --> sim
+```
 
 ```
 agc-in-rust/                     (workspace root)
@@ -145,7 +221,73 @@ agc-in-rust/                     (workspace root)
         alarm_codes.rs           (Alarm code definitions and severity)
                                  (Verb and noun dispatch live in services/v_n.rs:
                                   `dispatch_verb_noun` and `noun_display` — see §10.)
-  
+```
+
+*The diagram below shows the ten `agc-core` module directories and how they
+depend on each other. An arrow A -> B means "A uses items from B". The
+layering runs from `types` and `tables` at the bottom to `programs` and the
+Executive's run loop at the top; cycles between Executive, services, control,
+and programs reflect that the scheduler inlines calls into the upper layers
+(see `executive/scheduler.rs::Executive::run`).*
+
+```mermaid
+graph TD
+    programs["programs"]
+    services["services"]
+    control["control"]
+    executive["executive"]
+    guidance["guidance"]
+    navigation["navigation"]
+    math["math"]
+    hal["hal"]
+    tables["tables"]
+    types["types"]
+
+    %% top layer: programs depend on everything below
+    programs --> executive
+    programs --> control
+    programs --> guidance
+    programs --> navigation
+    programs --> math
+    programs --> services
+    programs --> types
+
+    %% services: cross-cutting; pulled in by executive run loop and by programs
+    services --> executive
+    services --> navigation
+    services --> math
+    services --> tables
+    services --> control
+    services --> programs
+    services --> types
+
+    %% control: DAP / TVC / RCS / IMU compensation
+    control --> hal
+    control --> math
+    control --> services
+    control --> types
+
+    %% executive: scheduler; needs hal and (in run()) services and control
+    executive --> hal
+    executive --> control
+    executive --> services
+    executive --> types
+
+    %% guidance: targeting / maneuver / rendezvous / entry math
+    guidance --> math
+    guidance --> navigation
+    guidance --> types
+
+    %% navigation: state vectors, integration, gravity, conics
+    navigation --> math
+    navigation --> types
+
+    %% leaf layers
+    math --> types
+    hal --> types
+```
+
+```
   agc-protocol/                  (Bridge wire format -- #![no_std], used by both MCUs)
     src/
       lib.rs                     (re-exports; PROTO_VERSION constant)
