@@ -24,7 +24,7 @@ Where these conflict, fidelity wins. Navigation errors kill people.
 |---|---|---|
 | Memory | 2048 words erasable, 36864 words fixed | Target: `no_std`, static allocation only, no heap |
 | CPU | ~85000 additions/sec (11.7us MCT) | Bare-metal embedded target; must meet same deadlines |
-| OS | None; software owns the machine | `#![no_std]`, `#![no_main]`; we provide the scheduler |
+| OS | None; software owns the machine | `agc-core` is `#![no_std]`; firmware binary is also `#![no_main]`; we provide the scheduler |
 | Errors | Hardware restart restores safe state | Rust panics trigger restart handler; no unwinding |
 | Arithmetic | 15-bit ones-complement, fractional | `f64` for navigation/guidance math; `i16`/`u16` for I/O and hardware registers |
 | Real-time | Hard deadlines (T3RUPT variable for Waitlist, T4RUPT 120ms cycle, T5RUPT ~100ms for DAP, T6RUPT on-demand for RCS jet timing) | Interrupt-driven with priority; same timing contracts |
@@ -334,11 +334,16 @@ Example sub-trait:
 ```rust
 pub trait Imu {
     /// Read accumulated PIPA delta-V counts since last call (x, y, z).
+    /// Destructive: counters are zeroed on read. Called only by `services::average_g`.
     fn read_pipa(&mut self) -> [i16; 3];
-    /// Read CDU gimbal angles as raw u16 counts.
+    /// Read the three CDU gimbal angles (outer, inner, middle).
     fn read_cdu(&self) -> [CduAngle; 3];
-    /// Command gyro torque pulses for fine alignment.
+    /// Command gyro torque pulses for fine alignment on the given axis.
     fn torque_gyro(&mut self, axis: usize, pulses: i16);
+    /// Command coarse CDU drive angles for platform slew.
+    fn coarse_align(&mut self, commands: [i16; 3]);
+    /// True if the platform is caged (power-up state).
+    fn is_caged(&self) -> bool;
 }
 ```
 
@@ -360,37 +365,16 @@ HAL design patterns:
   sub-traits, so standard tooling (`probe-rs`, `defmt`, third-party drivers)
   can interact with them.
 
-- **Typestate for operational modes** (C-PIN-STATE): IMU and Optics operational
-  modes are encoded as type parameters so misconfiguration is a compile error.
-  Gyro torque commands are only available on an aligned IMU; calling them on an
-  unaligned one is rejected at compile time:
-
-```rust
-use core::marker::PhantomData;
-
-pub struct Unaligned;
-pub struct CoarseAligned;
-pub struct FineAligned;
-
-pub struct ImuImpl<State> {
-    spi: Spi<SPI1>,
-    _state: PhantomData<State>,
-}
-
-impl ImuImpl<Unaligned> {
-    pub fn into_coarse_aligned(self) -> ImuImpl<CoarseAligned> { ... }
-}
-
-impl ImuImpl<CoarseAligned> {
-    /// Only available after coarse alignment -- compile error otherwise.
-    pub fn torque_gyro(&mut self, axis: usize, pulses: i16) { ... }
-    pub fn into_fine_aligned(self) -> ImuImpl<FineAligned> { ... }
-}
-
-impl ImuImpl<CoarseAligned> {
-    pub fn free(self) -> Spi<SPI1> { self.spi }
-}
-```
+- **Alignment state as runtime enum** (C-IMU-ALIGN): The IMU's alignment
+  lifecycle (Caged → CoarseAligned → FineAligned) is tracked at runtime in
+  `AgcState::imu_alignment_state`, not via a typestate parameter on the HAL
+  wrapper. The bare-metal `BoardImu` is a zero-sized handle; all state lives
+  in `AgcState` (mutated by foreground code) and in the global
+  `PLATFORM: Mutex<RefCell<PlatformEmulator>>` (mutated by the TIM7 ISR).
+  Gating gyro torque on alignment is enforced by the SERVICER and the
+  programs that call it, not by the type system. A future enhancement could
+  lift this into a typestate parameter on a new wrapper type — see open
+  items in §16.
 
 - **PAC ownership** (C-PAC-LOCAL): The device PAC is a dependency of the board
   crate only (`agc-board-nucleo-f767` pulls in `stm32f7xx-hal`, which re-exports
@@ -987,9 +971,13 @@ The DSKY (Display and Keyboard) is the crew's sole interface to the computer.
 It consists of:
 
 **Output**: Electroluminescent display with PROG, VERB, NOUN (2 digits each),
-R1, R2, R3 (5 digits each, signed), plus indicator lights (UPLINK ACTY,
-NO ATT, STBY, KEY REL, OPR ERR, TEMP, GIMBAL LOCK, PROG, RESTART, TRACKER,
-ALT, VEL, COMP ACTY).
+R1, R2, R3 (5 digits each, signed), plus indicator lights. The original AGC
+panel had UPLINK ACTY, NO ATT, STBY, KEY REL, OPR ERR, TEMP, GIMBAL LOCK,
+PROG, RESTART, TRACKER, ALT, VEL, and COMP ACTY. The Rust port's `hal::dsky::Lamp`
+enum implements ten of these (UplinkActivity, NoAtt, Stby, KeyRel, OprErr,
+Restart, GimbalLock, Temp, ProgAlarm, CompActy); TRACKER lives as a field on
+`DskyState` but is not in the `Lamp` enum yet; ALT and VEL are LM-specific and
+out of scope for the CSM Comanche055 target.
 
 **Input**: 19 keys (0-9, VERB, NOUN, +, -, ENTER, CLR, PRO, KEY REL, RSET).
 
@@ -1403,18 +1391,27 @@ Running on `cortex-m-rt` with no OS imposes hard rules:
 
 - **No heap**: `alloc` is not used. All data structures are statically sized.
 - **No threads**: The execution model is single-threaded + interrupts.
-  Raw `static mut` is forbidden in application code. All shared mutable state
-  uses `cortex_m::interrupt::Mutex<RefCell<T>>` (heap-free -- `Mutex` and
-  `RefCell` are plain stack/static structs with zero allocation overhead). Access
-  always goes through `interrupt::free(|cs| ...)`, which provides a
-  `CriticalSection` token the compiler requires before the `Mutex` will yield
-  its contents. Each shared-state category has a designated static:
+  Raw `static mut` is avoided in application code (the firmware binary's
+  `static mut AGC_STATE` is the one allowed exception, justified by a
+  SAFETY comment because no ISR touches `AGC_STATE`). All ISR-shared
+  mutable state lives in `cortex_m::interrupt::Mutex<RefCell<T>>` (heap-
+  free; `Mutex` and `RefCell` are plain stack/static structs with zero
+  allocation overhead). Access always goes through `interrupt::free(|cs| ...)`,
+  which provides a `CriticalSection` token the compiler requires before
+  the `Mutex` will yield its contents. The board crate's ISR-shared
+  statics (`agc-board-nucleo-f767/src/lib.rs`):
 
-  | State | Type |
-  |---|---|
-  | `DapState` | `Mutex<RefCell<DapState>>` |
-  | `AlarmState` | `Mutex<Cell<AlarmState>>` |
-  | `DskyState` | `Mutex<RefCell<DskyState>>` |
+  | Static | Type | Touched by |
+  |---|---|---|
+  | `BRIDGE` | `Mutex<RefCell<BridgeState>>` | USART6 ISR (writes), HAL impls (reads) |
+  | `LINK` | `Mutex<RefCell<Option<UartLink>>>` | USART6 ISR + foreground sends |
+  | `PLATFORM` | `Mutex<RefCell<PlatformEmulator>>` | TIM7 ISR (writes), `BoardImu` reads |
+  | `BMI088` | `Mutex<RefCell<Option<Bmi088Driver>>>` | TIM7 ISR only |
+  | `TIMER_HANDLES` | `Mutex<RefCell<Option<TimerHandles>>>` | every TIM ISR + `Timers` impl |
+
+  `AgcState` (DAP, alarm, DSKY, executive, …) is NOT in a `Mutex<RefCell>` —
+  per Strategy D (ADR-017) it is mutated only by foreground code, so the
+  borrow checker enforces exclusion at compile time without a runtime lock.
 
 - **No async/await**: Rust's `async`/`await` and any executor (Tokio, Embassy, etc.)
   are prohibited. All concurrency is expressed exclusively through waitlist tasks
