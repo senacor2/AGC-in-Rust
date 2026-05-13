@@ -995,15 +995,18 @@ ALT, VEL, COMP ACTY).
 
 ### 10.1 Display Driving
 
-The DSKY display is driven through output channels. The AGC wrote display data
-(digit patterns and sign information) to output channels 10 (octal) and 11
-(octal), which drove the electroluminescent segments via relay logic. The
-indicator lights were controlled through channel 11 bits.
+The original AGC drove the electroluminescent display via channels 10 and 11
+(octal), which actuated a relay matrix. The Rust port replaces the relay
+matrix with a per-field bridge-link encoding (ADR-019): 21 rows carry the
+PROG/VERB/NOUN fields and the three register sign+digit columns, ten lamp
+messages carry the indicator lights, and one flash message controls VERB/NOUN
+flashing.
 
-Display updates are driven by the T4RUPT periodic handler, which cycles
-through a list of I/O tasks on a 120ms total cycle. Each T4RUPT invocation
-handles one category of I/O (DSKY display update, DSKY indicator check, IMU
-status check, etc.) and advances to the next category for the following cycle.
+Display updates are emitted by the T4RUPT periodic handler. On each 120 ms
+invocation the handler decodes the current `DskyState` into a `DskyFrame` via
+`services::pinball::decode_dsky` and pushes the frame to the bridge only when
+it differs from the previous one (ADR-020 item 4 — rate limiting). See §13.4
+for the full T4 cycle, and `services/pinball.rs` for the row encoding.
 
 ### 10.2 Verb/Noun Processing (PINBALL)
 
@@ -1062,8 +1065,12 @@ verbs include V46 (establish DAP data), V48 (request DAP data load), V49
 
 ## 11. Digital Autopilot (DAP)
 
-The DAP runs as a task triggered by T5RUPT (every ~100ms for attitude control)
-and T6RUPT (for precise jet timing).
+The DAP runs on T5RUPT (100 ms attitude-control cycle) and T6RUPT (one-shot
+RCS jet pulse timer). Each TIM4 (T5RUPT) interrupt sets `T5_PENDING`; the
+Executive's foreground drain pre-reads the CDU, calls `dap_step`, and re-arms
+TIM4 when `dap_state.mode != Off` (ADR-017 Strategy D + ADR-022). The DAP is
+deliberately on its own hardware interrupt — not on the Waitlist — so a
+Waitlist-saturated (1211) condition cannot stop attitude control.
 
 ### 11.1 CSM DAP Modes
 
@@ -1246,21 +1253,28 @@ For delays longer than 163 seconds, the "long waitlist" mechanism chains
 tasks: a task reschedules itself for 163 seconds repeatedly until the remaining
 delay is small enough for a single waitlist call.
 
-### 13.4 T4RUPT Task List
+### 13.4 T4RUPT Cycle Work
 
-The T4RUPT handler cycles through a list of I/O management tasks. On each
-120ms invocation, it performs one set of tasks from a rotating list:
+Each 120 ms T4RUPT invocation performs three fixed actions (see
+`agc-core/src/executive/scheduler.rs` for the implementation):
 
-1. DSKY display update (write pending digit/sign data to output channels)
-2. DSKY keyboard scan and indicator light update
-3. IMU status monitoring (gimbal lock detection, temperature alarm)
-4. IMU gyro drift compensation (apply NBDX/NBDY/NBDZ bias corrections)
-5. Optics CDU error counter management
-6. Downlink telemetry word assembly
+1. **Advance MET** by 12 centiseconds (= 120 ms).
+2. **Apply gyro drift compensation** — scale `NBDX/NBDY/NBDZ` by the
+   centiseconds elapsed since the last drift application and torque the
+   platform via `hw.imu().torque_gyro` on each axis where the pulse count
+   is non-zero.
+3. **Emit the DSKY frame** to the bridge, but only when the decoded frame
+   differs from the previous one (ADR-020 item 4 — rate limit). The
+   encoding is 21 rows + 10 lamp messages + 1 flash message per ADR-019;
+   see `services/pinball.rs`.
 
-Each task in the list executes on a successive T4RUPT invocation, so the
-complete cycle takes approximately 120ms x (number of tasks in list). The
-task list pointer wraps around after the last entry.
+DSKY keyboard input is drained every foreground iteration (not gated by
+T4), so key latency is bounded by the Executive loop period, not the T4
+cycle. The Coast DAP runs on T5RUPT at 100 ms cadence (ADR-022, §11.1),
+not on T4. The original AGC's rotating "DSPTAB / WAITLIST" task chain in
+T4RUPT is not implemented in the Rust port: the bridge handles all 21
+rows per cycle, removing the need for relay-row sequencing, and IMU
+monitoring / optics CDU / downlink assembly are open milestones.
 
 
 ## 14. Build System and Embedded Target
