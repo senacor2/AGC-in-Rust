@@ -24,7 +24,7 @@ use core::cell::RefCell;
 use core::sync::atomic::Ordering;
 
 use cortex_m::interrupt::Mutex;
-use cortex_m_rt::{entry, exception};
+use cortex_m_rt::{entry, exception, ExceptionFrame};
 use defmt_rtt as _;
 // Panic handler lives in `agc_board_nucleo_f767` (lib.rs).
 // `interrupt` re-exported from the PAC verifies the name at compile time (ADR-010).
@@ -385,6 +385,28 @@ fn main() -> ! {
 #[exception]
 fn SysTick() {
     MS_TICKS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+}
+
+// ── HardFault handler ─────────────────────────────────────────────────────────
+//
+// Same GOJAM contract as the panic handler in `lib.rs`: log the register
+// snapshot over RTT in debug builds, then reset. Release builds skip the print
+// to minimise the window between fault and reset. We never `loop {}` for the
+// debugger — the IWDG would recover us in ~1 s anyway, and an immediate reset
+// is closer to the AGC's behaviour.
+
+#[exception]
+unsafe fn HardFault(ef: &ExceptionFrame) -> ! {
+    #[cfg(debug_assertions)]
+    defmt::error!(
+        "HardFault: pc={:#x} lr={:#x} xpsr={:#x}",
+        ef.pc(),
+        ef.lr(),
+        ef.xpsr(),
+    );
+    #[cfg(not(debug_assertions))]
+    let _ = ef;
+    cortex_m::peripheral::SCB::sys_reset()
 }
 
 // ── USART6 ISR ────────────────────────────────────────────────────────────────

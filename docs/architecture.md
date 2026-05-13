@@ -476,9 +476,14 @@ fn TIM5() {
 
 A `HardFault` handler must always be defined. The `ExceptionFrame` it receives
 contains a full register snapshot including the program counter at the moment
-of the fault, which is essential for debugging. In release builds it triggers
-an immediate restart; in debug builds it halts so a debugger can inspect the
-frame:
+of the fault. The handler follows the same GOJAM contract as the panic handler
+(ADR-009): debug builds emit the PC/LR/XPSR over RTT (`defmt`) so the cause is
+visible to an attached probe; release builds reset immediately with no output.
+We never `loop {}` for the debugger — the IWDG watchdog would recover the MCU
+in ~1 s anyway, and an immediate reset is closer to the AGC's behaviour.
+
+The handler lives next to the SysTick exception in
+`agc-board-nucleo-f767/src/bin/agc.rs`.
 
 ```rust
 use cortex_m_rt::{exception, ExceptionFrame};
@@ -486,16 +491,17 @@ use cortex_m_rt::{exception, ExceptionFrame};
 #[exception]
 unsafe fn HardFault(ef: &ExceptionFrame) -> ! {
     #[cfg(debug_assertions)]
-    {
-        cortex_m_semihosting::hprintln!("HardFault: {:#?}", ef).ok();
-        loop {} // halt so a debugger can attach and inspect ef.pc
-    }
+    defmt::error!(
+        "HardFault: pc={:#x} lr={:#x} xpsr={:#x}",
+        ef.pc(),
+        ef.lr(),
+        ef.xpsr(),
+    );
     #[cfg(not(debug_assertions))]
-    {
-        cortex_m::peripheral::SCB::sys_reset()
-    }
+    let _ = ef;
+    cortex_m::peripheral::SCB::sys_reset()
 }
-````
+```
 
 ### 4.3 Peripheral Side Effects
 
