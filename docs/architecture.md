@@ -142,9 +142,9 @@ agc-in-rust/                     (workspace root)
       
       tables/
         mod.rs
-        noun_table.rs            (Noun definitions: addresses, components, scale factors)
-        verb_table.rs            (Verb definitions: routine entry points)
         alarm_codes.rs           (Alarm code definitions and severity)
+                                 (Verb and noun dispatch live in services/v_n.rs:
+                                  `dispatch_verb_noun` and `noun_display` — see §10.)
   
   agc-protocol/                  (Bridge wire format -- #![no_std], used by both MCUs)
     src/
@@ -1032,6 +1032,14 @@ Idle -> Verb Digit 1 -> Verb Digit 2 -> Noun Digit 1 -> Noun Digit 2 -> ENTER
                                                                [Dispatch to verb handler]
 ```
 
+The state machine and the dispatch table live together in
+`agc-core/src/services/v_n.rs`. `dispatch_verb_noun` is a Rust `match` on
+the verb code (compiled to the same jump-table the AGC's PINBALL_GAME_*
+verb table produced from hardware necessity); noun lookup is in
+`noun_display`. Not all verbs in the table above are implemented yet — the
+match arm covers V06, V16, V21–V23, V25, V34, V35, V37, and V71. The
+others fall through to the OPR ERR path.
+
 The PINBALL system supports two concurrent displays: a "normal" display
 (driven by the active program) and a "monitor" display (driven by a V16-type
 verb). When the crew presses KEY REL, the normal display is released back to
@@ -1047,10 +1055,13 @@ background use).
 
 ### 10.4 Extended Verbs
 
-Verb numbers 40 and above are "extended verbs" that do not use nouns. They are
-dispatched through a separate table (ETEFLAG table in the original). Extended
-verbs include V46 (establish DAP data), V48 (request DAP data load), V49
-(crew-defined maneuver), V82 (orbital parameters request), and others.
+Verb numbers 40 and above are "extended verbs" that do not use nouns. In the
+original AGC they were dispatched through a separate table (ETEFLAG). In the
+Rust port both extended and regular verbs share the same `dispatch_verb_noun`
+match in `services/v_n.rs`; extended verbs simply ignore the `noun` argument.
+Planned extended verbs include V46 (establish DAP data), V48 (request DAP
+data load), V49 (crew-defined maneuver), V82 (orbital parameters request);
+of these only V71 (P27 block update) is currently implemented.
 
 
 ## 11. Digital Autopilot (DAP)
