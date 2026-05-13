@@ -381,13 +381,12 @@ impl ImuImpl<CoarseAligned> {
 }
 ```
 
-- **PAC re-export** (C-REEXPORT-PAC): The bare-metal HAL crate re-exports the
-  device PAC under the name `pac`:
-
-```rust
-// In agc-core/src/lib.rs
-pub use stm32f4 as pac;
-```
+- **PAC ownership** (C-PAC-LOCAL): The device PAC is a dependency of the board
+  crate only (`agc-board-nucleo-f767` pulls in `stm32f7xx-hal`, which re-exports
+  the F7 PAC as `stm32f7xx_hal::pac`). `agc-core` is hardware-agnostic by design
+  (ADR-005) and has no PAC dependency. The PAC's `#[interrupt]` attribute is
+  used directly from the board crate (`stm32f7xx_hal::pac::interrupt`, ADR-010)
+  rather than re-exported through a workspace-wide alias.
 
 ### 4.2 Interrupt Model
 

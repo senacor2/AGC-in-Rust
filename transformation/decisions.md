@@ -95,11 +95,11 @@ This file is the index and status tracker.
 
 ## ADR-009: Profile-Specific Panic Handler
 
-**Date**: 2026-04-09 | **Status**: Accepted
+**Date**: 2026-04-09 | **Status**: Accepted | **Revised**: 2026-05-12
 
-**Decision**: Dev builds log `PanicInfo` via semihosting then restart. Release builds restart immediately. No `panic-halt` dependency.
+**Decision**: The board crate (`agc-board-nucleo-f767/src/lib.rs`) provides the `#[panic_handler]`. Dev builds emit `PanicInfo` via `defmt` (RTT), then `SCB::sys_reset()`. Release builds `SCB::sys_reset()` immediately, no output. No third-party panic-handler crate is used.
 
-**Rationale**: Silent panics are undebuggable. Only one `#[panic_handler]` is permitted per binary; `panic-halt` would conflict. See `docs/optimization.md §2`.
+**Rationale**: Silent panics are undebuggable. Only one `#[panic_handler]` is permitted per binary, and `panic-probe` / `panic-halt` are unsuitable because neither resets — they halt on `udf` or spin in `loop {}`, replacing the immediate GOJAM the design requires with an indeterminate wait for the IWDG watchdog. The handler lives in the board crate (not `agc-core`) because `agc-core` enables `std` under `cfg(test)` so host tests can use the standard panic; defining `#[panic_handler]` there would conflict. RTT was chosen over semihosting because the board firmware already wires up `defmt-rtt` for normal logging — one transport instead of two. See `docs/architecture.md §12.1`.
 
 ---
 

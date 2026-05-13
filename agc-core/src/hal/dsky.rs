@@ -1,12 +1,15 @@
 /// DSKY (Display and Keyboard) hardware interface.
 ///
-/// The display uses a row-select relay matrix; timing constraints (20 ms
-/// hold per row) are enforced inside the implementation, not by callers.
-/// The flight software calls `write_row` / `set_lamp` and the HAL handles
-/// the relay sequencing.
+/// Per ADR-019 the bridge uses a per-field row encoding (not the original
+/// AGC relay matrix). 21 rows total: rows 0–2 carry PROG/VERB/NOUN, rows
+/// 3–8 carry R1 (sign + 5 digits), rows 9–14 R2, rows 15–20 R3. Digits
+/// are raw BCD (0x0–0x9); 0xF blanks a digit. All 21 rows are re-emitted
+/// on every T4RUPT (every 120 ms). Indicator lamps go through `set_lamp`,
+/// VERB/NOUN flashing through `set_flash`.
 pub trait Dsky {
     /// Write a display row.
-    /// `row` selects the relay row (1–14); `data` contains the segment bits.
+    /// `row` selects the field row (0–20); `data` packs the BCD digits
+    /// (tens in bits 7–4, units in bits 3–0; 0xF means blank).
     fn write_row(&mut self, row: u8, data: u16);
 
     /// Clear a display row (turn all segments off for that row).
