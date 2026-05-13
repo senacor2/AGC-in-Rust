@@ -1033,7 +1033,7 @@ pub struct AgcState {
 
 ### 8.3 Read-Only Data
 
-Constant tables (star catalog, verb/noun tables, alarm code definitions,
+Constant tables (star catalog, alarm code definitions,
 trigonometric constants) are declared `static` or `const` in their respective
 modules and placed in flash by the linker. The AGC's bank-switching scheme is
 not relevant; the Cortex-M flat address space makes all flash uniformly
