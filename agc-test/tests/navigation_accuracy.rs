@@ -1049,9 +1049,18 @@ fn test_rendezvous_fixtures() {
         }
 
         // 3) range_rate sign consistency with dot(rho, rho_dot) in inertial.
+        //    range_rate returns None when |rho| == 0; the test cases here all
+        //    have non-zero separation, so None counts as a failure.
         let rho_inertial = vsub(r_c, r_t);
         let rho_dot_inertial = vsub(v_c, v_t);
-        let rr = range_rate(r_c, v_c, r_t, v_t);
+        let rel_v_sq = dot(rho_dot_inertial, rho_dot_inertial);
+        let Some(rr) = range_rate(r_c, v_c, r_t, v_t) else {
+            failures.push(format!(
+                "rendezvous '{}': range_rate returned None (|rho|=0?)",
+                case.name,
+            ));
+            continue;
+        };
         let dot_sign = dot(rho_inertial, rho_dot_inertial).signum();
         let rr_sign = rr.signum();
         // If range_rate is essentially zero (< 1e-6 m/s), the sign check is
@@ -1065,10 +1074,15 @@ fn test_rendezvous_fixtures() {
 
         // 4) time_to_closest_approach sign: negative iff range_rate > 0,
         //    positive iff range_rate < 0. Only check when relative velocity
-        //    is non-zero (TCA is undefined otherwise — the function panics).
-        let rel_v_sq = dot(rho_dot_inertial, rho_dot_inertial);
+        //    is non-zero (TCA returns None otherwise — undefined).
         if rel_v_sq > 1e-12 {
-            let tca = time_to_closest_approach(r_c, v_c, r_t, v_t);
+            let Some(tca) = time_to_closest_approach(r_c, v_c, r_t, v_t) else {
+                failures.push(format!(
+                    "rendezvous '{}': TCA returned None despite rel_v_sq > 0",
+                    case.name,
+                ));
+                continue;
+            };
             if rr > 1e-6 && tca >= 0.0 {
                 failures.push(format!(
                     "rendezvous '{}': diverging (rr={:.3e}) but TCA={:.3e} is non-negative",
@@ -1085,8 +1099,16 @@ fn test_rendezvous_fixtures() {
 
         // 5) los_angles_lvlh: angles in documented ranges, and reconstructing
         //    the LVLH direction unit vector from (elev, az) matches input.
+        //    Returns None when |rho_lvlh| == 0; the rng > 1.0 guard rules
+        //    that out.
         if rng > 1.0 {
-            let los = los_angles_lvlh(&lvlh);
+            let Some(los) = los_angles_lvlh(&lvlh) else {
+                failures.push(format!(
+                    "rendezvous '{}': los_angles_lvlh returned None despite rng > 1 m",
+                    case.name,
+                ));
+                continue;
+            };
             if !(los.elevation.is_finite() && los.azimuth.is_finite()) {
                 failures.push(format!(
                     "rendezvous '{}': los_angles has non-finite components",
