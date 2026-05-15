@@ -116,6 +116,9 @@ impl Board {
     /// Construct the `Board` handle.  Peripherals must already have been
     /// initialised (clocks, USART6, IWDG) and `LINK` populated before calling
     /// any trait methods.
+    // `new` is `const fn` so the bootstrap can construct a `Board` at top level
+    // without lazy-static. `Default::default()` isn't const.
+    #[allow(clippy::new_without_default)]
     pub const fn new() -> Self {
         Self {
             dsky: RemoteDsky,
@@ -180,6 +183,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 static WDG_READY: AtomicBool = AtomicBool::new(false);
 
+// Single-use static; a type alias would obscure rather than clarify.
+#[allow(clippy::type_complexity)]
 static WDG_PET: Mutex<RefCell<Option<fn()>>> = Mutex::new(RefCell::new(None));
 
 /// Register the watchdog pet function.  Called once from `bin/agc.rs` after

@@ -524,6 +524,10 @@ fn test_lunar_orbit_energy_conservation() {
 /// The AGC used 1960s-era measurements; our Rust implementation uses modern
 /// best-estimates. This test documents the known differences and ensures they
 /// are within the expected range (< 10 ppm for mu values).
+// The assertions on `J2_EARTH` and `R_EARTH` are compile-time tautologies for
+// the current constant values, but guard against future changes that would
+// silently break navigation.
+#[allow(clippy::assertions_on_constants)]
 #[test]
 fn test_vagc_constant_consistency() {
     use agc_core::navigation::gravity::{J2_EARTH, MU_EARTH, MU_MOON, R_EARTH, R_SOI_MOON};
@@ -982,6 +986,9 @@ fn run_kalman_case(case: &KalmanCase) {
 /// 6. `los_angles_lvlh` returns angles in the documented ranges and the
 ///    computed (elevation, azimuth) can reconstruct the original LVLH
 ///    direction unit vector.
+// 3×3 matrix-product loops use indices directly to match the natural
+// mathematical form `product[i][j] = Σ_k m[i][k] · m_t[k][j]`.
+#[allow(clippy::needless_range_loop)]
 #[test]
 fn test_rendezvous_fixtures() {
     use agc_core::guidance::rendezvous::{
@@ -1183,6 +1190,9 @@ fn test_rendezvous_fixtures() {
 ///    each RSW axis must return `dv_lvlh` component-wise.
 /// 3. `burn_attitude(dv_inertial, I) * [1, 0, 0]` equals `unit(dv_inertial)`.
 /// 4. For zero ΔV, `burn_attitude` is the identity matrix.
+// 3×3 matrix orthonormality loops use indices directly to match the natural
+// mathematical form `Σ_k m[i][k] · m[j][k] == δ_ij`.
+#[allow(clippy::needless_range_loop)]
 #[test]
 fn test_targeting_fixtures() {
     use agc_core::guidance::targeting::{burn_attitude, lvlh_to_inertial};

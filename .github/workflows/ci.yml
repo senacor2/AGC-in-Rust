@@ -70,3 +70,54 @@ jobs:
 
       - name: Build RP2040 bridge firmware (release)
         run: cargo build --release --target thumbv6m-none-eabi -p agc-bridge-pico
+
+  clippy:
+    name: Clippy (-D warnings)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust stable + clippy + embedded targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: thumbv7em-none-eabihf, thumbv6m-none-eabi
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: clippy
+
+      # Host crates: --all-targets includes tests/examples/benches.
+      - name: Clippy host crates
+        run: |
+          cargo clippy \
+            -p agc-core \
+            -p agc-protocol \
+            -p agc-imu-platform \
+            -p agc-sim \
+            -p agc-test \
+            --all-targets \
+            -- -D warnings
+
+      # Bare-metal crates: `--all-targets` would try to build the test
+      # binary on the embedded target and hit the host-vs-bare-metal
+      # critical-section feature conflict. Lint only the lib and bin
+      # artifacts that actually run on hardware.
+      - name: Clippy Nucleo-F767ZI firmware
+        run: |
+          cargo clippy \
+            --target thumbv7em-none-eabihf \
+            -p agc-board-nucleo-f767 \
+            --lib --bins \
+            -- -D warnings
+
+      - name: Clippy RP2040 bridge firmware
+        run: |
+          cargo clippy \
+            --target thumbv6m-none-eabi \
+            -p agc-bridge-pico \
+            --bins \
+            -- -D warnings

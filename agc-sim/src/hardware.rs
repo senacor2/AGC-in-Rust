@@ -20,6 +20,12 @@ pub struct SimTimers {
     epoch: Instant,
 }
 
+impl Default for SimTimers {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SimTimers {
     pub fn new() -> Self {
         Self {
@@ -187,6 +193,12 @@ pub struct SimHardware {
     pub spacecraft: Spacecraft,
 }
 
+impl Default for SimHardware {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SimHardware {
     pub fn new() -> Self {
         Self {
@@ -305,7 +317,7 @@ mod tests {
         hw.timers.set_time(54321);
         // Should read back ≈ 54321 (plus a few ms elapsed).
         let t = hw.timers().mission_time();
-        assert!(t >= 54321 && t < 54321 + 10, "expected ~54321, got {t}");
+        assert!((54321..54321 + 10).contains(&t), "expected ~54321, got {t}");
     }
 
     #[test]

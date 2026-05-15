@@ -3,6 +3,7 @@
 //! `init()` programs the IWDG for a 1.024 s timeout:
 //!   - Prescaler: /64 → LSI ≈ 32 kHz → tick ≈ 2 ms
 //!   - Reload: 512 → 512 × 2 ms = 1.024 s
+//!
 //! Within the AGC night-watchman spec of 0.64–1.92 s (specs/hal-spec.md §4.3).
 //!
 //! The `stm32f7xx-hal` crate (v0.8) does not expose a typed IWDG wrapper,

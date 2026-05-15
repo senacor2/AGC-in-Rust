@@ -34,6 +34,9 @@ pub struct BridgeState {
 }
 
 impl BridgeState {
+    // `new` is `const fn` so it can initialise the global `BRIDGE` static;
+    // `Default::default()` isn't const, so a Default impl wouldn't fit here.
+    #[allow(clippy::new_without_default)]
     pub const fn new() -> Self {
         Self {
             key_queue: Deque::new(),
