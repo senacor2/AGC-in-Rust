@@ -19,7 +19,9 @@
 use agc_core::services::v_n::{feed_key, Key};
 use agc_core::types::Met;
 use agc_core::AgcState;
-use agc_sim::runtime::{pump_engine_to_hw, pump_pipa_into_state, pump_rcs_to_hw, WaitlistPump};
+use agc_sim::runtime::{
+    pump_engine_to_hw, pump_pipa_into_state, pump_rcs_to_hw, DapPump, WaitlistPump,
+};
 use agc_sim::SimHardware;
 
 // ── Burn profile constants ────────────────────────────────────────────────────
@@ -148,6 +150,7 @@ fn it_v37_p40_fires_sps_for_about_15s() {
     let mut state = AgcState::new();
     let mut hw = SimHardware::new();
     let mut waitlist_pump = WaitlistPump::new();
+    let mut dap_pump = DapPump::new();
 
     // Mission clock at zero. The default `state.refsmmat` is identity, so
     // platform = inertial — no REFSMMAT load needed for this demo.
@@ -238,8 +241,10 @@ fn it_v37_p40_fires_sps_for_about_15s() {
         "burn must not be armed yet (V50 N99 still awaiting PRO)"
     );
 
-    // Arm the soft-executive pump so the head countdown is loaded
-    // against the dap_step + servicer_task scheduled by P40.
+    // Arm the soft-executive pumps. After ADR-022 the DAP runs on a
+    // dedicated T5RUPT path (mirrored in the sim by DapPump); the
+    // Waitlist still carries servicer_task.
+    dap_pump.tick(&mut state, &mut hw);
     waitlist_pump.tick(&mut state, &mut hw);
     pump_engine_to_hw(&state, &mut hw);
     assert!(!hw.engine.thrusting, "SimHardware SPS must be cold pre-PRO");
@@ -275,6 +280,7 @@ fn it_v37_p40_fires_sps_for_about_15s() {
     // Maneuver mode, so the catch-up is cheap and correct).
     state.time = Met(tig_cs.saturating_sub(100));
     hw.timers.set_time(state.time.0);
+    dap_pump.tick(&mut state, &mut hw);
     waitlist_pump.tick(&mut state, &mut hw);
 
     // We are now within 1 s of TIG. Confirm the engine is still cold
@@ -293,6 +299,7 @@ fn it_v37_p40_fires_sps_for_about_15s() {
         hw.timers.set_time(state.time.0);
         hw.tick(TICK_S);
         pump_pipa_into_state(&mut state, &mut hw);
+        dap_pump.tick(&mut state, &mut hw);
         waitlist_pump.tick(&mut state, &mut hw);
         pump_engine_to_hw(&state, &mut hw);
         pump_rcs_to_hw(&mut state, &mut hw);

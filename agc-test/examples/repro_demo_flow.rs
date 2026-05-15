@@ -9,7 +9,9 @@
 use agc_core::services::v_n::{feed_key, Key};
 use agc_core::types::Met;
 use agc_core::AgcState;
-use agc_sim::runtime::{pump_engine_to_hw, pump_pipa_into_state, pump_rcs_to_hw, WaitlistPump};
+use agc_sim::runtime::{
+    pump_engine_to_hw, pump_pipa_into_state, pump_rcs_to_hw, DapPump, WaitlistPump,
+};
 use agc_sim::SimHardware;
 
 fn d(n: u8) -> Key {
@@ -41,6 +43,7 @@ fn main() {
     let mut state = AgcState::new();
     let mut hw = SimHardware::new();
     let mut waitlist_pump = WaitlistPump::new();
+    let mut dap_pump = DapPump::new();
     state.time = Met(0);
 
     // Step 1: V71 1 6 +6778 +0 +0 +0 +7669 +0
@@ -103,6 +106,7 @@ fn main() {
         &mut state,
         &[Key::Verb, d(3), d(7), Key::Noun, d(4), d(0), Key::Entr],
     );
+    dap_pump.tick(&mut state, &mut hw);
     waitlist_pump.tick(&mut state, &mut hw);
     println!(
         "After V37 E40 E: verb={} noun={} burn_active={} pending_v50={}",
@@ -125,6 +129,7 @@ fn main() {
     let tig_cs = state.burn.tig.0;
     state.time = Met(tig_cs.saturating_sub(100));
     hw.timers.set_time(state.time.0);
+    dap_pump.tick(&mut state, &mut hw);
     waitlist_pump.tick(&mut state, &mut hw);
     println!(
         "Approaching TIG (state.time={} cs, burn.tig={} cs): armed={} engine={}",
@@ -138,6 +143,7 @@ fn main() {
         hw.timers.set_time(state.time.0);
         hw.tick(0.1);
         pump_pipa_into_state(&mut state, &mut hw);
+        dap_pump.tick(&mut state, &mut hw);
         waitlist_pump.tick(&mut state, &mut hw);
         pump_engine_to_hw(&state, &mut hw);
         pump_rcs_to_hw(&mut state, &mut hw);
