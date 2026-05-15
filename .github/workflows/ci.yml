@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  host-tests:
+    name: Host tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # The workspace mixes host-buildable crates with bare-metal crates whose
+      # `critical-section` feature is incompatible with the host target. A plain
+      # `cargo test --workspace` therefore fails at the dependency-resolution
+      # step. Test each host-buildable crate explicitly instead.
+      - name: Run host-side tests
+        run: |
+          cargo test \
+            -p agc-core \
+            -p agc-protocol \
+            -p agc-imu-platform \
+            -p agc-sim \
+            -p agc-test \
+            --verbose
+
+  bare-metal-builds:
+    name: Bare-metal builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable + embedded targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf, thumbv6m-none-eabi
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Separate cache key from the host-tests job: target dirs are
+          # incompatible (different rustc target triples).
+          shared-key: bare-metal
+
+      - name: Build Nucleo-F767ZI firmware (dev)
+        run: cargo build --target thumbv7em-none-eabihf -p agc-board-nucleo-f767
+
+      - name: Build Nucleo-F767ZI firmware (release)
+        run: cargo build --release --target thumbv7em-none-eabihf -p agc-board-nucleo-f767
+
+      - name: Build RP2040 bridge firmware (dev)
+        run: cargo build --target thumbv6m-none-eabi -p agc-bridge-pico
+
+      - name: Build RP2040 bridge firmware (release)
+        run: cargo build --release --target thumbv6m-none-eabi -p agc-bridge-pico
