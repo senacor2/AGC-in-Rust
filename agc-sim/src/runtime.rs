@@ -20,6 +20,10 @@
 //! - [`WaitlistPump`] — dispatches waitlist tasks at their mission-time
 //!   deadlines, reading PIPA/CDU before each task to mirror what
 //!   `Executive::run` does on T3RUPT.
+//! - [`DapPump`] — invokes `dap_step` every `DAP_PERIOD_CS`, mirroring
+//!   the bare-metal scheduler's T5_PENDING branch (ADR-022). Without
+//!   this, `dap_state.mode != Off` has no consumer and the P40 TIG
+//!   ignition gate inside `dap_step` never fires.
 //!
 //! Tests are free to wire these in any order; `dsky_sim` calls them
 //! from its render-loop tick.
@@ -170,6 +174,95 @@ impl WaitlistPump {
     }
 }
 
+/// Pumps the DAP at its 100 ms cadence (mirrors the bare-metal T5_PENDING
+/// branch, ADR-022).
+///
+/// On the real board, TIM4 raises T5_PENDING every `DAP_PERIOD_CS`
+/// centiseconds and the scheduler calls `dap_step`. In the sim there are
+/// no interrupts, so this pump tracks an internal countdown in
+/// mission-time centiseconds and invokes `dap_step` whenever it expires.
+///
+/// The pump observes the `Off → !Off` transition automatically: as soon
+/// as `state.dap_state.mode != Off` (set by `dap_init`), the countdown
+/// arms; when it reaches zero, the pump pre-reads CDU and calls
+/// `dap_step`, then re-arms for the next cycle. When `dap_step` sets
+/// `mode = Off` (e.g. via `dap_stop`), the countdown is dropped and no
+/// further `dap_step` calls are made.
+///
+/// **Usage:** call [`DapPump::tick`] every render-loop iteration, AFTER
+/// `pump_pipa_into_state` (so CDU is fresh) and BEFORE `pump_engine_to_hw`
+/// / `pump_rcs_to_hw` (so the simulated hardware sees the staging fields
+/// `dap_step` just wrote).
+pub struct DapPump {
+    last_tick_met: Option<Met>,
+    /// Centiseconds until the next `dap_step` invocation.
+    /// `None` while `dap_state.mode == Off`.
+    cycle_remaining_cs: Option<i32>,
+}
+
+impl Default for DapPump {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DapPump {
+    pub const fn new() -> Self {
+        Self {
+            last_tick_met: None,
+            cycle_remaining_cs: None,
+        }
+    }
+
+    /// Advance the pump by one render-loop iteration.
+    pub fn tick(&mut self, state: &mut AgcState, hw: &mut SimHardware) {
+        use agc_core::control::dap::{dap_step, DAP_PERIOD_CS};
+        use agc_core::control::DapMode;
+
+        let now = state.time;
+        let prev = self.last_tick_met.unwrap_or(now);
+        let elapsed_cs = now.0.wrapping_sub(prev.0) as i32;
+        self.last_tick_met = Some(now);
+
+        // DAP is off: nothing to do; drop any pending countdown.
+        if state.dap_state.mode == DapMode::Off {
+            self.cycle_remaining_cs = None;
+            return;
+        }
+
+        // Off → !Off transition: arm the first cycle. First dap_step
+        // fires DAP_PERIOD_CS centiseconds from now, matching the
+        // bare-metal scheduler's behaviour of arming TIM4 and waiting
+        // for it to expire.
+        if self.cycle_remaining_cs.is_none() {
+            self.cycle_remaining_cs = Some(DAP_PERIOD_CS as i32);
+            return;
+        }
+
+        // Decrement countdown.
+        if let Some(rem) = self.cycle_remaining_cs.as_mut() {
+            *rem = rem.saturating_sub(elapsed_cs);
+        }
+
+        // Fire dap_step for every expired cycle (catch-up across slow
+        // frames), preserving overshoot to keep average cadence honest.
+        while let Some(rem) = self.cycle_remaining_cs {
+            if rem > 0 {
+                break;
+            }
+            // Mirror the bare-metal T5 branch: refresh CDU staging.
+            state.current_cdu = hw.imu().read_cdu();
+            dap_step(state);
+            // dap_step may have turned the DAP off.
+            if state.dap_state.mode == DapMode::Off {
+                self.cycle_remaining_cs = None;
+                break;
+            }
+            self.cycle_remaining_cs = Some(rem.saturating_add(DAP_PERIOD_CS as i32));
+        }
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -313,5 +406,82 @@ mod tests {
     fn _imports_ok() {
         // Keep the Rcs import alive even if pump_rcs_to_hw is unused in tests.
         let _: fn(&mut AgcState, &mut SimHardware) = pump_rcs_to_hw;
+    }
+
+    /// TC-DAP-PUMP-1: dap_step fires at the 100 ms cadence once the DAP
+    /// is no longer Off. Without this pump (or the equivalent bare-metal
+    /// T5_PENDING branch), `dap_step` is never called and P40's TIG
+    /// ignition gate inside it never fires — the regression that
+    /// motivated this test.
+    #[test]
+    fn tc_dap_pump_1_tig_arms_engine_thrusting() {
+        use agc_core::control::dap::DAP_PERIOD_CS;
+        use agc_core::control::DapMode;
+        use agc_core::guidance::maneuver::BurnState;
+
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        let mut dap_pump = DapPump::new();
+
+        state.time = Met(0);
+        state.dap_state.mode = DapMode::Maneuver;
+        // Burn armed for ignition at MET 50 cs.
+        state.burn = BurnState {
+            target_dv_inertial: [10.0, 0.0, 0.0],
+            accumulated_dv_inertial: [0.0; 3],
+            tig: Met(50),
+            burn_active: false,
+            cutoff_time_met: false,
+            armed: true,
+        };
+
+        // First tick at MET=0: arms the cycle, no dap_step yet.
+        dap_pump.tick(&mut state, &mut hw);
+        assert!(
+            !state.engine_thrusting,
+            "no dap_step has run yet -- engine must still be off"
+        );
+
+        // Advance past TIG and past one DAP cycle.
+        state.time = Met((DAP_PERIOD_CS as u32) + 50);
+        dap_pump.tick(&mut state, &mut hw);
+
+        assert!(
+            state.engine_thrusting,
+            "dap_step at MET={} should have fired the TIG-arm gate (tig={})",
+            state.time.0, 50
+        );
+        assert_eq!(
+            state.dap_state.mode,
+            DapMode::Tvc,
+            "TIG ignition must promote DAP to Tvc mode"
+        );
+        assert!(
+            !state.burn.armed,
+            "TIG ignition must clear burn.armed"
+        );
+    }
+
+    /// TC-DAP-PUMP-2: pump is a no-op while mode == Off and does not
+    /// arm a countdown that would later fire spuriously.
+    #[test]
+    fn tc_dap_pump_2_off_is_inert() {
+        use agc_core::control::DapMode;
+
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        let mut dap_pump = DapPump::new();
+
+        state.dap_state.mode = DapMode::Off;
+        state.time = Met(0);
+        dap_pump.tick(&mut state, &mut hw);
+
+        state.time = Met(10_000);
+        dap_pump.tick(&mut state, &mut hw);
+
+        // No fields the pump would have written touched.
+        assert_eq!(state.rcs_commanded_jets, 0);
+        assert_eq!(state.rcs_commanded_pulse_cs, 0);
+        assert!(!state.engine_thrusting);
     }
 }

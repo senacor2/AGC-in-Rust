@@ -21,7 +21,9 @@ use agc_core::types::Met;
 use agc_core::AgcState;
 use agc_sim::dsky_ui::{key_from_code, render, PropulsionFrame};
 use agc_sim::hardware::SimHardware;
-use agc_sim::runtime::{pump_engine_to_hw, pump_pipa_into_state, pump_rcs_to_hw, WaitlistPump};
+use agc_sim::runtime::{
+    pump_engine_to_hw, pump_pipa_into_state, pump_rcs_to_hw, DapPump, WaitlistPump,
+};
 
 use crossterm::{
     cursor::{Hide, Show},
@@ -58,6 +60,7 @@ fn run<W: Write>(out: &mut W) -> io::Result<()> {
     let mut last_flash = Instant::now();
     let mut status = String::from("Ready");
     let mut waitlist_pump = WaitlistPump::new();
+    let mut dap_pump = DapPump::new();
 
     loop {
         // Read MET from the HAL timer (single source of truth).
@@ -124,6 +127,7 @@ fn run<W: Write>(out: &mut W) -> io::Result<()> {
         last_physics = Instant::now();
         hw.tick(dt_physics);
         pump_pipa_into_state(&mut state, &mut hw);
+        dap_pump.tick(&mut state, &mut hw);
         waitlist_pump.tick(&mut state, &mut hw);
         pump_engine_to_hw(&state, &mut hw);
         pump_rcs_to_hw(&mut state, &mut hw);
