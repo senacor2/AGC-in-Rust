@@ -1,5 +1,10 @@
 # Task Tracking
 
+> **Frozen — 2026-05-16.** This file is retained as a historical record of work
+> completed during Milestones 1–4. **All new task tracking has moved to GitHub
+> Issues** in `senacor2/AGC-in-Rust`. Filter by the `milestone` or
+> `entry-guidance` labels for active work. Do not add new tasks here.
+
 ## Active Tasks
 
 ### Milestone 1 — Core Infrastructure (in progress)
