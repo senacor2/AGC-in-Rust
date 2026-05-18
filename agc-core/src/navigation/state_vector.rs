@@ -1,3 +1,4 @@
+use crate::navigation::time::OMEGA_EARTH;
 use crate::types::{Met, Vec3};
 
 /// Coordinate frame in which a state vector is expressed.
@@ -91,6 +92,75 @@ impl StateVector {
             "StateVector stored with StableMember frame"
         );
     }
+}
+
+// ── Inertial ↔ Earth-fixed transforms ──────────────────────────────────────────
+//
+// The Earth-fixed (ECEF) frame is transient — we never store a `StateVector`
+// in it. These helpers do the rotation on the fly. The angle `gha_rad`
+// (Greenwich Hour Angle of Aries) comes from
+// `navigation::time::met_to_gha(t, state.gha_epoch_rad)`.
+//
+// Convention: the ECI→ECEF rotation is `Rz(+gha)` — at `gha = π/2` the inertial
+// x-axis points along the -ECEF y-axis (Earth has rotated east by 90°). The
+// inverse `Rz(-gha)` rotates ECEF→ECI.
+//
+// Spec: specs/gmst-ecef-plan.md §5; AGC source LAT-LONG_SUBROUTINES.agc.
+
+/// Rotate an inertial (ECI) position vector to the Earth-fixed (ECEF) frame.
+///
+/// Applies `Rz(+gha_rad)`. At `gha = 0` this is the identity. At `gha = π/2`
+/// the input `[1, 0, 0]` maps to `[0, -1, 0]`.
+pub fn inertial_to_earth_fixed(pos: Vec3, gha_rad: f64) -> Vec3 {
+    let c = libm::cos(gha_rad);
+    let s = libm::sin(gha_rad);
+    [
+        pos[0] * c + pos[1] * s,
+        -pos[0] * s + pos[1] * c,
+        pos[2],
+    ]
+}
+
+/// Rotate an Earth-fixed (ECEF) position vector to the inertial (ECI) frame.
+///
+/// Applies `Rz(-gha_rad)`. Inverse of [`inertial_to_earth_fixed`].
+pub fn earth_fixed_to_inertial(pos: Vec3, gha_rad: f64) -> Vec3 {
+    let c = libm::cos(gha_rad);
+    let s = libm::sin(gha_rad);
+    [
+        pos[0] * c - pos[1] * s,
+        pos[0] * s + pos[1] * c,
+        pos[2],
+    ]
+}
+
+/// Rotate an inertial velocity to the Earth-fixed frame.
+///
+/// `pos` and `vel` are the ECI position and velocity respectively. The result
+/// is the velocity as observed in the rotating (Earth-fixed) frame, which
+/// requires subtracting the Earth-rotation term `ω × r` before rotating.
+pub fn inertial_to_earth_fixed_vel(pos: Vec3, vel: Vec3, gha_rad: f64) -> Vec3 {
+    let v_rel = [
+        vel[0] + OMEGA_EARTH * pos[1],
+        vel[1] - OMEGA_EARTH * pos[0],
+        vel[2],
+    ];
+    inertial_to_earth_fixed(v_rel, gha_rad)
+}
+
+/// Rotate an Earth-fixed velocity to the inertial frame.
+///
+/// `pos` and `vel` are the ECEF position and velocity respectively. The result
+/// is the velocity as observed in the inertial frame, which adds back the
+/// Earth-rotation term `ω × r_eci` after rotating.
+pub fn earth_fixed_to_inertial_vel(pos: Vec3, vel: Vec3, gha_rad: f64) -> Vec3 {
+    let r_eci = earth_fixed_to_inertial(pos, gha_rad);
+    let v_rot = earth_fixed_to_inertial(vel, gha_rad);
+    [
+        v_rot[0] - OMEGA_EARTH * r_eci[1],
+        v_rot[1] + OMEGA_EARTH * r_eci[0],
+        v_rot[2],
+    ]
 }
 
 #[cfg(test)]
@@ -273,5 +343,86 @@ mod tests {
             (velocity_mps - expected).abs() < 1e-6,
             "Velocity conversion error: got {velocity_mps}, expected {expected}"
         );
+    }
+
+    // ── Frame transform tests ──────────────────────────────────────────────────
+
+    const R_EARTH_TEST: f64 = 6_371_000.0;
+
+    /// TC-FRAME-1: `inertial_to_earth_fixed` at `gha = 0` is the identity.
+    #[test]
+    fn tc_frame_1_identity_at_zero_gha() {
+        let pos = [1_234_567.0, -987_654.0, 6_543_210.0];
+        let out = inertial_to_earth_fixed(pos, 0.0);
+        assert!((out[0] - pos[0]).abs() < 1e-9);
+        assert!((out[1] - pos[1]).abs() < 1e-9);
+        assert!((out[2] - pos[2]).abs() < 1e-9);
+    }
+
+    /// TC-FRAME-2: at `gha = π/2`, the unit X axis rotates to `[0, -1, 0]`.
+    #[test]
+    fn tc_frame_2_quarter_revolution() {
+        let out = inertial_to_earth_fixed([1.0, 0.0, 0.0], core::f64::consts::FRAC_PI_2);
+        assert!(out[0].abs() < 1e-15, "x should be 0, got {}", out[0]);
+        assert!((out[1] - -1.0).abs() < 1e-15, "y should be -1, got {}", out[1]);
+        assert!(out[2].abs() < 1e-15, "z should be 0, got {}", out[2]);
+    }
+
+    /// TC-FRAME-3: round-trip ECI → ECEF → ECI returns the input within 1e-14.
+    #[test]
+    fn tc_frame_3_position_round_trip() {
+        let pos = [4_321_000.0, -2_109_876.0, 5_432_100.0];
+        let gha = 1.234_567_8;
+        let ef = inertial_to_earth_fixed(pos, gha);
+        let back = earth_fixed_to_inertial(ef, gha);
+        for i in 0..3 {
+            let err = (back[i] - pos[i]).abs();
+            assert!(err < 1e-8, "round-trip error component {i}: {err}");
+            // Relative error within 1e-14 of the original magnitude.
+            let rel = err / pos[i].abs().max(1.0);
+            assert!(rel < 1e-14, "relative round-trip error {i}: {rel}");
+        }
+    }
+
+    /// TC-FRAME-4: a point stationary in ECEF on the equator at `r = R_earth`
+    /// has ECI velocity magnitude `OMEGA_EARTH * R_earth ≈ 465 m/s`. At
+    /// `gha = 0` the direction is along ECI +y.
+    #[test]
+    fn tc_frame_4_stationary_ecef_point_eci_velocity() {
+        let r_ef = [R_EARTH_TEST, 0.0, 0.0];
+        let v_ef = [0.0, 0.0, 0.0];
+        let v_eci = earth_fixed_to_inertial_vel(r_ef, v_ef, 0.0);
+
+        let expected_mag = OMEGA_EARTH * R_EARTH_TEST;
+        assert!(v_eci[0].abs() < 1e-9, "v_eci x should be ~0, got {}", v_eci[0]);
+        assert!(
+            (v_eci[1] - expected_mag).abs() < 1e-9,
+            "v_eci y should be {expected_mag}, got {}",
+            v_eci[1]
+        );
+        assert!(v_eci[2].abs() < 1e-9, "v_eci z should be ~0, got {}", v_eci[2]);
+        // Magnitude ≈ 465 m/s sanity range.
+        assert!(
+            (expected_mag - 465.1).abs() < 1.0,
+            "expected magnitude near 465 m/s, got {expected_mag}"
+        );
+    }
+
+    /// TC-FRAME-5: velocity round-trip ECI → ECEF → ECI recovers the input,
+    /// including the `ω × r` cross-term.
+    #[test]
+    fn tc_frame_5_velocity_round_trip() {
+        let r_eci = [7_000_000.0, 1_500_000.0, -250_000.0];
+        let v_eci = [-200.0, 7_500.0, 100.0];
+        let gha = 0.4321;
+
+        let r_ef = inertial_to_earth_fixed(r_eci, gha);
+        let v_ef = inertial_to_earth_fixed_vel(r_eci, v_eci, gha);
+        let v_back = earth_fixed_to_inertial_vel(r_ef, v_ef, gha);
+
+        for i in 0..3 {
+            let err = (v_back[i] - v_eci[i]).abs();
+            assert!(err < 1e-8, "velocity round-trip error component {i}: {err}");
+        }
     }
 }

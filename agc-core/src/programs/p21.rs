@@ -22,6 +22,8 @@ use crate::executive::job::JobPriority;
 use crate::math::kepler::kepler_step;
 use crate::math::linalg::norm;
 use crate::navigation::gravity::MU_EARTH;
+use crate::navigation::state_vector::inertial_to_earth_fixed;
+use crate::navigation::time::OMEGA_EARTH;
 use crate::types::Vec3;
 use crate::AgcState;
 
@@ -43,11 +45,6 @@ pub const P21_PRIORITY: JobPriority = 7;
 /// per the AGC convention (O'Brien p. 303).
 /// Spec: p21_p22-spec.md §4.1
 pub const R_EARTH: f64 = 6_371_000.0; // m
-
-/// Mean Earth rotation rate (rad/s). IAU standard value.
-/// Used to compute GHA at any GET: `gha(t) = gha_epoch_rad + OMEGA_EARTH * t`.
-/// Spec: p21_p22-spec.md §3.3
-pub const OMEGA_EARTH: f64 = 7.292_115_085_5e-5; // rad/s
 
 // ── Alarm codes ─────────────────────────────────────────────────────────────────
 
@@ -177,20 +174,12 @@ pub fn p21_compute_ground_track(
         kepler_step(csm_pos, csm_vel, delta_t, MU_EARTH)
     };
 
-    // Step 2 — Compute GHA at target GET.
-    // gha is unbounded; we normalise to [0, 2π) for the rotation step.
-    let gha_raw = gha_epoch_rad + OMEGA_EARTH * target_get_s;
-    let two_pi = 2.0 * core::f64::consts::PI;
-    let gha = gha_raw - libm::floor(gha_raw / two_pi) * two_pi;
+    // Step 2 — Compute GHA at target GET. The transform takes the angle in
+    // radians and uses cos/sin internally, so no modulo-2π reduction needed.
+    let gha = gha_epoch_rad + OMEGA_EARTH * target_get_s;
 
     // Step 3 — Rotate inertial position to Earth-fixed frame (Rz(+gha)).
-    let cos_gha = libm::cos(gha);
-    let sin_gha = libm::sin(gha);
-    let pos_ef: Vec3 = [
-        pos_t[0] * cos_gha + pos_t[1] * sin_gha,
-        -pos_t[0] * sin_gha + pos_t[1] * cos_gha,
-        pos_t[2],
-    ];
+    let pos_ef: Vec3 = inertial_to_earth_fixed(pos_t, gha);
 
     // Step 4 — Extract geocentric latitude, longitude, and altitude.
     let r_mag = norm(pos_ef);
@@ -217,6 +206,7 @@ pub fn p21_compute_ground_track(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::navigation::time::OMEGA_EARTH;
 
     // ── TC-P21-1: Circular LEO — same-epoch query returns current position ────
 

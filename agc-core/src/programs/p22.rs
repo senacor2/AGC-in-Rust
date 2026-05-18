@@ -26,9 +26,10 @@ use crate::executive::job::JobPriority;
 use crate::executive::waitlist::ScheduleResult;
 use crate::math::linalg::{norm, unit};
 use crate::navigation::kalman::UpdateOutcome;
-use crate::navigation::state_vector::Frame;
+use crate::navigation::state_vector::{earth_fixed_to_inertial, Frame};
+use crate::navigation::time::OMEGA_EARTH;
 use crate::programs::p20::LosComponent;
-use crate::programs::p21::{p21_compute_ground_track, OMEGA_EARTH, R_EARTH};
+use crate::programs::p21::{p21_compute_ground_track, R_EARTH};
 use crate::types::Vec3;
 use crate::AgcState;
 
@@ -559,13 +560,7 @@ pub fn landmark_inertial_pos(entry: &LandmarkEntry, get_s: f64, gha_epoch_rad: f
     let gha = gha_epoch_rad + OMEGA_EARTH * get_s;
 
     // Step 3: Rotate Earth-fixed to ECI (Rz(-gha) = transpose of Rz(+gha)).
-    let cos_gha = libm::cos(gha);
-    let sin_gha = libm::sin(gha);
-    [
-        r_ef[0] * cos_gha - r_ef[1] * sin_gha,
-        r_ef[0] * sin_gha + r_ef[1] * cos_gha,
-        r_ef[2],
-    ]
+    earth_fixed_to_inertial(r_ef, gha)
 }
 
 // ── Private helpers ────────────────────────────────────────────────────────────
@@ -680,6 +675,7 @@ mod tests {
     use super::*;
     use crate::math::linalg::norm;
     use crate::navigation::state_vector::{Frame, StateVector};
+    use crate::navigation::time::OMEGA_EARTH;
     use crate::types::Met;
     use crate::AgcState;
 
@@ -766,8 +762,6 @@ mod tests {
     /// are mathematical inverses: round-trip recovers the original lat/lon.
     #[test]
     fn tc_p22_2_landmark_inertial_pos_round_trip() {
-        use crate::programs::p21::OMEGA_EARTH;
-
         let entry = LandmarkEntry {
             lat_rad: core::f64::consts::FRAC_PI_6, // 30° N
             lon_rad: 0.0,
