@@ -1,4 +1,5 @@
 # Standard Instructions
+
 - Adr(12) is a 12 bit address in either fixed or erasable memory
 - EAdr(10) is an erasable memory address with 10 bits
 - EAdr(12) is an erasable memory address with 12 bits
@@ -62,6 +63,7 @@
 | MCDU     | estor     | CDU Decrement                   |                                  |
 | SHINC    | estor     | Counter Shift                   |                                  |
 | SHANC    | estor     | Counter Shift and Add 1         |                                  |
+
 # Implied Address Instructions
 
 | Assembled Instruction | Special code     | Description                                                         |
@@ -82,6 +84,7 @@
 | XXALQ                 | TC A             | Execute Extracode using A, L and Q registers                        |
 | ZL                    | LXCH             | Zero the L register                                                 |
 | ZQ                    | QXCH             | Zero the Q register                                                 |
+
 # Pseudo Instructions
 
 | Instruction name | Operand                 | Description                                                                |
@@ -120,6 +123,7 @@
 | DOWNRUPT       | Downlink registers ready for more data | AGC downlink telemetry                                             |
 | RADARUPT       | Data in RNRAD register is ready        | Data from rendezvous radar (LM only)                               |
 | RUPT10         |                                        | LM P64 redesignations                                              |
+
 # Registers
 
 | Name                       | Address (oct) | Function                                                          |
@@ -173,11 +177,17 @@
 | LEMONM                     | 00056         | Unused                                                            |
 | OUTLINK                    | 00057         | Unused                                                            |
 | ALTM                       | 00060         | Altitude Meter                                                    |
+
 # Command Module I/O Channels
+
 ## Input Channel 3
+
 Bits 1-14 contains the HIGH ORDER SCALER: 23.3 hours = maximum capacity in increments of 5.12 seconds
+
 ## Input Channel 4
+
 Bits 1-14 contains the LOW ORDER SCALER: 5.12 seconds = maximum capacity in increments of 1/3200 seconds
+
 ## Output Channel 5
 
 | Bit | Jet Designation<br>SM Quad No./CM Ring No | TRANS/ROT | SM Command<br>CM Command |
@@ -190,7 +200,9 @@ Bits 1-14 contains the LOW ORDER SCALER: 5.12 seconds = maximum capacity in incr
 | 6   | D-4/1-6                                   | -Y/-YW    | -YW                      |
 | 7   | B-3/1-5                                   | -X/+YW    | +YW                      |
 | 8   | B-4/2-6                                   | +X/-YW    | -YW                      |
+
 ## Output Channel 6
+
 | Bit | Jet Designation<br>SM Quad No./CM Ring No | TRANS/ROT | SM Command<br>CM Command |
 | --- | ----------------------------------------- | --------- | ------------------------ |
 | 1   | B-1/1-1                                   | +Z/+R     | +R                       |
@@ -201,6 +213,7 @@ Bits 1-14 contains the LOW ORDER SCALER: 5.12 seconds = maximum capacity in incr
 | 6   | A-2                                       | -Y/-R     |                          |
 | 7   | C-1                                       | -Y/+R     |                          |
 | 8   | C-2                                       | +Y/-R     |                          |
+
 ## Output Channel 11
 
 | Bit | Description                  |
@@ -220,6 +233,7 @@ Bits 1-14 contains the LOW ORDER SCALER: 5.12 seconds = maximum capacity in incr
 | 13  | Engine On/Off (1-On, 0-Off)  |
 | 14  | Spare                        |
 | 15  | Spare                        |
+
 ## Output Channel 12
 
 | Bit | Description                      |
@@ -239,6 +253,7 @@ Bits 1-14 contains the LOW ORDER SCALER: 5.12 seconds = maximum capacity in incr
 | 13  | S-IVB Injection Sequence Start   |
 | 14  | S-IVB Cutoff                     |
 | 15  | ISS Turn-on Delay Complete       |
+
 ## Output Channel 13
 
 | Bit | Description                  |
@@ -258,6 +273,7 @@ Bits 1-14 contains the LOW ORDER SCALER: 5.12 seconds = maximum capacity in incr
 | 13  | Reset Trap 31-B              |
 | 14  | Reset Trap 32                |
 | 15  | Enable T6RUPT                |
+
 ## Output Channel 14
 
 | Bit | Description         |
@@ -277,6 +293,7 @@ Bits 1-14 contains the LOW ORDER SCALER: 5.12 seconds = maximum capacity in incr
 | 13  | Drive CDU Z         |
 | 14  | Drive CDU Y         |
 | 15  | Drive CDU X         |
+
 ### Gyro Selection
 
 | a   | b   | Gyro |
@@ -285,6 +302,7 @@ Bits 1-14 contains the LOW ORDER SCALER: 5.12 seconds = maximum capacity in incr
 | 0   | 1   | X    |
 | 1   | 0   | Y    |
 | 1   | 1   | Z    |
+
 ## Input Channel 15
 
 | Bit  | Description              |
@@ -295,6 +313,7 @@ Bits 1-14 contains the LOW ORDER SCALER: 5.12 seconds = maximum capacity in incr
 | 4    | Key codes from Main DSKY |
 | 5    | Key codes from Main DSKY |
 | 6-15 | Spare                    |
+
 ## Input Channel 16
 
 | Bit  | Description                    |
@@ -307,6 +326,7 @@ Bits 1-14 contains the LOW ORDER SCALER: 5.12 seconds = maximum capacity in incr
 | 6    | Mark button                    |
 | 7    | Mark reject button             |
 | 8-15 | Spare                          |
+
 ## Input Channel 30
 
 | Bit | Description                |
@@ -326,6 +346,7 @@ Bits 1-14 contains the LOW ORDER SCALER: 5.12 seconds = maximum capacity in incr
 | 13  | IMU Fail                   |
 | 14  | ISS Turn-On Request        |
 | 15  | Temperature in Limits      |
+
 ## Input Channel 31
 
 | Bit | Description             |
@@ -345,6 +366,7 @@ Bits 1-14 contains the LOW ORDER SCALER: 5.12 seconds = maximum capacity in incr
 | 13  | Hold Function           |
 | 14  | Free Function           |
 | 15  | G&N Autopilot Control   |
+
 ## Input Channel 32
 
 | Bit   | Description              |
@@ -360,6 +382,7 @@ Bits 1-14 contains the LOW ORDER SCALER: 5.12 seconds = maximum capacity in incr
 | 12-13 | Spare                    |
 | 14    | Proceed (Standby button) |
 | 15    | Spare                    |
+
 ## Input Channel 33
 
 | Bit | Description          |
@@ -379,6 +402,7 @@ Bits 1-14 contains the LOW ORDER SCALER: 5.12 seconds = maximum capacity in incr
 | 13  | PIPA Fail            |
 | 14  | AGC Warning          |
 | 15  | AGC Oscillator Alarm |
+
 ## Output Channel 77 (Restart Monitor)
 
 | Bit   | Description                   |
@@ -393,6 +417,7 @@ Bits 1-14 contains the LOW ORDER SCALER: 5.12 seconds = maximum capacity in incr
 | 8     | Scalar Fail                   |
 | 9     | Scalar Double Frequency Alarm |
 | 10-15 | Spare                         |
+
 # Interpreter Instruction Set
 Interpreter code is always enclosed in a call to the interpreter and the interpreter must always return to the real machine:
 ```
@@ -417,8 +442,10 @@ Note: DANZIG is the interpreter's instruction dispatch subroutine and as the int
 | QPRET  | Return address register                                                                                        |
 | X1, X2 | Two index registers                                                                                            |
 | S1, S2 | Two step registers, mostly used as loop counters                                                               |
+
 The interpreter implements a stack with up to 38 values.
 The interpreter supports 120 binary switches, numbered 0 - 119
+
 ## Store, Load and Push-down instructions
 
 | Mnemonic | X/Y | Description                        |
@@ -438,6 +465,7 @@ The interpreter supports 120 binary switches, numbered 0 - 119
 | PDVL     | X   | Push MPAC onto Stack and Reload DP |
 | PUSH     |     | Push MPAC onto Stack               |
 | SETPD    | X   | Set Push-Down Stack Pointer        |
+
 ## Arithmetic Instructions
 
 | Mnemonic | X/Y | Description           |
@@ -451,6 +479,7 @@ The interpreter supports 120 binary switches, numbered 0 - 119
 | BDDV     | X   | DP Divide Into        |
 | SIGN     | X   | DP Sign Test          |
 | TAD      | X   | TP Add                |
+
 ## Vector Arithmetic Instructions
 
 | Mnemonic | X/Y | Description                          |
@@ -465,6 +494,7 @@ The interpreter supports 120 binary switches, numbered 0 - 119
 | VPROJ    | X   | Vector Projection                    |
 | VXM      | X   | Matrix Pre-Multiplication by Vector  |
 | MXV      | X   | Matrix Post-Multiplication by Vector |
+
 ## Scalar Functions
 
 | Mnemonic | Description       |
@@ -478,6 +508,7 @@ The interpreter supports 120 binary switches, numbered 0 - 119
 | ROUND    | Round to DP       |
 | DCOMP    | TP Complement     |
 | ABS      | TP Absolute Value |
+
 ## Vector Functions
 
 | Mnemonic | Description             |
@@ -487,6 +518,7 @@ The interpreter supports 120 binary switches, numbered 0 - 119
 | VSQ      | Square of Vector Length |
 | VCOMP    | Vector Complement       |
 | VDEF     | Vector Define           |
+
 ## Shift Instructions
 
 | Mnemonic | Description                         |
@@ -523,6 +555,7 @@ The interpreter supports 120 binary switches, numbered 0 - 119
 | VSL6     | Vector Shift Left 6 Bits and Round  |
 | VSL7     | Vector Shift Left 7 Bits and Round  |
 | VSL8     | Vector Shift Left 8 Bits and Round  |
+
 ## General Shift Instructions
 
 | Mnemonic | X/Y | Description                          |
@@ -532,11 +565,13 @@ The interpreter supports 120 binary switches, numbered 0 - 119
 | SLR      | X   | General Scalar Shift Left and Round  |
 | VSR      | X   | General Vector Shift Right           |
 | VSL      | X   | General Vector Shift Left            |
+
 ## Normalization
 
 | Mnemonic | X/Y | Description      |
 | -------- | --- | ---------------- |
 | NORM     | X   | Scalar Normalize |
+
 ## Branching, Sequence Changing and Subroutine Linkage Instructions
 
 | Mnemonic | X/Y | Description                             |
@@ -555,6 +590,7 @@ The interpreter supports 120 binary switches, numbered 0 - 119
 | BOVB     | X   | Branch on Overflow to Basic Instruction |
 | RTB      | X   | Return to Basic Instructions            |
 | EXIT     | X   | Exit Interpreter                        |
+
 ## Switch Instructions
 
 | Mnemonic | X/Y | Description             |
@@ -565,6 +601,7 @@ The interpreter supports 120 binary switches, numbered 0 - 119
 | SETGO    | X   | Set Switch and Go To    |
 | CLRGO    | X   | Clear Switch and Go To  |
 | INVGO    | X   | Invert Switch and Go To |
+
 ## Switch Test Instructions
 
 | Mnemonic | X/Y | Description                               |
@@ -585,6 +622,7 @@ The interpreter supports 120 binary switches, numbered 0 - 119
 |          | Y   | Branch if Switch is On and Invert Switch  |
 | BOFINV   | X   |                                           |
 |          | Y   | Branch if Switch is Off and Invert Switch |
+
 ## Index Register Instructions
 
 | Mnemonic | X/Y | Description                           |
@@ -609,12 +647,14 @@ The interpreter supports 120 binary switches, numbered 0 - 119
 | XSU,2    | X   | Index Register Subtract               |
 | TIX,1    |     |                                       |
 | TIX,2    | X   | Transfer on Index                     |
+
 ## Miscellaneous Instructions
 
 | Mnemonic | X/Y | Description                 |
 | -------- | --- | --------------------------- |
 | SSP      | X   | Set Single Precision        |
 | STADR    |     | Push Up Stack on Store Code |
+
 # Command Module Programs (Major Modes)
 
 | Group                       | Program number | Description                                                  |
@@ -663,6 +703,7 @@ The interpreter supports 120 binary switches, numbered 0 - 119
 |                             | 76             | LM Target Delta V                                            |
 |                             | 77             | CSM Target Delta V                                           |
 |                             | 78             | Rendezvous Final Phase                                       |
+
 # Command Module Routines
 
 | Routine | Routine Title                              |
@@ -696,7 +737,9 @@ The interpreter supports 120 binary switches, numbered 0 - 119
 | 62      | Crew-Defined Maneuver                      |
 | 63      | Rendezvous Final Attitude                  |
 | 67      | Universal Tracking Routing                 |
+
 # Command Module Verbs
+
 ## Regular Verbs
 
 | Verb | Description                                   |
@@ -740,6 +783,7 @@ The interpreter supports 120 binary switches, numbered 0 - 119
 | 37   | Change program (major mode)                   |
 | 38   | Spare                                         |
 | 39   | Spare                                         |
+
 ## Extended Verbs
 
 | Verb | Description                                                             |
@@ -804,6 +848,7 @@ The interpreter supports 120 binary switches, numbered 0 - 119
 | 97   | Please perform engine-fail (R40)                                        |
 | 98   | Spare                                                                   |
 | 99   | Please Enable Engine Ignition                                           |
+
 # Command Module Nouns
 
 | Number | Register Description                              | Data Format                 |
@@ -820,7 +865,7 @@ The interpreter supports 120 binary switches, numbered 0 - 119
 |        |                                                   | XXX.XX (degree)             |
 | 04     | Spare                                             |                             |
 | 05     | Angular error/difference                          | XXX.XX (degree)             |
-| 06     | Optionacode ID                                    | Octal                       |
+| 06     | Option code ID                                    | Octal                       |
 |        | Option code                                       | Octal                       |
 | 07     | FLAGWORD operator                                 |                             |
 |        | ECADR                                             | Octal                       |
@@ -1072,6 +1117,7 @@ The interpreter supports 120 binary switches, numbered 0 - 119
 | 99     | RMS in position                                   | XXXXX. ft                   |
 |        | RMS in velocity                                   | XXXX.X ft/s                 |
 |        | RMS option code                                   | XXXXX.                      |
+
 # Command Module Program Alarms
 
 | Code  | Interpretation                                                       | Issued By                        |
@@ -1144,6 +1190,7 @@ The interpreter supports 120 binary switches, numbered 0 - 119
 | 31202 | Executive overflow-No core sets available                            | EXECUTIVE                        |
 | 31203 | WAITLIST overflow-too many tasks                                     | WAITLIST                         |
 | 31211 | Illegal interrupt of Extended Verb                                   | SXTMARK, P23                     |
+
 # Navigation Star Catalog
 
 | Code | Star            | Vis Mag | Asc(h) | Asc(m) | Dec(d) | Dec(m) |

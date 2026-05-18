@@ -43,6 +43,9 @@ The repository shows strong structure and good no-heap discipline in `agc-core`,
 - Stale callback execution after restart/reset flow.
 - Residual guidance/control flags persisting across FRESH START boundary.
 
+**Comment:**
+- Fresh start is currently not implemented due to the lack of non-volatile memory. When the system restarts, all information in RAM is lost.
+
 ---
 
 ### 2) High: Waitlist scheduling failures are ignored in periodic control loops
@@ -100,10 +103,10 @@ As a result, this report is a **static audit** and does not include pass/fail re
 - `cargo build --target thumbv7em-none-eabihf`
 
 ## Recommended Remediation Order
-1. Fix FRESH START reset completeness and ensure stale callback/state cannot survive reset.
-2. Enforce explicit handling of all waitlist scheduling outcomes in DAP and SERVICER paths.
-3. Replace `static mut` restart table with the project-approved shared-state pattern.
-4. Replace panic-style runtime precondition checks with alarmed rejection paths where recoverable.
+1. Enforce explicit handling of all waitlist scheduling outcomes in DAP and SERVICER paths.
+2. Replace `static mut` restart table with the project-approved shared-state pattern.
+3. Replace panic-style runtime precondition checks with alarmed rejection paths where recoverable.
+4. Fix FRESH START reset completeness and ensure stale callback/state cannot survive reset.
 
 ## Suggested Follow-up Audit Gate
 After fixes, require all of the following before merge:

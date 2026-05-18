@@ -2,7 +2,9 @@
 
 AI Agents port the Apollo Guidance Computer to Rust.
 
-The goal is to transform the AGC code into idiomatic, readable and maintainable Rust code. This will require to re-create the abstractions that where lost, when the AGC assembler code was written. We are focussing on the Command Module (aka Comanche055) in this project which is tasked with the travel from the earth to the moon and back. Landing on the moon is out of scope.
+The goal is to transform the AGC code into idiomatic, readable and maintainable Rust code. This will require to re-create the abstractions that where lost, when the AGC assembler code was written. We are focussing on the Command Module (aka Comanche055) in this project which is tasked with the travel from the earth to the moon and back. Landing on the moon is out of scope, partly because of a lack of a lunar module. The current mission is Apollo 8-style: fly around the moon and back but without an LM.
+
+Aside from the `input` documents, practically all code and documentation has been written by @claude.
 
 ## Directory Structure
 
