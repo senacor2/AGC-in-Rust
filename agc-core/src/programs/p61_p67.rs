@@ -10,6 +10,9 @@
 
 use crate::control::{dap::dap_stop, DapMode};
 use crate::executive::job::JobPriority;
+use crate::navigation::state_vector::inertial_to_earth_fixed;
+use crate::navigation::time::met_to_gha;
+use crate::programs::p21::R_EARTH;
 use crate::services::average_g::SERVICER_PERIOD_S;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -77,13 +80,25 @@ pub struct EntryState {
     pub phase: EntryPhase,
     /// Sensed spacecraft acceleration (g units).
     ///
-    /// Populated by the test harness in Phase 5; wired into the
-    /// SERVICER pipeline in a later milestone.
+    /// Updated each SERVICER cycle by `entry_servicer_exit` from the inertial
+    /// sensed delta-V `state.servicer_last_dv_inertial`.
     pub sensed_acceleration_g: f64,
-    /// Roll command the entry guidance law is holding (radians). Stub.
+    /// Inertial altitude rate `d|r|/dt` (m/s, positive = climbing).
+    ///
+    /// Updated each SERVICER cycle. Equals `r · v / |r|` evaluated on the
+    /// current ECI state vector. AGC correspondence: V16N64 R2 (HDOT).
+    pub r_dot_mps: f64,
+    /// Roll command the entry guidance law is holding (radians). Stub until MS-E3.
     pub roll_command_rad: f64,
-    /// Range to splashdown target (km). Stub.
+    /// Great-circle range from the current sub-satellite point to the target
+    /// landing site (km). Updated each SERVICER cycle.
     pub target_range_km: f64,
+    /// Target landing site geodetic latitude (rad, positive north).
+    /// Loaded from ground uplink before P61; default 0.0 = equator.
+    pub target_lat_rad: f64,
+    /// Target landing site longitude (rad, positive east, range `(-π, π]`).
+    /// Loaded from ground uplink before P61; default 0.0 = Greenwich.
+    pub target_lon_rad: f64,
     /// `true` once `p67_deploy_drogue` has run.
     pub drogue_deployed: bool,
 }
@@ -94,8 +109,11 @@ impl EntryState {
         Self {
             phase: EntryPhase::Idle,
             sensed_acceleration_g: 0.0,
+            r_dot_mps: 0.0,
             roll_command_rad: 0.0,
             target_range_km: 0.0,
+            target_lat_rad: 0.0,
+            target_lon_rad: 0.0,
             drogue_deployed: false,
         }
     }
@@ -116,11 +134,11 @@ fn set_display(state: &mut crate::AgcState, prog: u8, verb: u8, noun: u8) {
     state.dsky.flashing = false;
 }
 
-/// Write the continuous-monitor entry status triplet
-/// (sensed g / roll command / target range) to the DSKY.
+/// Write the V16N64 continuous-monitor entry status triplet
+/// (sensed g / R-dot / range-to-go) to the DSKY.
 fn write_entry_status(state: &mut crate::AgcState) {
     state.dsky.r[0] = state.entry.sensed_acceleration_g as f32;
-    state.dsky.r[1] = state.entry.roll_command_rad as f32;
+    state.dsky.r[1] = state.entry.r_dot_mps as f32;
     state.dsky.r[2] = state.entry.target_range_km as f32;
 }
 
@@ -179,6 +197,47 @@ pub fn init_p63(state: &mut crate::AgcState) -> JobPriority {
     PRIORITY
 }
 
+/// Inertial altitude rate `r · v / |r|` (m/s) from the current CSM state vector.
+///
+/// Returns 0 if the position vector is zero (uninitialised fixture).
+fn compute_r_dot(state: &crate::AgcState) -> f64 {
+    let r = state.csm_state.position;
+    let v = state.csm_state.velocity;
+    let r_mag2 = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
+    if r_mag2 == 0.0 {
+        return 0.0;
+    }
+    (r[0] * v[0] + r[1] * v[1] + r[2] * v[2]) / libm::sqrt(r_mag2)
+}
+
+/// Great-circle range (km) from the current sub-satellite point to the target
+/// landing site stored in `EntryState`.
+///
+/// Computes the haversine distance on the mean spherical Earth. Uses
+/// `met_to_gha` + `inertial_to_earth_fixed` to find the current sub-satellite
+/// lat/lon from the ECI position. Returns 0 if the position is at the origin.
+fn compute_range_to_go_km(state: &crate::AgcState) -> f64 {
+    let pos_eci = state.csm_state.position;
+    let r_mag2 = pos_eci[0] * pos_eci[0] + pos_eci[1] * pos_eci[1] + pos_eci[2] * pos_eci[2];
+    if r_mag2 == 0.0 {
+        return 0.0;
+    }
+    let gha = met_to_gha(state.time, state.gha_epoch_rad);
+    let pos_ef = inertial_to_earth_fixed(pos_eci, gha);
+    let r_mag = libm::sqrt(r_mag2);
+    let lat = libm::asin(pos_ef[2] / r_mag);
+    let lon = libm::atan2(pos_ef[1], pos_ef[0]);
+
+    let dlat = state.entry.target_lat_rad - lat;
+    let dlon = state.entry.target_lon_rad - lon;
+    let sd_lat = libm::sin(dlat * 0.5);
+    let sd_lon = libm::sin(dlon * 0.5);
+    let a = sd_lat * sd_lat
+        + libm::cos(lat) * libm::cos(state.entry.target_lat_rad) * sd_lon * sd_lon;
+    let c = 2.0 * libm::atan2(libm::sqrt(a), libm::sqrt((1.0 - a).max(0.0)));
+    R_EARTH * c / 1000.0
+}
+
 /// SERVICER exit hook that updates `state.entry.sensed_acceleration_g`.
 ///
 /// Reads the most recent inertial sensed delta-V staged by `servicer_task`
@@ -194,6 +253,15 @@ pub fn entry_servicer_exit(state: &mut crate::AgcState) {
     let dv_mag = libm::sqrt(dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]);
     let accel_mps2 = dv_mag / SERVICER_PERIOD_S;
     state.entry.sensed_acceleration_g = accel_mps2 / G0_MPS2;
+
+    // Refresh V16N64 display quantities each cycle.
+    state.entry.r_dot_mps = compute_r_dot(state);
+    state.entry.target_range_km = compute_range_to_go_km(state);
+
+    // SERVICER-driven 0.05g threshold trip — advances PreEntry → Entry and
+    // hands the DAP a zero-bank command for trim-attitude hold. The closed
+    // loop that modulates the bank lands in MS-E3.
+    p63_check_threshold(state);
 }
 
 /// Check whether the 0.05g entry-interface threshold has been crossed.
@@ -207,6 +275,9 @@ pub fn p63_check_threshold(state: &mut crate::AgcState) -> bool {
         && state.entry.sensed_acceleration_g >= ENTRY_THRESHOLD_G
     {
         state.entry.phase = EntryPhase::Entry;
+        // Trim-attitude (zero-bank) roll hold until the MS-E3 closed loop
+        // begins computing real bank commands.
+        state.dap_state.mode = DapMode::EntryRoll(0.0);
         return true;
     }
     false
@@ -531,6 +602,160 @@ mod tests {
             "g-loading out of expected range: {}",
             state.entry.sensed_acceleration_g
         );
+    }
+
+    // ── MS-E2: R-dot, range-to-go, and SERVICER-driven threshold trip ─────────
+
+    /// TC-MSE2-1: R-dot is positive for an outbound CSM (`r · v > 0`).
+    #[test]
+    fn tc_mse2_1_r_dot_climbing() {
+        let mut state = AgcState::new();
+        // Position on +X, velocity along +X (pure outbound radial).
+        state.csm_state.position = [6_500_000.0, 0.0, 0.0];
+        state.csm_state.velocity = [50.0, 0.0, 0.0];
+
+        entry_servicer_exit(&mut state);
+
+        assert!(
+            (state.entry.r_dot_mps - 50.0).abs() < 1e-6,
+            "R-dot should equal radial velocity 50 m/s, got {}",
+            state.entry.r_dot_mps
+        );
+    }
+
+    /// TC-MSE2-2: R-dot is negative when descending and equals
+    /// `(r · v) / |r|` for a non-radial velocity.
+    #[test]
+    fn tc_mse2_2_r_dot_descending_general() {
+        let mut state = AgcState::new();
+        // Position on +X at 6.5 Mm, velocity has both radial (-30 m/s) and
+        // tangential (+7800 m/s) components.
+        state.csm_state.position = [6_500_000.0, 0.0, 0.0];
+        state.csm_state.velocity = [-30.0, 7_800.0, 0.0];
+
+        entry_servicer_exit(&mut state);
+
+        // r · v / |r| = (-30 * 6.5e6) / 6.5e6 = -30.0.
+        assert!(
+            (state.entry.r_dot_mps - -30.0).abs() < 1e-6,
+            "R-dot should be -30 m/s, got {}",
+            state.entry.r_dot_mps
+        );
+    }
+
+    /// TC-MSE2-3: range-to-go is zero when the sub-satellite point coincides
+    /// with the target landing site.
+    #[test]
+    fn tc_mse2_3_range_to_target_zero_when_aligned() {
+        let mut state = AgcState::new();
+        // Sub-satellite point at lat=lon=0 (target default). gha_epoch=0 and
+        // MET=0 → GHA=0 → ECEF = ECI. Equatorial position on +X gives lat=0,
+        // lon=0.
+        state.csm_state.position = [7_000_000.0, 0.0, 0.0];
+        state.csm_state.velocity = [0.0, 7_500.0, 0.0];
+        // entry.target_lat_rad = 0, target_lon_rad = 0 by default.
+
+        entry_servicer_exit(&mut state);
+
+        assert!(
+            state.entry.target_range_km < 1e-6,
+            "range-to-go should be ~0 km, got {}",
+            state.entry.target_range_km
+        );
+    }
+
+    /// TC-MSE2-4: range-to-go matches the haversine result for a known offset.
+    /// Target 1° east of the sub-satellite point ⇒ ~111.2 km on the spherical
+    /// Earth approximation.
+    #[test]
+    fn tc_mse2_4_range_to_target_one_degree_east() {
+        let mut state = AgcState::new();
+        state.csm_state.position = [7_000_000.0, 0.0, 0.0]; // lat=0, lon=0
+        state.csm_state.velocity = [0.0, 7_500.0, 0.0];
+        state.entry.target_lat_rad = 0.0;
+        state.entry.target_lon_rad = 1.0_f64.to_radians();
+
+        entry_servicer_exit(&mut state);
+
+        // 1° × π/180 × R_EARTH_km = π/180 × 6371 ≈ 111.195 km.
+        let expected_km = R_EARTH * 1.0_f64.to_radians() / 1000.0;
+        assert!(
+            (state.entry.target_range_km - expected_km).abs() < 1e-3,
+            "range-to-go ≈ {expected_km} km, got {}",
+            state.entry.target_range_km
+        );
+    }
+
+    /// TC-MSE2-5: SERVICER-driven 0.05g threshold trip — one cycle whose
+    /// inertial delta-V corresponds to ≥ 0.05 g advances the phase to `Entry`
+    /// and switches the DAP into `EntryRoll(0.0)` for trim-attitude hold.
+    #[test]
+    fn tc_mse2_5_servicer_drives_threshold_and_dap() {
+        let mut state = AgcState::new();
+        state.entry.phase = EntryPhase::Separation;
+        init_p63(&mut state);
+        assert_eq!(state.entry.phase, EntryPhase::PreEntry, "fixture");
+
+        // Pre-stage a delta-V corresponding to ~0.1 g over the 2 s cycle.
+        state.servicer_last_dv_inertial = [G0_MPS2 * SERVICER_PERIOD_S * 0.1, 0.0, 0.0];
+        state.csm_state.position = [6_500_000.0, 0.0, 0.0];
+        state.csm_state.velocity = [0.0, 7_800.0, 0.0];
+
+        let exit = state.servicer_exit.expect("init_p63 installs the hook");
+        exit(&mut state);
+
+        assert_eq!(
+            state.entry.phase,
+            EntryPhase::Entry,
+            "0.1 g trips the 0.05 g threshold"
+        );
+        assert!(
+            matches!(state.dap_state.mode, DapMode::EntryRoll(b) if b == 0.0),
+            "DAP must enter trim-attitude EntryRoll(0.0), got {:?}",
+            state.dap_state.mode
+        );
+    }
+
+    /// TC-MSE2-6: SERVICER below threshold — phase and DAP unchanged.
+    #[test]
+    fn tc_mse2_6_servicer_below_threshold_no_transition() {
+        let mut state = AgcState::new();
+        state.entry.phase = EntryPhase::Separation;
+        init_p63(&mut state);
+        let dap_before = state.dap_state.mode;
+
+        // 0.02 g — below the 0.05 g threshold.
+        state.servicer_last_dv_inertial = [G0_MPS2 * SERVICER_PERIOD_S * 0.02, 0.0, 0.0];
+        state.csm_state.position = [6_500_000.0, 0.0, 0.0];
+        state.csm_state.velocity = [0.0, 7_800.0, 0.0];
+
+        let exit = state.servicer_exit.expect("init_p63 installs the hook");
+        exit(&mut state);
+
+        assert_eq!(
+            state.entry.phase,
+            EntryPhase::PreEntry,
+            "phase must stay PreEntry below threshold"
+        );
+        assert_eq!(
+            state.dap_state.mode, dap_before,
+            "DAP mode unchanged below threshold"
+        );
+    }
+
+    /// TC-MSE2-7: V16N64 DSKY triplet shows (sensed g / R-dot / range-to-go).
+    #[test]
+    fn tc_mse2_7_write_entry_status_triplet() {
+        let mut state = AgcState::new();
+        state.entry.sensed_acceleration_g = 0.123;
+        state.entry.r_dot_mps = -45.6;
+        state.entry.target_range_km = 1234.5;
+
+        write_entry_status(&mut state);
+
+        assert!((state.dsky.r[0] - 0.123).abs() < 1e-5);
+        assert!((state.dsky.r[1] - -45.6).abs() < 1e-3);
+        assert!((state.dsky.r[2] - 1234.5).abs() < 1e-1);
     }
 
     // ── Sequence test ─────────────────────────────────────────────────────────
