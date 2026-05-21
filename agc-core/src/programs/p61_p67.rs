@@ -10,6 +10,7 @@
 
 use crate::control::{dap::dap_stop, DapMode};
 use crate::executive::job::JobPriority;
+use crate::services::average_g::SERVICER_PERIOD_S;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -25,6 +26,13 @@ pub const PRIORITY: JobPriority = 10;
 /// Sensed-acceleration threshold (g units) that marks entry interface.
 /// Below this, P63 monitors; at/above, P64 closed-loop guidance may run.
 pub const ENTRY_THRESHOLD_G: f64 = 0.05;
+
+/// Standard gravity `g_0` (m/s²) used to convert the SERVICER's sensed
+/// delta-V into g-loading for `entry.sensed_acceleration_g`. AGC source
+/// `REENTRY_CONTROL.agc` uses 32.2 ft/s² (= 9.815 m/s²); the modern SI
+/// value 9.806 65 differs by < 1 % and is preferred since downstream
+/// thresholds are stated to two significant figures.
+pub const G0_MPS2: f64 = 9.806_65;
 
 const VERB_DISPLAY: u8 = 6;
 const VERB_MONITOR: u8 = 16;
@@ -161,9 +169,31 @@ pub fn init_p63(state: &mut crate::AgcState) -> JobPriority {
     }
     state.entry.phase = EntryPhase::PreEntry;
 
+    // Install the entry SERVICER exit hook so the 0.05g threshold check has
+    // a live sensed-acceleration value to compare against. Cleared in
+    // `init_p67` when the entry sequence completes.
+    state.servicer_exit = Some(entry_servicer_exit);
+
     set_display(state, P63_MAJOR_MODE, VERB_MONITOR, 64);
     write_entry_status(state);
     PRIORITY
+}
+
+/// SERVICER exit hook that updates `state.entry.sensed_acceleration_g`.
+///
+/// Reads the most recent inertial sensed delta-V staged by `servicer_task`
+/// (`state.servicer_last_dv_inertial`), divides by the SERVICER period to get
+/// the average acceleration over the cycle, then divides by `G0_MPS2` to
+/// express the result in g-units that P63 / P64 threshold logic expects.
+///
+/// Installed by `init_p63`; cleared by `init_p67`. Coexists with — but never
+/// runs at the same time as — `guidance::maneuver::burn_servicer_exit`,
+/// because the CM is post-separation and no SPS burn is active during entry.
+pub fn entry_servicer_exit(state: &mut crate::AgcState) {
+    let dv = state.servicer_last_dv_inertial;
+    let dv_mag = libm::sqrt(dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]);
+    let accel_mps2 = dv_mag / SERVICER_PERIOD_S;
+    state.entry.sensed_acceleration_g = accel_mps2 / G0_MPS2;
 }
 
 /// Check whether the 0.05g entry-interface threshold has been crossed.
@@ -205,6 +235,10 @@ pub fn init_p67(state: &mut crate::AgcState) -> JobPriority {
         raise(state, ALARM_P67_WRONG_PHASE);
     }
     state.entry.phase = EntryPhase::Final;
+
+    // Entry sequence is complete; uninstall the SERVICER exit hook so the
+    // next program (typically P00) sees a clean slot.
+    state.servicer_exit = None;
 
     p67_deploy_drogue(state);
 
@@ -389,6 +423,114 @@ mod tests {
         assert_eq!(state.alarm.code, ALARM_P67_WRONG_PHASE);
         assert_eq!(state.entry.phase, EntryPhase::Final);
         assert!(state.entry.drogue_deployed);
+    }
+
+    // ── entry_servicer_exit ───────────────────────────────────────────────────
+
+    /// TC-ESE-1: `entry_servicer_exit` computes g-loading from the staged
+    /// inertial delta-V, dividing by the SERVICER period and `G0_MPS2`.
+    #[test]
+    fn tc_ese_1_g_loading_from_staged_dv() {
+        let mut state = AgcState::new();
+        // Stage a 19.613 m/s inertial delta-V — corresponds to ~1 g over 2 s.
+        state.servicer_last_dv_inertial = [G0_MPS2 * SERVICER_PERIOD_S, 0.0, 0.0];
+
+        entry_servicer_exit(&mut state);
+
+        assert!(
+            (state.entry.sensed_acceleration_g - 1.0).abs() < 1e-12,
+            "expected 1.0 g, got {}",
+            state.entry.sensed_acceleration_g
+        );
+    }
+
+    /// TC-ESE-2: A zero delta-V produces zero g-loading (idle/coast case).
+    #[test]
+    fn tc_ese_2_zero_dv_zero_g() {
+        let mut state = AgcState::new();
+        state.servicer_last_dv_inertial = [0.0; 3];
+        state.entry.sensed_acceleration_g = 999.0; // pre-poison
+
+        entry_servicer_exit(&mut state);
+
+        assert_eq!(state.entry.sensed_acceleration_g, 0.0);
+    }
+
+    /// TC-ESE-3: `init_p63` installs the SERVICER exit hook so the live
+    /// SERVICER → `sensed_acceleration_g` path is in effect during PreEntry.
+    #[test]
+    fn tc_ese_3_p63_installs_hook() {
+        let mut state = AgcState::new();
+        state.entry.phase = EntryPhase::Separation;
+        assert!(state.servicer_exit.is_none(), "fixture precondition");
+
+        init_p63(&mut state);
+
+        // Exercising the hook is the cleanest way to prove the right function
+        // is installed without comparing raw function pointers.
+        state.servicer_last_dv_inertial = [G0_MPS2 * SERVICER_PERIOD_S * 0.5, 0.0, 0.0];
+        let exit = state.servicer_exit.expect("init_p63 must install the hook");
+        exit(&mut state);
+        assert!(
+            (state.entry.sensed_acceleration_g - 0.5).abs() < 1e-12,
+            "expected 0.5 g, got {}",
+            state.entry.sensed_acceleration_g
+        );
+    }
+
+    /// TC-ESE-4: `init_p67` clears the SERVICER exit hook after entry ends.
+    #[test]
+    fn tc_ese_4_p67_clears_hook() {
+        let mut state = AgcState::new();
+        state.entry.phase = EntryPhase::Entry;
+        state.servicer_exit = Some(entry_servicer_exit);
+
+        init_p67(&mut state);
+
+        assert!(
+            state.servicer_exit.is_none(),
+            "init_p67 must clear servicer_exit"
+        );
+    }
+
+    /// TC-ESE-5: end-to-end PIPA → sensed-g via one SERVICER cycle.
+    /// Drives `servicer_task` with non-zero PIPA counts after `init_p63` has
+    /// installed the hook, and verifies that `sensed_acceleration_g` advances
+    /// off zero.
+    #[test]
+    fn tc_ese_5_pipa_drives_sensed_g() {
+        use crate::services::average_g::{servicer_task, start_servicer};
+
+        let mut state = AgcState::new();
+        // REFSMMAT and pipa_cal default to identity / nominal in AgcState::new.
+        // earth_gravity rejects a zero position vector, so place the CM at a
+        // representative entry-interface altitude (122 km).
+        state.csm_state.position = [6_500_000.0, 0.0, 0.0];
+        state.csm_state.velocity = [0.0, 7_800.0, 0.0];
+        state.entry.phase = EntryPhase::Separation;
+        init_p63(&mut state);
+        start_servicer(&mut state);
+
+        // ~30 cm/s sensed delta-V over 2 s → ~0.015 g. Well below 0.05g
+        // threshold, but enough to verify the path is wired.
+        state.pipa_counts = [5, 0, 0];
+
+        assert_eq!(state.entry.sensed_acceleration_g, 0.0, "fixture");
+        servicer_task(&mut state);
+
+        assert!(
+            state.entry.sensed_acceleration_g > 0.0,
+            "PIPA counts must drive sensed_acceleration_g positive, got {}",
+            state.entry.sensed_acceleration_g
+        );
+        // PIPA = 5 counts × 0.0585 m/s = 0.2925 m/s. /2 s = 0.146 m/s².
+        // /g0 = 0.0149 g. Allow a wide tolerance — exact value depends on
+        // pipa_cal.scale.
+        assert!(
+            (state.entry.sensed_acceleration_g - 0.015).abs() < 0.005,
+            "g-loading out of expected range: {}",
+            state.entry.sensed_acceleration_g
+        );
     }
 
     // ── Sequence test ─────────────────────────────────────────────────────────

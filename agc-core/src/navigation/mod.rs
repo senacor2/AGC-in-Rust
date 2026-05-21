@@ -1,3 +1,4 @@
+pub mod atmosphere;
 pub mod conics;
 pub mod gravity;
 pub mod integration;

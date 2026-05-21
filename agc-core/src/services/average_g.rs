@@ -30,6 +30,14 @@ use crate::tables::alarm_codes::WAITLIST_OVERFLOW;
 use crate::types::Vec3;
 use crate::AgcState;
 
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/// SERVICER cycle period (s). The Average-G integrator reschedules itself
+/// every 200 cs (2.000 s) — see `servicer_task` step 10. Exported so consumers
+/// of `servicer_last_dv_inertial` (e.g. entry-guidance g-loading) can convert
+/// the staged delta-V to an acceleration without re-encoding the period.
+pub const SERVICER_PERIOD_S: f64 = 2.0;
+
 // ── PipaCalibration ───────────────────────────────────────────────────────────
 
 /// PIPA (accelerometer) calibration constants.

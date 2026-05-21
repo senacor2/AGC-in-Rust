@@ -6,7 +6,7 @@ use crate::types::{CduAngle, Vec3};
 ///
 /// AGC source: RCS-CSM_DIGITAL_AUTOPILOT.agc — CMDAPMOD register (octal 0175).
 /// The mode encoding below follows the Comanche055 DAPDATR register conventions.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum DapMode {
     /// DAP is off — no attitude control. The scheduler stops re-arming TIM4.
     /// AGC correspondence: CMDAPMOD = 0 (off / idle).
@@ -30,6 +30,12 @@ pub enum DapMode {
     /// Valid only while `hw.engine().thrust_on()` returns `true`.
     /// AGC correspondence: TVCDAPS.agc active (TVC DAP replaces Coast DAP).
     Tvc,
+    /// Entry-roll mode — hold a commanded bank angle during P63–P67 entry.
+    /// The payload is the commanded bank angle in radians (positive = right
+    /// bank, range nominally `(-π, π]`). The CM is aerodynamically stable in
+    /// pitch and yaw during entry, so the DAP fires RCS on the roll axis only.
+    /// AGC correspondence: CMDAPMOD = 5 (entry roll-hold).
+    EntryRoll(f64),
 }
 
 /// Digital Autopilot state — T5RUPT context.
@@ -285,6 +291,9 @@ pub fn dap_step(state: &mut crate::AgcState) {
         DapMode::Tvc => {
             dispatch_tvc(state);
         }
+        DapMode::EntryRoll(bank_cmd) => {
+            dispatch_entry_roll(state, rates, bank_cmd);
+        }
     }
 
     // ── Update prev_cdu for the next cycle ────────────────────────────────
@@ -404,6 +413,50 @@ fn dispatch_tvc(state: &mut crate::AgcState) {
         state.rcs_commanded_jets = 0;
         state.rcs_commanded_pulse_cs = 0;
     }
+}
+
+/// Dispatch: EntryRoll mode — hold the commanded bank angle on the roll axis.
+///
+/// During entry the CM is aerodynamically stable in pitch and yaw, so the DAP
+/// only fires RCS on the roll axis. Pitch/yaw torques are zeroed before jet
+/// selection, which ensures `select_jets_sm` returns a roll-only mask.
+///
+/// Step: convert the current roll CDU to radians, compute the bank error,
+/// apply the attitude-hold deadband, and feed a PD torque (using the same
+/// gains as `AttitudeHold`) into the existing RCS pipeline.
+fn dispatch_entry_roll(state: &mut crate::AgcState, rates: Vec3, bank_cmd: f64) {
+    use crate::control::attitude::{attitude_hold_torque, AttitudeError};
+    use crate::control::rcs_logic::{compute_pulse_duration, select_jets_sm};
+
+    let current_roll = state.current_cdu[0].to_radians();
+    let roll_error = bank_cmd - current_roll;
+
+    // Expose the roll error for external consumers (DSKY, telemetry).
+    state.dap_state.attitude_error = [roll_error, 0.0, 0.0];
+
+    let db = state.dap_state.deadband;
+    if roll_error.abs() < db {
+        state.rcs_commanded_jets = 0;
+        state.rcs_commanded_pulse_cs = 0;
+        return;
+    }
+
+    let error = AttitudeError {
+        roll: roll_error,
+        pitch: 0.0,
+        yaw: 0.0,
+    };
+    // Pitch/yaw rates are passed in to the controller but the corresponding
+    // torque components will be zero (kd * 0 = 0), so the resulting torque is
+    // pure roll. We still pass `rates` so the rate-derivative term damps roll.
+    let torque = attitude_hold_torque(error, [rates[0], 0.0, 0.0], DEFAULT_KP, DEFAULT_KD);
+
+    let jet_mask = select_jets_sm(torque, &state.rcs_config);
+    let pulse_cs = compute_pulse_duration(torque, jet_mask, &state.rcs_config, DEFAULT_INERTIA);
+
+    state.rcs_commanded_jets = jet_mask;
+    state.rcs_commanded_pulse_cs = pulse_cs;
+    state.dap_state.rcs_jet_flags = jet_mask;
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -632,6 +685,81 @@ mod tests {
             mr[2] * DAP_PERIOD_S,
             ca[2]
         );
+    }
+
+    // ── TC-DAP-09: EntryRoll with large bank error fires roll-only jets ───
+
+    /// EntryRoll(60°) with the CM at zero roll must select at least one jet
+    /// and stage a non-zero pulse duration. Pitch/yaw torques are zero so the
+    /// command should be a pure roll request.
+    #[test]
+    fn tc_dap_09_entry_roll_large_error_fires_jets() {
+        let mut state = make_state();
+        let bank_cmd = 60.0_f64.to_radians();
+        state.dap_state.mode = DapMode::EntryRoll(bank_cmd);
+        state.dap_state.deadband = 0.0087; // ≈ 0.5°
+        state.dap_state.rate_deadband = 0.001;
+        state.current_cdu = [CduAngle(0); 3];
+        state.dap_state.prev_cdu = [CduAngle(0); 3];
+
+        dap_step(&mut state);
+
+        assert_ne!(
+            state.rcs_commanded_jets, 0,
+            "EntryRoll with 60° error must select jets"
+        );
+        assert_ne!(
+            state.rcs_commanded_pulse_cs, 0,
+            "EntryRoll with 60° error must stage a non-zero pulse"
+        );
+        // The attitude_error field should reflect the roll error.
+        let err = state.dap_state.attitude_error;
+        assert!((err[0] - bank_cmd).abs() < 1e-9, "roll error mirrors command");
+        assert_eq!(err[1], 0.0, "pitch error component must be zero");
+        assert_eq!(err[2], 0.0, "yaw error component must be zero");
+    }
+
+    /// TC-DAP-10: EntryRoll inside the attitude deadband suppresses jets.
+    #[test]
+    fn tc_dap_10_entry_roll_within_deadband_suppresses_jets() {
+        let mut state = make_state();
+        // Commanded bank == current roll → zero error.
+        state.dap_state.mode = DapMode::EntryRoll(0.0);
+        state.dap_state.deadband = 0.05; // ≈ 2.9°
+        state.dap_state.rate_deadband = 0.001;
+        state.current_cdu = [CduAngle(0); 3];
+        state.dap_state.prev_cdu = [CduAngle(0); 3];
+        state.rcs_commanded_jets = 0xBEEF; // pre-set to verify clearing
+        state.rcs_commanded_pulse_cs = 99;
+
+        dap_step(&mut state);
+
+        assert_eq!(
+            state.rcs_commanded_jets, 0,
+            "EntryRoll within deadband must clear jet mask"
+        );
+        assert_eq!(
+            state.rcs_commanded_pulse_cs, 0,
+            "EntryRoll within deadband must clear pulse duration"
+        );
+    }
+
+    /// TC-DAP-11: matches!-style introspection of `DapMode::EntryRoll` works
+    /// — confirms the variant carries the bank angle and is distinct from
+    /// the other modes for `PartialEq`.
+    #[test]
+    fn tc_dap_11_entry_roll_variant_payload() {
+        let m = DapMode::EntryRoll(1.234);
+        assert!(matches!(m, DapMode::EntryRoll(_)));
+        if let DapMode::EntryRoll(bank) = m {
+            assert!((bank - 1.234).abs() < 1e-12);
+        } else {
+            panic!("expected EntryRoll variant");
+        }
+        assert_ne!(m, DapMode::Off);
+        assert_ne!(m, DapMode::AttitudeHold);
+        // Distinct payloads compare unequal.
+        assert_ne!(DapMode::EntryRoll(0.5), DapMode::EntryRoll(0.6));
     }
 
     // ── TC-DAP-08: dap_init is Waitlist-independent (ADR-022) ─────────────
