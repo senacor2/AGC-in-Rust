@@ -69,6 +69,13 @@ pub enum EntryPhase {
     Entry,
     /// P67 — final phase / drogue deployed.
     Final,
+    /// P66 — ballistic hold (entered when closed-loop guidance has diverged).
+    ///
+    /// Used by MS-E3 as the destination when HUNTEST predicts a range that
+    /// differs from the actual range-to-go by more than
+    /// `entry_tables::RANGE_ERR_THRESHOLD_KM`. The DAP holds the most recent
+    /// roll command; MS-E5 will replace the hold with the actual P66 logic.
+    Ballistic,
 }
 
 // ── EntryState ────────────────────────────────────────────────────────────────
@@ -88,11 +95,60 @@ pub struct EntryState {
     /// Updated each SERVICER cycle. Equals `r · v / |r|` evaluated on the
     /// current ECI state vector. AGC correspondence: V16N64 R2 (HDOT).
     pub r_dot_mps: f64,
-    /// Roll command the entry guidance law is holding (radians). Stub until MS-E3.
+    /// Roll command the entry guidance law is holding (radians).
+    ///
+    /// Updated each SERVICER cycle by `guidance::entry::resolve_roll` once the
+    /// 0.05g threshold has been crossed (MS-E3). AGC correspondence: `ROLLC`
+    /// at `REENTRY_CONTROL.agc:1308`.
     pub roll_command_rad: f64,
     /// Great-circle range from the current sub-satellite point to the target
     /// landing site (km). Updated each SERVICER cycle.
     pub target_range_km: f64,
+    /// Predicted total range to target (km) — the sum
+    /// `ASKEP + ASP1 + ASPUP + ASP3 + ASPDWN` from HUNTEST.
+    ///
+    /// Updated each SERVICER cycle in `EntryPhase::Entry` by
+    /// `guidance::entry::predict_range`. AGC correspondence: `ASP` (not stored
+    /// in AGC erasable; we cache it here for telemetry and the divergence test).
+    pub predicted_range_km: f64,
+    /// Signed downrange error in km, `target_range_km - predicted_range_km`.
+    ///
+    /// Drives the HUNTEST L/D update. AGC correspondence: `DIFF` at
+    /// `REENTRY_CONTROL.agc:731`.
+    pub downrange_error_km: f64,
+    /// Signed cross-range distance (km) of the current sub-satellite track
+    /// from the great-circle plane through the target. Positive = right of
+    /// track. Used by `resolve_roll` to choose bank direction.
+    ///
+    /// AGC correspondence: `LATANG` at `REENTRY_CONTROL.agc:141` of the
+    /// lexicon, scaled by `4 RADIANS`.
+    pub crossrange_km: f64,
+    /// Last computed vertical L/D command (dimensionless, range `[-LAD, LAD]`).
+    ///
+    /// Output of `guidance::entry::compute_ld_command`. AGC correspondence:
+    /// `L/D` at `REENTRY_CONTROL.agc:1271` (STOREL/D), scaled by `1`.
+    pub ld_command: f64,
+    /// HUNTEST iterated reference L/D (`LEWD` in REENTRY_CONTROL.agc).
+    ///
+    /// Initialised to `entry_tables::LEWD_INIT` on first HUNTEST pass
+    /// (`FOREHUNT`, AGC line 861). Updated each cycle by
+    /// `LEWD += DLEWD`. Never written outside `guidance::entry`.
+    pub lewd_ref: f64,
+    /// HUNTEST iteration step (`DLEWD` in REENTRY_CONTROL.agc).
+    ///
+    /// Initialised to `entry_tables::DLEWD_INIT` on first pass. Updated each
+    /// cycle by the Newton step
+    /// `DLEWD = DLEWD · DIFF / (DIFFOLD − DIFF)` (AGC line 744).
+    pub dlewd: f64,
+    /// Previous downrange error (km) — `DIFFOLD` in REENTRY_CONTROL.agc.
+    ///
+    /// Saved at end of each HUNTEST pass for the next cycle's Newton step.
+    pub diffold_km: f64,
+    /// `false` until the first SERVICER cycle in `EntryPhase::Entry`.
+    ///
+    /// On the first cycle, `lewd_ref` and `dlewd` are initialised from the
+    /// `entry_tables` constants (the FOREHUNT block in REENTRY_CONTROL.agc).
+    pub hunt_initialized: bool,
     /// Target landing site geodetic latitude (rad, positive north).
     /// Loaded from ground uplink before P61; default 0.0 = equator.
     pub target_lat_rad: f64,
@@ -112,6 +168,14 @@ impl EntryState {
             r_dot_mps: 0.0,
             roll_command_rad: 0.0,
             target_range_km: 0.0,
+            predicted_range_km: 0.0,
+            downrange_error_km: 0.0,
+            crossrange_km: 0.0,
+            ld_command: 0.0,
+            lewd_ref: 0.0,
+            dlewd: 0.0,
+            diffold_km: 0.0,
+            hunt_initialized: false,
             target_lat_rad: 0.0,
             target_lon_rad: 0.0,
             drogue_deployed: false,
@@ -257,11 +321,38 @@ pub fn entry_servicer_exit(state: &mut crate::AgcState) {
     // Refresh V16N64 display quantities each cycle.
     state.entry.r_dot_mps = compute_r_dot(state);
     state.entry.target_range_km = compute_range_to_go_km(state);
+    state.entry.crossrange_km = crate::guidance::entry::crossrange_km(state);
 
     // SERVICER-driven 0.05g threshold trip — advances PreEntry → Entry and
-    // hands the DAP a zero-bank command for trim-attitude hold. The closed
-    // loop that modulates the bank lands in MS-E3.
+    // switches the DAP to trim-attitude EntryRoll(0.0). MS-E3 picks it up
+    // from there.
     p63_check_threshold(state);
+
+    // MS-E3 — closed-loop HUNTEST iteration once we are past 0.05g.
+    //
+    // Order matters: predict_range first (consumes the previous LEWD),
+    // then compute_ld_command (which uses the new prediction to form DIFF
+    // and the Newton step), then resolve_roll, then select_phase.
+    if state.entry.phase == EntryPhase::Entry {
+        use crate::guidance::entry;
+
+        state.entry.predicted_range_km = entry::predict_range(state);
+
+        let upd = entry::compute_ld_command(state);
+        state.entry.ld_command = upd.ld_command;
+        state.entry.lewd_ref = upd.lewd_new;
+        state.entry.dlewd = upd.dlewd_new;
+        state.entry.diffold_km = upd.diffold_new_km;
+        state.entry.downrange_error_km = upd.diffold_new_km;
+        state.entry.hunt_initialized = true;
+
+        state.entry.roll_command_rad = entry::resolve_roll(state, state.entry.ld_command);
+        state.dap_state.mode = DapMode::EntryRoll(state.entry.roll_command_rad);
+
+        if let Some(next) = entry::select_phase(state) {
+            state.entry.phase = next;
+        }
+    }
 }
 
 /// Check whether the 0.05g entry-interface threshold has been crossed.
@@ -286,12 +377,16 @@ pub fn p63_check_threshold(state: &mut crate::AgcState) -> bool {
 // ── P64 ───────────────────────────────────────────────────────────────────────
 
 /// Entry point registered in `PROGRAM_TABLE[64]` — closed-loop entry guidance.
+///
+/// Advances the phase and DSKY display. The actual bank command is produced
+/// by the next SERVICER cycle's call into `guidance::entry` (MS-E3) — this
+/// matches the AGC, where the P64 entry point is also a thin handoff into
+/// the cyclic guidance task.
 pub fn init_p64(state: &mut crate::AgcState) -> JobPriority {
     if state.entry.sensed_acceleration_g < ENTRY_THRESHOLD_G {
         raise(state, ALARM_P64_EARLY);
     }
     state.entry.phase = EntryPhase::Entry;
-    state.entry.roll_command_rad = 0.0; // stub — real guidance law lives in later MS
 
     set_display(state, P64_MAJOR_MODE, VERB_MONITOR, 64);
     write_entry_status(state);
@@ -687,8 +782,15 @@ mod tests {
     }
 
     /// TC-MSE2-5: SERVICER-driven 0.05g threshold trip — one cycle whose
-    /// inertial delta-V corresponds to ≥ 0.05 g advances the phase to `Entry`
-    /// and switches the DAP into `EntryRoll(0.0)` for trim-attitude hold.
+    /// inertial delta-V corresponds to ≥ 0.05 g advances the phase out of
+    /// `PreEntry` and switches the DAP into `EntryRoll(_)`.
+    ///
+    /// With MS-E3 in place, the same SERVICER cycle also runs the closed-loop
+    /// HUNTEST step, which overwrites the trim-attitude `EntryRoll(0.0)` set
+    /// by the threshold check with a computed bank. The MS-E2 assertion is
+    /// therefore loosened to "phase != PreEntry" and "DAP is in EntryRoll".
+    /// The exact bank value is exercised by the MS-E3 tests in
+    /// `guidance::entry::tests`.
     #[test]
     fn tc_mse2_5_servicer_drives_threshold_and_dap() {
         let mut state = AgcState::new();
@@ -699,21 +801,26 @@ mod tests {
         // Pre-stage a delta-V corresponding to ~0.1 g over the 2 s cycle.
         state.servicer_last_dv_inertial = [G0_MPS2 * SERVICER_PERIOD_S * 0.1, 0.0, 0.0];
         state.csm_state.position = [6_500_000.0, 0.0, 0.0];
-        state.csm_state.velocity = [0.0, 7_800.0, 0.0];
+        // Velocity above VFINAL1 so select_phase doesn't immediately hand off
+        // to Final inside the same cycle. The MS-E2 contract is "the
+        // threshold trip works"; the closed-loop math is exercised separately.
+        state.csm_state.velocity = [0.0, 9_500.0, 0.0];
 
         let exit = state.servicer_exit.expect("init_p63 installs the hook");
         exit(&mut state);
 
-        assert_eq!(
+        assert_ne!(
             state.entry.phase,
-            EntryPhase::Entry,
-            "0.1 g trips the 0.05 g threshold"
+            EntryPhase::PreEntry,
+            "0.1 g must trip the 0.05 g threshold and advance the phase"
         );
         assert!(
-            matches!(state.dap_state.mode, DapMode::EntryRoll(b) if b == 0.0),
-            "DAP must enter trim-attitude EntryRoll(0.0), got {:?}",
+            matches!(state.dap_state.mode, DapMode::EntryRoll(_)),
+            "DAP must be in EntryRoll mode, got {:?}",
             state.dap_state.mode
         );
+        // The terminal phase after one cycle depends on MS-E3 select_phase —
+        // tested separately in guidance::entry::tests.
     }
 
     /// TC-MSE2-6: SERVICER below threshold — phase and DAP unchanged.

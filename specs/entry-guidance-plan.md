@@ -77,7 +77,7 @@ Each milestone is independently testable. Each maps 1:1 to a GitHub issue (see �
 - **Exit criterion**: 0.05g threshold trip on simulated trajectory advances to `Entry` phase; range-to-go display updates each 2-s cycle.
 
 ### MS-E3 — P64 (Post-0.05g, HUNTEST / INITROLL)
-- `predict_range`, `compute_ld_command`, `resolve_roll`.
+- `predict_range`, `compute_ld_command`, `resolve_roll`, `select_phase`.
 - Phase-selector: → P65 (skip), → P67 (final), → P66 (diverged).
 - Reference-profile table from REENTRY_CONTROL.agc (AGC fixed-point → f64 conversion documented per constant).
 - **Exit criterion**: roll command produced every 2-s cycle; phase selector chooses P65/P67 correctly for steep vs. shallow entries; VirtualAGC fixture match within tolerance for HUNTEST output.

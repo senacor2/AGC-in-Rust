@@ -161,3 +161,83 @@ acceleration in g units already staged in `state.entry.sensed_acceleration_g`.
 ### TC-P67-1: `init_p67` from Entry sets phase = Final and drogue_deployed = true.
 
 ### TC-P67-2: `init_p67` from Preparation raises alarm 234 but still advances.
+
+---
+
+## 6. P64 closed-loop guidance (HUNTEST / INITROLL)
+
+The phase state machine and DSKY wiring in §1–§5 are the static surface of
+the P64 entry point. The closed-loop math behind it lives in
+`agc-core/src/guidance/entry.rs` and runs each SERVICER cycle.
+
+### 6.1 `EntryPhase::Ballistic`
+
+New variant — destination for a `select_phase` divergence. The DAP holds the
+last `EntryRoll(roll_command_rad)` command while in this state; the P66
+program proper is a separate concern (see `entry-guidance-plan.md`).
+
+### 6.2 `EntryState` fields used by closed-loop guidance
+
+| Field | Type | Role | AGC label |
+|---|---|---|---|
+| `predicted_range_km` | `f64` | Output of `guidance::entry::predict_range` | `ASP` |
+| `downrange_error_km` | `f64` | `target_range - predicted_range` | `DIFF` |
+| `crossrange_km` | `f64` | Signed cross-range, drives bank sign | `LATANG` |
+| `ld_command` | `f64` | Output of `compute_ld_command` (clamped to ±LAD) | `L/D` |
+| `lewd_ref` | `f64` | HUNTEST iterated reference L/D | `LEWD` |
+| `dlewd` | `f64` | HUNTEST iteration step | `DLEWD` |
+| `diffold_km` | `f64` | Previous DIFF (Newton "old" point) | `DIFFOLD` |
+| `hunt_initialized` | `bool` | FOREHUNT init flag | implicit |
+
+All `f64`, zero-initialised; the bool starts `false`. The const constructor
+`EntryState::new` adds them.
+
+### 6.3 Closed-loop call sequence in `entry_servicer_exit`
+
+After the sensed-g / R-dot / range-to-go / threshold-trip work, the SERVICER
+cycle runs the closed loop — only when `state.entry.phase == EntryPhase::Entry`:
+
+1. `state.entry.predicted_range_km = entry::predict_range(state)`
+2. `let upd = entry::compute_ld_command(state)` — Newton step on `LEWD`.
+3. Copy `upd` into `EntryState`: `ld_command`, `lewd_ref`, `dlewd`,
+   `diffold_km` (also mirrored to `downrange_error_km`); set
+   `hunt_initialized = true`.
+4. `state.entry.roll_command_rad = entry::resolve_roll(state, ld_command)`.
+5. `state.dap_state.mode = DapMode::EntryRoll(roll_command_rad)`.
+6. `if let Some(next) = entry::select_phase(state) { state.entry.phase = next; }`.
+
+`init_p64` is a thin pass-through that advances the phase and writes the
+V16N64 DSKY display; the actual bank command is produced one SERVICER tick
+later — matching the AGC, where the P64 entry point is also a handoff into
+the cyclic guidance task.
+
+### 6.4 Public API in `guidance::entry`
+
+| Symbol | Returns | Purpose |
+|---|---|---|
+| `predict_range(state) -> f64` | km | Tabulated reference range (`RTOGO`) plus `LEWD` sensitivity |
+| `compute_ld_command(state) -> LdUpdate` | struct | HUNTEST Newton step + saturation to `±LAD` |
+| `resolve_roll(state, ld_cmd) -> f64` | rad | `ROLLC = acos(ld/LAD)`; sign from cross-range |
+| `select_phase(state) -> Option<EntryPhase>` | enum | `V < VFINAL1 → Final`; `\|DIFF\| > 500 km → Ballistic`; else `None` |
+
+The reference-profile table in `guidance/entry_tables.rs` is transcribed from
+`REENTRY_CONTROL.agc:1369–1467`; each constant carries a doc-comment mapping
+to its AGC label and B-scaling.
+
+### 6.5 Test cases (closed-loop math)
+
+Under `agc-core/src/guidance/entry.rs::tests` and `entry_tables::tests`:
+
+- `tc_mse3_pr_{1..4}` — `predict_range`: minimal at the slowest sample,
+  large at hyper-velocity, monotone in V, sensitive to `LEWD`.
+- `tc_mse3_ld_{1..4}` — `compute_ld_command`: FOREHUNT init, Newton update,
+  saturation to LAD, `LEWDPTR` clamp.
+- `tc_mse3_rr_{1..4}` — `resolve_roll`: `acos` magnitude at `±LAD` and 0;
+  sign from cross-range.
+- `tc_mse3_sp_{1..3}` — `select_phase`: V → Final, nominal stays in Entry,
+  range-divergence → Ballistic.
+- `tc_mse3_cr_{1..2}` — `crossrange_km` helper sanity.
+- `tc_tab_{1..6}` — reference-profile table sanity.
+
+Tolerances: 1e-4 on L/D, 1e-3 on roll (rad), 1 km on range — aligned with
+the fixture tolerance in `specs/entry-guidance-plan.md` §6.2.
