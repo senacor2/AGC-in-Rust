@@ -69,6 +69,34 @@ pub const VFINAL_MPS: f64 = 2.0 * VSAT_MPS * 0.516_180_16;
 /// AGC: `VLMIN` (REENTRY_CONTROL.agc:1530) — `2DEC .34929485` (18 000 ft/s).
 pub const VLMIN_MPS: f64 = 2.0 * VSAT_MPS * 0.349_294_85;
 
+/// "V quit" velocity (m/s) below which HUNTEST steering stops.
+///
+/// AGC: `VQUIT` (REENTRY_CONTROL.agc:1539) — `2DEC .019405269` (1000 ft/s).
+pub const VQUIT_MPS: f64 = 2.0 * VSAT_MPS * 0.019_405_269;
+
+/// AGC drag-scaling constant — `2·C1·HS` in the stored fixed-point form.
+///
+/// AGC: `2C1HS` (REENTRY_CONTROL.agc:1589) — `2DEC .0215983264`. Algebra:
+/// `2·1.25·28500·805 / (2·VSAT_ft/s)²`. Used dimensionless against
+/// AGC-scaled velocity and acceleration variables.
+pub const TWO_C1_HS_AGC: f64 = 0.021_598_326_4;
+
+/// Initial HUNTEST minimum drag for up-control (AGC `Q7F`).
+///
+/// AGC: `Q7F` (REENTRY_CONTROL.agc:1522) — `2DEC .0074534161` (6 ft/s² /
+/// 805 ft/s² = `0.186 g`). Drives `VL` via the up-control fit.
+pub const Q7F_AGC: f64 = 0.007_453_416_1;
+
+/// AGC's "1 g" reference acceleration — 32.2 ft/s² in SI = 9.81456 m/s².
+///
+/// Used to convert between `sensed_acceleration_g` (which uses the modern
+/// SI `G0_MPS2 = 9.806_65`) and the AGC's `D / 805 FPSS` scaling. The
+/// 0.1 % difference is well below the accuracy of the entry guidance.
+pub const G_AGC_MPS2: f64 = 32.2 * 0.304_8;
+
+/// AGC's `805 FPSS` drag scale-factor (m/s²). Equals `25 · G_AGC_MPS2`.
+pub const FPSS_805_MPS2: f64 = 25.0 * G_AGC_MPS2;
+
 /// Up-control acceleration scaling (g) — gate on `D` (drag in g).
 ///
 /// AGC: `KA2 = .008` scaled `805 FPSS` (REENTRY_CONTROL.agc:1601).
