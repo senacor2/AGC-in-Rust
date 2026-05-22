@@ -4,7 +4,10 @@
 //! - [`agc_convert`] — AGC fixed-point word ↔ `f64` conversion utilities.
 //! - [`fixtures`] — JSON fixture loading for navigation accuracy tests.
 //! - [`entry_sim`] — 3DOF atmospheric-entry integrator for end-to-end scenarios.
+//! - [`vagc_harness`] — yaAGC core-dump + symbol-table I/O for the
+//!   routine-level entry fixture-capture harness.
 
 pub mod agc_convert;
 pub mod entry_sim;
 pub mod fixtures;
+pub mod vagc_harness;
