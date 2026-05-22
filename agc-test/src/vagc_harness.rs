@@ -31,7 +31,9 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::{Duration, Instant};
 
 use crate::agc_convert;
 
@@ -432,6 +434,190 @@ pub fn write_scaled(core: &mut CoreImage, var: &ScaledVar, value: f64) -> bool {
     }
 }
 
+// ── yaAGC subprocess wrapper ────────────────────────────────────────────────
+
+/// Default wall-clock timeout for [`YaAgcRun::execute`] — yaAGC running
+/// for a 2-s SERVICER cycle is sub-second wall-clock, so 30 s is very
+/// generous and a misbehaving script trips it quickly.
+pub const DEFAULT_YAAGC_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Mode of operation for [`YaAgcRun`].
+#[derive(Clone, Debug)]
+pub enum RunMode {
+    /// "Wall-clock dump" mode: spawn yaAGC with `--dump-time=N` and
+    /// `--nodebug`, let it run for `wall_seconds` of real time, then kill
+    /// it. The final `core` dump captures the AGC's state at the end of
+    /// the run. Simple, fast, no breakpoints — used for the smoke test
+    /// and any "run for fixed time" capture.
+    WallClockDump {
+        /// yaAGC `--dump-time=N` value (simulated seconds between dumps).
+        dump_every_s: u32,
+        /// Real-time deadline before we send SIGTERM to yaAGC.
+        wall_seconds: f64,
+    },
+    /// Debugger-driven mode: enable the yaAGC GDB/MI debugger, feed it
+    /// `commands` via `--command=FILE`, and let the script issue
+    /// `BREAK`/`CONT`/`COREDUMP`/`QUIT` to dump at well-defined points.
+    /// Used by Phase 3 per-routine capture binaries.
+    Debugger {
+        /// Lines to write to the `--command=FILE`.
+        commands: Vec<String>,
+    },
+}
+
+/// Configuration for one yaAGC invocation.
+#[derive(Clone, Debug)]
+pub struct YaAgcRun {
+    /// Path to `yaAGC` binary.
+    pub binary: PathBuf,
+    /// Path to assembled core rope (`MAIN.agc.bin`).
+    pub rope: PathBuf,
+    /// Optional symtab file (`MAIN.agc.symtab`). Required for
+    /// `RunMode::Debugger` if commands use symbol names.
+    pub symtab: Option<PathBuf>,
+    /// Optional core-resume file: yaAGC starts execution from this
+    /// pre-staged AGC state instead of cold-booting. When `None`,
+    /// yaAGC runs the AGC's prelaunch sequence from the rope.
+    pub core_in: Option<PathBuf>,
+    /// Working directory for the subprocess. The post-run `core` dump
+    /// lands here. Each call should use a fresh directory to avoid
+    /// races between parallel test invocations.
+    pub work_dir: PathBuf,
+    /// What the subprocess does once started.
+    pub mode: RunMode,
+    /// Wall-clock timeout. Defaults to [`DEFAULT_YAAGC_TIMEOUT`].
+    pub timeout: Duration,
+}
+
+/// Result of a yaAGC invocation.
+#[derive(Clone, Debug)]
+pub struct YaAgcResult {
+    /// Parsed post-run core dump (`work_dir/core`).
+    pub core: CoreImage,
+    /// Subprocess exit status. May reflect a kill-on-timeout in
+    /// `RunMode::WallClockDump`.
+    pub exit_code: Option<i32>,
+}
+
+impl YaAgcRun {
+    /// Spawn yaAGC with the configured arguments, wait up to `timeout`
+    /// for it to exit (sending SIGTERM if it doesn't), then load the
+    /// `core` dump it produced.
+    ///
+    /// Errors if yaAGC cannot be spawned, the timeout is hit and yaAGC
+    /// refuses to die, or no `core` file is found in `work_dir` after
+    /// the run.
+    pub fn execute(&self) -> io::Result<YaAgcResult> {
+        fs::create_dir_all(&self.work_dir)?;
+
+        let mut cmd = Command::new(&self.binary);
+        cmd.current_dir(&self.work_dir);
+        cmd.arg("--quiet");
+
+        if let Some(symtab) = &self.symtab {
+            cmd.arg(format!("--symbols={}", symtab.display()));
+        }
+
+        match &self.mode {
+            RunMode::WallClockDump { dump_every_s, .. } => {
+                cmd.arg("--nodebug");
+                cmd.arg(format!("--dump-time={}", dump_every_s));
+            }
+            RunMode::Debugger { commands } => {
+                let cmd_path = self.work_dir.join("yaagc_commands.txt");
+                fs::write(&cmd_path, commands.join("\n") + "\n")?;
+                cmd.arg(format!("--command={}", cmd_path.display()));
+            }
+        }
+
+        // Suppress yaAGC's default `core` resume behaviour unless the
+        // caller explicitly supplies a core-in.
+        if self.core_in.is_none() {
+            cmd.arg("--no-resume");
+        }
+
+        cmd.arg(&self.rope);
+        if let Some(core_in) = &self.core_in {
+            cmd.arg(core_in);
+        }
+
+        // Detach stdout/stderr so a chatty yaAGC doesn't fill our pipes.
+        // `--quiet` already suppresses the banner; debugger prompts go
+        // to stdout but get discarded.
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+
+        let mut child = cmd.spawn()?;
+        let deadline = Instant::now() + self.timeout;
+        let mut exit_code: Option<i32> = None;
+
+        match &self.mode {
+            // In wall-clock mode we always wait the full duration so
+            // `--dump-time` has a chance to fire at least once, then we
+            // SIGTERM yaAGC.
+            RunMode::WallClockDump { wall_seconds, .. } => {
+                let target = Instant::now() + Duration::from_secs_f64(*wall_seconds);
+                while Instant::now() < target {
+                    if let Some(status) = child.try_wait()? {
+                        exit_code = status.code();
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                if exit_code.is_none() {
+                    let _ = child.kill();
+                    let status = child.wait()?;
+                    exit_code = status.code();
+                }
+            }
+            // In debugger mode we expect the script to issue `QUIT`. If
+            // it doesn't, we kill at the timeout.
+            RunMode::Debugger { .. } => loop {
+                if let Some(status) = child.try_wait()? {
+                    exit_code = status.code();
+                    break;
+                }
+                if Instant::now() > deadline {
+                    let _ = child.kill();
+                    let status = child.wait()?;
+                    exit_code = status.code();
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            },
+        }
+
+        let core_path = self.work_dir.join("core");
+        if !core_path.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "yaAGC produced no core dump at {} (exit_code={:?})",
+                    core_path.display(),
+                    exit_code
+                ),
+            ));
+        }
+        let core = CoreImage::load(&core_path)?;
+        Ok(YaAgcResult { core, exit_code })
+    }
+}
+
+/// Convenience: locate the developer's local VirtualAGC checkout.
+///
+/// Returns `$VAGC_ROOT` if set, else `~/virtualagc`. Used by the
+/// fixture-capture binaries and by smoke tests that gate on the
+/// VirtualAGC build being present.
+pub fn vagc_root() -> PathBuf {
+    if let Ok(p) = std::env::var("VAGC_ROOT") {
+        return PathBuf::from(p);
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join("virtualagc");
+    }
+    PathBuf::from("/virtualagc")
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -683,6 +869,109 @@ preamble\n\
         // UPCONTRL: fixed bank label.
         let upctl = st.get("UPCONTRL").expect("UPCONTRL should be present");
         assert!(matches!(upctl, AgcAddress::Fixed { .. }), "UPCONTRL ⇒ fixed");
+    }
+
+    /// TC-VAGC-RUN-DBG-INTEG: spawn yaAGC in debugger mode with a
+    /// minimal command script that just dumps the initial state and
+    /// quits. Verifies the GDB/MI `COREDUMP filename` + `QUIT` path
+    /// works — i.e., the wrapper correctly enables the debugger,
+    /// writes the command file, and the script terminates the
+    /// subprocess cleanly.
+    ///
+    /// Skipped when VirtualAGC build is unavailable.
+    #[test]
+    fn tc_vagc_run_dbg_integ_smoke() {
+        let root = vagc_root();
+        let yaagc = root.join("yaAGC/yaAGC");
+        let rope = root.join("Comanche055/MAIN.agc.bin");
+        let symtab = root.join("Comanche055/MAIN.agc.symtab");
+        if !yaagc.exists() || !rope.exists() || std::fs::metadata(&rope).map(|m| m.len()).unwrap_or(0) == 0 {
+            eprintln!("skipping: VirtualAGC build incomplete");
+            return;
+        }
+
+        let work_dir = std::env::temp_dir().join(format!(
+            "vagc_dbg_smoke_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&work_dir);
+        std::fs::create_dir_all(&work_dir).unwrap();
+
+        let run = YaAgcRun {
+            binary: yaagc,
+            rope,
+            symtab: Some(symtab),
+            core_in: None,
+            work_dir: work_dir.clone(),
+            mode: RunMode::Debugger {
+                commands: vec![
+                    "COREDUMP core".into(),
+                    "QUIT".into(),
+                ],
+            },
+            timeout: Duration::from_secs(10),
+        };
+        let result = run.execute().expect("yaAGC debugger smoke run failed");
+        assert_eq!(result.core.channels.len(), 512);
+        assert_eq!(result.core.erasable.len(), 8);
+
+        let _ = std::fs::remove_dir_all(work_dir);
+    }
+
+    /// TC-VAGC-RUN-INTEG: spawn yaAGC in wall-clock-dump mode and verify
+    /// it produces a parseable `core` file.
+    ///
+    /// Skipped when the VirtualAGC build is unavailable (no yaAGC binary
+    /// or no Comanche055 rope at the expected paths). This is the
+    /// Phase 2 smoke test described in the harness plan — it doesn't
+    /// validate the AGC's *behaviour*, just that the subprocess
+    /// wrapper, args, and core-dump round-trip work end-to-end.
+    #[test]
+    fn tc_vagc_run_integ_smoke() {
+        let root = vagc_root();
+        let yaagc = root.join("yaAGC/yaAGC");
+        let rope = root.join("Comanche055/MAIN.agc.bin");
+        if !yaagc.exists() || !rope.exists() || std::fs::metadata(&rope).map(|m| m.len()).unwrap_or(0) == 0 {
+            eprintln!(
+                "skipping: VirtualAGC build incomplete \
+                 (yaAGC={}, rope={}). Run agc-test/scripts/assemble_comanche055.sh.",
+                yaagc.display(),
+                rope.display()
+            );
+            return;
+        }
+
+        let work_dir = std::env::temp_dir().join(format!(
+            "vagc_smoke_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&work_dir);
+
+        let run = YaAgcRun {
+            binary: yaagc,
+            rope,
+            symtab: None,
+            core_in: None,
+            work_dir: work_dir.clone(),
+            mode: RunMode::WallClockDump {
+                dump_every_s: 1,
+                wall_seconds: 1.5,
+            },
+            timeout: Duration::from_secs(10),
+        };
+        let result = run.execute().expect("yaAGC smoke run failed");
+
+        // A core dump from a cold-booted AGC should have at least the
+        // channel and erasable arrays populated. Spot-check: the
+        // suffix carries CPU-state lines.
+        assert_eq!(result.core.channels.len(), 512);
+        assert_eq!(result.core.erasable.len(), 8);
+        assert!(
+            !result.core.suffix.is_empty(),
+            "expected CPU-state suffix in core dump, got none"
+        );
+
+        let _ = std::fs::remove_dir_all(work_dir);
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────
