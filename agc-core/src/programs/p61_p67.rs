@@ -76,6 +76,15 @@ pub enum EntryPhase {
     /// `entry_tables::RANGE_ERR_THRESHOLD_KM`. The DAP holds the most recent
     /// roll command; MS-E5 will replace the hold with the actual P66 logic.
     Ballistic,
+    /// P65 — up-control / skip-out (UPCONTRL).
+    ///
+    /// Entered from `EntryPhase::Entry` when HUNTEST converges (range
+    /// prediction within `entry_tables::HUNTEST_CONVERGED_KM` of the actual
+    /// range-to-go). The SKIPPER feedback law in `guidance::entry::
+    /// upcontrol_step` then maintains the converged trajectory by
+    /// commanding `ΔL/D` from `(RDOT − RDOTREF)` and `(V − VREF)` errors.
+    /// AGC source: `REENTRY_CONTROL.agc:875–1020`.
+    Skip,
 }
 
 // ── EntryState ────────────────────────────────────────────────────────────────
@@ -328,17 +337,25 @@ pub fn entry_servicer_exit(state: &mut crate::AgcState) {
     // from there.
     p63_check_threshold(state);
 
-    // MS-E3 — closed-loop HUNTEST iteration once we are past 0.05g.
+    // Closed-loop guidance once we are past 0.05g. Two flavours:
+    //   - EntryPhase::Entry → MS-E3 HUNTEST Newton iteration.
+    //   - EntryPhase::Skip  → MS-E4 UPCONTRL / SKIPPER feedback law.
     //
     // Order matters: predict_range first (consumes the previous LEWD),
-    // then compute_ld_command (which uses the new prediction to form DIFF
-    // and the Newton step), then resolve_roll, then select_phase.
-    if state.entry.phase == EntryPhase::Entry {
+    // then the per-phase L/D update, then resolve_roll, then select_phase.
+    if matches!(
+        state.entry.phase,
+        EntryPhase::Entry | EntryPhase::Skip
+    ) {
         use crate::guidance::entry;
 
         state.entry.predicted_range_km = entry::predict_range(state);
 
-        let upd = entry::compute_ld_command(state);
+        let upd = match state.entry.phase {
+            EntryPhase::Entry => entry::compute_ld_command(state),
+            EntryPhase::Skip => entry::upcontrol_step(state),
+            _ => unreachable!(),
+        };
         state.entry.ld_command = upd.ld_command;
         state.entry.lewd_ref = upd.lewd_new;
         state.entry.dlewd = upd.dlewd_new;

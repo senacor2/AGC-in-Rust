@@ -87,6 +87,10 @@ pub const TWO_C1_HS_AGC: f64 = 0.021_598_326_4;
 /// 805 ft/s² = `0.186 g`). Drives `VL` via the up-control fit.
 pub const Q7F_AGC: f64 = 0.007_453_416_1;
 
+/// `Q7F` expressed in g (= `Q7F_AGC · 25`). UPCONTRL's `D < Q7 → KEP`
+/// branch (REENTRY_CONTROL.agc:895) compares against this threshold.
+pub const Q7F_G: f64 = Q7F_AGC * 25.0;
+
 /// AGC's "1 g" reference acceleration — 32.2 ft/s² in SI = 9.81456 m/s².
 ///
 /// Used to convert between `sensed_acceleration_g` (which uses the modern
@@ -118,6 +122,62 @@ pub const LAT_BIAS_RAD: f64 = 0.000_03 * 4.0 * core::f64::consts::PI;
 /// **MS-E3 design choice**, not directly from AGC. See
 /// `specs/entry-guidance-plan.md` §5 MS-E3. Selected by user during planning.
 pub const RANGE_ERR_THRESHOLD_KM: f64 = 500.0;
+
+/// HUNTEST-converged range error (km). Below this, HUNTEST stops iterating
+/// and the controller transitions to `EntryPhase::Skip` (P65 UPCONTRL).
+///
+/// AGC: `25NM` (REENTRY_CONTROL.agc:1545) — `2DEC .0011574074` ≈ `25/21600`,
+/// applied at line 734 as `IF ABS(THETAH−ASP) − 25NM NEG, GO TO UPSY`.
+/// SI: `25 · 1.852 km ≈ 46.3 km`.
+pub const HUNTEST_CONVERGED_KM: f64 = 25.0 * 1.852;
+
+/// Velocity band (m/s) for the V−VL−C18 PREFINAL transition test.
+///
+/// AGC: `C18` (REENTRY_CONTROL.agc:1510) — `2DEC .0097026346` (500/2VS) =
+/// 500 ft/s. SI: `500 · 0.3048 ≈ 152.4 m/s`.
+pub const C18_MPS: f64 = 500.0 * 0.304_8;
+
+/// Drag threshold (g) above which UPCONTRL commands max lift-up `L/D = LAD`.
+///
+/// AGC: `C20` (REENTRY_CONTROL.agc:1541) — `175 ft/s²` = `175/805` in
+/// 805-FPSS scaling = `0.217 g`. Comment: "LIFT UP IF ABOVE C20".
+pub const C20_G: f64 = 175.0 / 805.0 * 25.0;
+
+/// Drag threshold (g) above which UPCONTRL suppresses the lateral switch.
+///
+/// AGC: `C21` (REENTRY_CONTROL.agc:1543) — `140 ft/s²` ≈ `0.174 g`.
+pub const C21_G: f64 = 140.0 / 805.0 * 25.0;
+
+/// Minimum drag (g) below which UPCONTRL branches to KEP (P66 ballistic).
+///
+/// AGC: `Q7MIN` (REENTRY_CONTROL.agc:1609) `= KA4 = 40/805 = 0.049689`,
+/// stored as `2DEC .049689441` — equivalent to `40 ft/s²` ≈ `1.243 m/s²`
+/// ≈ `0.127 g`. Note that `Q7` itself (a HUNTEST-iterated variable) and
+/// `Q7MIN` are distinct values; in REENTRY_CONTROL.agc `Q7MIN` is the
+/// floor used in UPCONTRL's CONTINU2 block.
+pub const Q7MIN_G: f64 = 40.0 / 805.0 * 25.0;
+
+/// SKIPPER feedback gain `KB1` (dimensionless).
+///
+/// AGC: `1/KB1` (REENTRY_CONTROL.agc:1535) — `2DEC .29411765` = `1/3.4`.
+/// We store the divisor `KB1 = 3.4`.
+pub const KB1: f64 = 3.4;
+
+/// SKIPPER feedback gain `KB2` in SI (m/s).
+///
+/// AGC: `-1/KB2` (REENTRY_CONTROL.agc:1537) declared as
+/// `-1/(0.0034 · 2·VS_ft/s)`. Multiplying by the velocity normalisation
+/// `2·VSAT_mps` gives the SI feedback gain.
+/// `KB2_MPS = 0.0034 · 2 · VSAT_MPS ≈ 53.4 m/s`.
+pub const KB2_MPS: f64 = 0.003_4 * 2.0 * VSAT_MPS;
+
+/// `PT1/16` (REENTRY_CONTROL.agc:1591) — `0.1 · 2^-4 = 0.00625`. Nonlinear
+/// SKIPPER gain-reduction threshold.
+pub const PT1_OVER_16: f64 = 0.1 * (1.0 / 16.0);
+
+/// `POINT1` (REENTRY_CONTROL.agc:1499) — `0.1`. Used as the linear-gain
+/// shoulder in the SKIPPER nonlinear gain reducer.
+pub const POINT1: f64 = 0.1;
 
 /// Final-phase range curve fit — constant term `Q2 = 21600 NM scale = .151`.
 ///
