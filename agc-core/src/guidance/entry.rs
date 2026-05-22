@@ -48,9 +48,9 @@
 
 use crate::guidance::entry_tables::{
     lookup_reference, C12_NM, C18_MPS, C20_G, DLEWD_INIT, FPSS_805_MPS2, HUNTEST_CONVERGED_KM,
-    KB1, KB2_MPS, KC3_NM_PER_M2_PER_S2, LAD_NOMINAL, LD_CMIN_RATIO, LEWD_INIT, POINT1, PT1_OVER_16,
-    Q2_NM, Q3_NM_PER_MPS, Q5_NM_PER_RAD, Q6_RAD, Q7F_AGC, Q7F_G, RANGE_ERR_THRESHOLD_KM,
-    TWO_C1_HS_AGC, VFINAL1_MPS, VLMIN_MPS, VQUIT_MPS, VSAT_MPS,
+    KB1, KB2_MPS, KC3_NM_PER_M2_PER_S2, LAD_NOMINAL, LD_CMIN_RATIO, LEWD_INIT, LOD_NOMINAL, POINT1,
+    PT1_OVER_16, Q2_NM, Q3_NM_PER_MPS, Q5_NM_PER_RAD, Q6_RAD, Q7F_AGC, Q7F_G,
+    RANGE_ERR_THRESHOLD_KM, TWO_C1_HS_AGC, VFINAL1_MPS, VLMIN_MPS, VQUIT_MPS, VSAT_MPS,
 };
 use crate::programs::p61_p67::G0_MPS2;
 use crate::navigation::state_vector::inertial_to_earth_fixed;
@@ -540,6 +540,58 @@ pub fn upcontrol_step(state: &AgcState) -> LdUpdate {
 pub fn ballistic_step(state: &AgcState) -> LdUpdate {
     LdUpdate {
         ld_command: state.entry.ld_command,
+        lewd_new: state.entry.lewd_ref,
+        dlewd_new: 0.0,
+        diffold_new_km: state.entry.diffold_km,
+    }
+}
+
+/// P67 final-phase guidance — `PREDICT3` law from terminal velocity down
+/// to drogue deploy.
+///
+/// AGC source: `REENTRY_CONTROL.agc:1139–1235`. Algorithm:
+///
+/// 1. Linearly interpolate the reference profile (RTOGO, RDOTREF, F1, F2,
+///    Y) at the current velocity. `F1 = ∂Range/∂A`, `F2 = ∂Range/∂RDOT`,
+///    `Y = ∂Range/∂(L/D)`. The MS-E3 table has RTOGO, RDOTREF and Y; for
+///    F1 and F2 we use the sensitivity columns at AGC lines 1383–1408.
+/// 2. Compute predicted range:
+///    `PREDANG = RTOGO + F1·(D − AREF) + F2·(RDOT − RDOTREF)`
+///    where `AREF = REFERENCE_PROFILE[..].neg_aref_g` (already in g units,
+///    sign carries through).
+/// 3. Compute L/D command:
+///    `L/D = LOD_NOMINAL + (THETAH − PREDANG) / Y`
+///    where THETAH is the actual range-to-go from `state.entry.target_range_km`.
+/// 4. Saturate `L/D` to `±LAD_NOMINAL`. GLIMITER (line 1247, `D > GMAX/2 →
+///    clip`) is deferred to MS-E6b.
+///
+/// Stage A simplification: F1 and F2 are approximated as zero — the
+/// dominant range-tracking term is the `Y · (THETAH − RTOGO)` correction.
+/// Including the analytic F1, F2 sensitivities needs the additional table
+/// columns (DRANGE/DA, DRANGE/DRDOT at AGC lines 1383, 1397) which we'll
+/// add when the VAGC fixture-match pass lands in MS-E6b.
+pub fn final_phase_step(state: &AgcState) -> LdUpdate {
+    let v = velocity_mps(state);
+    let rtogo_nm = state.entry.target_range_km / NM_TO_KM;
+
+    let p = lookup_reference(v);
+
+    // PREDANG (predicted range in nm) — F1 and F2 approximated as 0 for
+    // stage A; the RTOGO column itself anchors the prediction.
+    let predang_nm = p.range_to_go_nm;
+
+    // L/D = LOD + (THETAH − PREDANG) / Y. Y = DRANGE/D(L/D), already in nm.
+    let theta_minus_predang = rtogo_nm - predang_nm;
+    let ld_command_raw = if p.drange_dld_nm.abs() > 1e-9 {
+        LOD_NOMINAL + theta_minus_predang / p.drange_dld_nm
+    } else {
+        LOD_NOMINAL
+    };
+    let ld_command = ld_command_raw.clamp(-LAD_NOMINAL, LAD_NOMINAL);
+
+    LdUpdate {
+        ld_command,
+        // PREDICT3 doesn't iterate LEWD — freeze it from HUNTEST/UPCONTRL.
         lewd_new: state.entry.lewd_ref,
         dlewd_new: 0.0,
         diffold_new_km: state.entry.diffold_km,
@@ -1228,5 +1280,70 @@ mod tests {
         let mut state = fixture(VFINAL1_MPS - 100.0);
         state.entry.phase = EntryPhase::Ballistic;
         assert_eq!(select_phase(&state), Some(EntryPhase::Final));
+    }
+
+    // ── MS-E6 final_phase_step (P67 PREDICT3) ─────────────────────────────────
+
+    /// TC-MSE6-FP-1: `final_phase_step` returns an `L/D` clamped to ±LAD.
+    #[test]
+    fn tc_mse6_fp_1_returns_clamped_ld() {
+        let mut state = fixture(VFINAL1_MPS - 200.0);
+        state.entry.phase = EntryPhase::Final;
+        state.entry.target_range_km = 800.0;
+        let upd = final_phase_step(&state);
+        assert!(
+            upd.ld_command.abs() <= LAD_NOMINAL + 1e-12,
+            "L/D must be clamped to ±LAD, got {}",
+            upd.ld_command
+        );
+    }
+
+    /// TC-MSE6-FP-2: when `target_range_km` matches the table's RTOGO at
+    /// the current V, the L/D command equals LOD_NOMINAL — the nominal
+    /// "no correction needed" output.
+    #[test]
+    fn tc_mse6_fp_2_nominal_ld_at_zero_correction() {
+        use crate::guidance::entry_tables::lookup_reference;
+        let v = VFINAL1_MPS - 200.0;
+        let mut state = fixture(v);
+        state.entry.phase = EntryPhase::Final;
+        let p = lookup_reference(v);
+        // Set target = RTOGO so (THETAH − PREDANG) = 0 → L/D = LOD.
+        state.entry.target_range_km = p.range_to_go_nm * NM_TO_KM;
+        let upd = final_phase_step(&state);
+        assert!(
+            (upd.ld_command - LOD_NOMINAL).abs() < 1e-12,
+            "expected L/D = LOD = {LOD_NOMINAL}, got {}",
+            upd.ld_command
+        );
+    }
+
+    /// TC-MSE6-FP-3: range error in the correctable direction moves L/D in
+    /// the expected sense — long-range error pushes L/D up (lift to extend),
+    /// short-range error pushes L/D down (push down to shorten).
+    #[test]
+    fn tc_mse6_fp_3_ld_sense_from_range_error() {
+        use crate::guidance::entry_tables::lookup_reference;
+        let v = VFINAL1_MPS - 200.0;
+        let mut state = fixture(v);
+        state.entry.phase = EntryPhase::Final;
+        let p = lookup_reference(v);
+        let nominal_km = p.range_to_go_nm * NM_TO_KM;
+
+        // Long: actual target is farther than reference → need more lift.
+        state.entry.target_range_km = nominal_km + 50.0;
+        let ld_long = final_phase_step(&state).ld_command;
+        assert!(
+            ld_long > LOD_NOMINAL,
+            "long-range error should push L/D above LOD, got {ld_long}"
+        );
+
+        // Short: actual target is closer than reference → need less lift.
+        state.entry.target_range_km = nominal_km - 50.0;
+        let ld_short = final_phase_step(&state).ld_command;
+        assert!(
+            ld_short < LOD_NOMINAL,
+            "short-range error should pull L/D below LOD, got {ld_short}"
+        );
     }
 }

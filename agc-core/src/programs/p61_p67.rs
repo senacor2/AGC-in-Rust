@@ -337,16 +337,17 @@ pub fn entry_servicer_exit(state: &mut crate::AgcState) {
     // from there.
     p63_check_threshold(state);
 
-    // Closed-loop guidance once we are past 0.05g. Three flavours:
+    // Closed-loop guidance once we are past 0.05g. Four flavours:
     //   - EntryPhase::Entry     → MS-E3 HUNTEST Newton iteration.
     //   - EntryPhase::Skip      → MS-E4 UPCONTRL / SKIPPER feedback law.
     //   - EntryPhase::Ballistic → MS-E5 P66 — freeze L/D, hold attitude.
+    //   - EntryPhase::Final     → MS-E6 PREDICT3 final-phase law.
     //
     // Order matters: predict_range first (consumes the previous LEWD),
     // then the per-phase L/D update, then resolve_roll, then select_phase.
     if matches!(
         state.entry.phase,
-        EntryPhase::Entry | EntryPhase::Skip | EntryPhase::Ballistic
+        EntryPhase::Entry | EntryPhase::Skip | EntryPhase::Ballistic | EntryPhase::Final
     ) {
         use crate::guidance::entry;
 
@@ -356,6 +357,7 @@ pub fn entry_servicer_exit(state: &mut crate::AgcState) {
             EntryPhase::Entry => entry::compute_ld_command(state),
             EntryPhase::Skip => entry::upcontrol_step(state),
             EntryPhase::Ballistic => entry::ballistic_step(state),
+            EntryPhase::Final => entry::final_phase_step(state),
             _ => unreachable!(),
         };
         state.entry.ld_command = upd.ld_command;
@@ -370,6 +372,22 @@ pub fn entry_servicer_exit(state: &mut crate::AgcState) {
 
         if let Some(next) = entry::select_phase(state) {
             state.entry.phase = next;
+        }
+
+        // MS-E6 drogue-deploy trigger: AGC `STEEROFF` at
+        // REENTRY_CONTROL.agc:1142 — when V drops below VQUIT (~305 m/s),
+        // P67 stops steering and commands the SECS to deploy the drogue.
+        if state.entry.phase == EntryPhase::Final && !state.entry.drogue_deployed {
+            let v_mag = libm::sqrt(
+                state.csm_state.velocity[0] * state.csm_state.velocity[0]
+                    + state.csm_state.velocity[1] * state.csm_state.velocity[1]
+                    + state.csm_state.velocity[2] * state.csm_state.velocity[2],
+            );
+            if v_mag < crate::guidance::entry_tables::VQUIT_MPS {
+                p67_deploy_drogue(state);
+                // Drogue is out; closed-loop entry guidance is done.
+                state.servicer_exit = None;
+            }
         }
     }
 }
@@ -414,18 +432,17 @@ pub fn init_p64(state: &mut crate::AgcState) -> JobPriority {
 
 // ── P67 ───────────────────────────────────────────────────────────────────────
 
-/// Entry point registered in `PROGRAM_TABLE[67]` — final phase / drogue deploy.
+/// Entry point registered in `PROGRAM_TABLE[67]` — final phase.
+///
+/// Advances the phase and DSKY display. The actual closed-loop final-phase
+/// math (PREDICT3) runs each subsequent SERVICER cycle in
+/// `entry_servicer_exit`; the drogue deploy fires when `V` drops below
+/// `entry_tables::VQUIT_MPS` (AGC `STEEROFF`).
 pub fn init_p67(state: &mut crate::AgcState) -> JobPriority {
     if state.entry.phase != EntryPhase::Entry {
         raise(state, ALARM_P67_WRONG_PHASE);
     }
     state.entry.phase = EntryPhase::Final;
-
-    // Entry sequence is complete; uninstall the SERVICER exit hook so the
-    // next program (typically P00) sees a clean slot.
-    state.servicer_exit = None;
-
-    p67_deploy_drogue(state);
 
     set_display(state, P67_MAJOR_MODE, VERB_DISPLAY, 67);
     state.dsky.r[0] = state.entry.target_range_km as f32;
@@ -583,9 +600,13 @@ mod tests {
 
     // ── P67 ───────────────────────────────────────────────────────────────────
 
-    /// TC-P67-1: `init_p67` from Entry sets phase = Final and drogue_deployed.
+    /// TC-P67-1: `init_p67` from Entry sets phase = Final and major mode 67.
+    ///
+    /// With MS-E6 in place, `init_p67` no longer auto-deploys the drogue —
+    /// that fires later when the SERVICER cycle observes `V < VQUIT_MPS`.
+    /// The deploy itself is exercised by the MS-E6 SERVICER tests.
     #[test]
-    fn tc_p67_1_from_entry_deploys_drogue() {
+    fn tc_p67_1_from_entry_sets_final_phase() {
         let mut state = AgcState::new();
         state.entry.phase = EntryPhase::Entry;
 
@@ -593,7 +614,10 @@ mod tests {
 
         assert_eq!(state.entry.phase, EntryPhase::Final);
         assert_eq!(state.major_mode, P67_MAJOR_MODE);
-        assert!(state.entry.drogue_deployed);
+        assert!(
+            !state.entry.drogue_deployed,
+            "drogue must not deploy in init_p67 — wait for V < VQUIT in the SERVICER cycle"
+        );
         assert_eq!(state.alarm.code, 0);
     }
 
@@ -607,7 +631,9 @@ mod tests {
 
         assert_eq!(state.alarm.code, ALARM_P67_WRONG_PHASE);
         assert_eq!(state.entry.phase, EntryPhase::Final);
-        assert!(state.entry.drogue_deployed);
+        // Drogue does NOT deploy on the wrong-phase soft alarm either — same
+        // SERVICER trigger as the nominal path.
+        assert!(!state.entry.drogue_deployed);
     }
 
     // ── entry_servicer_exit ───────────────────────────────────────────────────
@@ -663,9 +689,10 @@ mod tests {
         );
     }
 
-    /// TC-ESE-4: `init_p67` clears the SERVICER exit hook after entry ends.
+    /// TC-ESE-4: `init_p67` leaves the SERVICER hook installed so PREDICT3
+    /// can run each cycle. The hook is cleared *after* the drogue deploys.
     #[test]
-    fn tc_ese_4_p67_clears_hook() {
+    fn tc_ese_4_p67_keeps_hook_until_drogue() {
         let mut state = AgcState::new();
         state.entry.phase = EntryPhase::Entry;
         state.servicer_exit = Some(entry_servicer_exit);
@@ -673,8 +700,8 @@ mod tests {
         init_p67(&mut state);
 
         assert!(
-            state.servicer_exit.is_none(),
-            "init_p67 must clear servicer_exit"
+            state.servicer_exit.is_some(),
+            "init_p67 must keep servicer_exit installed for PREDICT3"
         );
     }
 
@@ -911,6 +938,92 @@ mod tests {
 
         init_p67(&mut state);
         assert_eq!(state.entry.phase, EntryPhase::Final);
-        assert!(state.entry.drogue_deployed);
+        // Drogue deploy is now SERVICER-driven (V < VQUIT). init_p67 only
+        // sets the phase and DSKY display.
+        assert!(!state.entry.drogue_deployed);
+    }
+
+    // ── MS-E6 SERVICER-driven drogue deploy (V < VQUIT) ───────────────────────
+
+    /// TC-MSE6-DR-1: SERVICER cycle in Final phase with V < VQUIT deploys
+    /// the drogue and clears the SERVICER hook.
+    #[test]
+    fn tc_mse6_dr_1_low_v_deploys_drogue() {
+        use crate::guidance::entry_tables::VQUIT_MPS;
+
+        let mut state = AgcState::new();
+        state.entry.phase = EntryPhase::Final;
+        state.servicer_exit = Some(entry_servicer_exit);
+        // Velocity well below VQUIT (~305 m/s).
+        state.csm_state.position = [6_500_000.0, 0.0, 0.0];
+        state.csm_state.velocity = [0.0, VQUIT_MPS * 0.5, 0.0];
+        state.entry.sensed_acceleration_g = 0.5; // any drag — drogue trigger is V-based.
+        assert!(!state.entry.drogue_deployed, "fixture");
+
+        entry_servicer_exit(&mut state);
+
+        assert!(
+            state.entry.drogue_deployed,
+            "drogue must deploy when V < VQUIT in Final phase"
+        );
+        assert!(
+            state.servicer_exit.is_none(),
+            "SERVICER hook must be cleared after drogue deploys"
+        );
+    }
+
+    /// TC-MSE6-DR-2: SERVICER cycle in Final phase with V > VQUIT does NOT
+    /// deploy the drogue — closed-loop PREDICT3 stays in charge.
+    #[test]
+    fn tc_mse6_dr_2_high_v_no_drogue() {
+        use crate::guidance::entry_tables::VQUIT_MPS;
+
+        let mut state = AgcState::new();
+        state.entry.phase = EntryPhase::Final;
+        state.servicer_exit = Some(entry_servicer_exit);
+        state.csm_state.position = [6_500_000.0, 0.0, 0.0];
+        // Above VQUIT and below VFINAL1 — proper Final-phase coast.
+        state.csm_state.velocity = [0.0, VQUIT_MPS * 4.0, 0.0];
+        state.entry.sensed_acceleration_g = 0.5;
+
+        entry_servicer_exit(&mut state);
+
+        assert!(
+            !state.entry.drogue_deployed,
+            "drogue must NOT deploy while V > VQUIT"
+        );
+        assert!(
+            state.servicer_exit.is_some(),
+            "SERVICER hook must remain installed while V > VQUIT"
+        );
+    }
+
+    /// TC-MSE6-DR-3: Final-phase SERVICER cycle produces a roll command via
+    /// PREDICT3 (i.e., `ld_command` is updated, not the entry-time zero).
+    #[test]
+    fn tc_mse6_dr_3_predict3_updates_ld() {
+        use crate::guidance::entry_tables::VQUIT_MPS;
+
+        let mut state = AgcState::new();
+        state.entry.phase = EntryPhase::Final;
+        state.servicer_exit = Some(entry_servicer_exit);
+        state.csm_state.position = [6_500_000.0, 0.0, 0.0];
+        state.csm_state.velocity = [0.0, VQUIT_MPS * 6.0, 0.0]; // mid-Final
+        state.entry.sensed_acceleration_g = 0.5;
+        state.entry.target_range_km = 200.0;
+        // Pre-poison ld_command so we can detect that PREDICT3 wrote it.
+        state.entry.ld_command = -99.0;
+
+        entry_servicer_exit(&mut state);
+
+        assert!(
+            state.entry.ld_command.abs() <= 0.30 + 1e-9,
+            "PREDICT3 must write a clamped L/D; got {}",
+            state.entry.ld_command
+        );
+        assert_ne!(
+            state.entry.ld_command, -99.0,
+            "PREDICT3 must overwrite ld_command in Final phase"
+        );
     }
 }
