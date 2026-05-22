@@ -9,3 +9,19 @@ agc-core = { path = "../agc-core" }
 agc-sim  = { path = "../agc-sim" }
 serde    = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Optional: TOML parsing for the VAGC fixture-capture binaries. Behind a
+# feature flag so the non-capture parts of agc-test stay dep-light.
+[dependencies.toml]
+version  = "0.8"
+optional = true
+
+[features]
+# Enables the capture_huntest / capture_upcontrol / capture_glim
+# developer-only binaries. Off by default — CI does not build them.
+vagc-capture = ["dep:toml"]
+
+[[bin]]
+name = "capture_huntest"
+path = "src/bin/capture_huntest.rs"
+required-features = ["vagc-capture"]

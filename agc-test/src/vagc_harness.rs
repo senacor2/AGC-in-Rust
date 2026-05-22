@@ -389,9 +389,17 @@ fn increment_addr(addr: AgcAddress) -> Option<AgcAddress> {
     }
 }
 
+/// Parse a single octal value from a yaAGC dump line into the low 16
+/// bits of a `u16`. yaAGC writes erasable words via `printf("%06o", w)`
+/// where `w` is `int16_t`, and printf promotes negative values via
+/// default-argument promotion to (large) unsigned int — so 11-digit
+/// outputs like `37777776314` are sign-extended representations of
+/// negative `int16_t` values. We parse as 64-bit unsigned and take the
+/// low 16 bits, which restores the original `int16_t` bit pattern.
 fn parse_octal(line: &str) -> Result<u16, String> {
     let trimmed = line.trim();
-    u16::from_str_radix(trimmed, 8).map_err(|e| format!("'{}': {}", trimmed, e))
+    let v = u64::from_str_radix(trimmed, 8).map_err(|e| format!("'{}': {}", trimmed, e))?;
+    Ok((v & 0xFFFF) as u16)
 }
 
 // ── Scaled-variable I/O ─────────────────────────────────────────────────────

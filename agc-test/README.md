@@ -49,5 +49,40 @@ a `.agc` source has been modified since the last build.
 
 ### Capture flow (developer-only)
 
-(Coming with the per-routine capture binaries in #32 / #33 / #34
-follow-ups — this README will be expanded then.)
+After the one-time bootstrap above, capture a fixture for a routine
+by running its capture binary:
+
+```sh
+# HUNTEST (P64 — feeds #32 MS-E3b once DSKY scripting is in place):
+cargo run -p agc-test --features vagc-capture --bin capture_huntest -- \
+    agc-test/fixtures/entry/huntest_inputs.toml \
+    agc-test/fixtures/entry/huntest_cases.json
+```
+
+The capture binary:
+
+1. Parses the input TOML (which Comanche055 erasable variables are
+   read / written, plus a list of named cases with their input values).
+2. Resolves each variable's AGC address via the symbol table.
+3. Spawns yaAGC briefly to obtain a baseline core image.
+4. For each case: patches the inputs, runs yaAGC for one SERVICER
+   cycle, reads back the outputs, writes them to JSON.
+
+The committed JSON file (`fixtures/entry/huntest_cases.json`) is what
+CI validates against in `agc-test/tests/entry_fixtures.rs`. CI does not
+need yaAGC or the `vagc-capture` feature — it just reads the JSON.
+
+### Phase-3 scaffold caveat
+
+`capture_huntest` currently round-trips inputs through yaAGC's erasable
+memory but does **not** drive the AGC to actually execute HUNTEST.
+Reaching HUNTEST in flight requires DSKY + PIPA scripting that is
+tracked in #35 (MS-E7b). Once that infrastructure lands, the
+per-routine binaries flip to "drive AGC through P63 → 0.05g →
+HUNTEST → COREDUMP" and the captured JSON values reflect the AGC's
+actual computed outputs.
+
+The capture scaffold (TOML format, JSON format, CI loader,
+`vagc_harness` Rust library) is in place so that work becomes a small
+change to one function in each capture binary, not a from-scratch
+build.

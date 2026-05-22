@@ -1,0 +1,21 @@
+{
+  "source": "VirtualAGC + Comanche055, captured by capture_huntest on UNIX_EPOCH+1779471023s",
+  "cases": [
+    {
+      "name": "tc_huntest_round_trip_smoke",
+      "description": "Phase-3 scaffold smoke case: write LEWD=0.15 and DLEWD=-0.05 (matching\nthe AGC's FOREHUNT initialisation constants LEWD1 and DLEWD0 from\nREENTRY_CONTROL.agc lines 1497 and 1503), spin yaAGC for one\nSERVICER cycle, read back. Since the AGC isn't actually executing\nHUNTEST, the outputs should equal the inputs to within a few-LSB\nquantisation tolerance.",
+      "inputs": {
+        "DLEWD": -0.05,
+        "LEWD": 0.15
+      },
+      "expected": {
+        "DLEWD": -0.05000000074505806,
+        "LEWD": 0.14999999850988388
+      },
+      "tolerance": {
+        "DLEWD": 0.0001,
+        "LEWD": 0.0001
+      }
+    }
+  ]
+}

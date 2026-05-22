@@ -1,0 +1,66 @@
+# `capture_huntest` input case list — Phase-3 scaffold.
+#
+# This file declares (a) which Comanche055 erasable variables are read /
+# written by the capture binary, and (b) per-case input values.
+# Output values are populated by `capture_huntest` into the produced
+# `huntest_cases.json`.
+#
+# Variable B-scaling: per `agc-test/src/agc_convert.rs`, the scale field
+# is the LSB exponent — `scale = B_value − 28` for DP variables. Use the
+# values below; the AGC documentation lives in
+# `~/virtualagc/Comanche055/ENTRY_LEXICON.agc`.
+
+# ── Phase-3 caveat ─────────────────────────────────────────────────────────
+# This stub captures the LEWD / DLEWD round-trip through yaAGC's
+# erasable memory. It does NOT exercise HUNTEST itself; reaching HUNTEST
+# in flight requires the DSKY + PIPA scripting infrastructure from
+# MS-E7b (#35). When that lands, replace this file with a real case
+# grid sweeping the entry-FPA / velocity input space.
+
+# ── Variable definitions ────────────────────────────────────────────────────
+
+[[variables]]
+name   = "LEWD"      # E7,1724 — up-control reference L/D (dimensionless)
+scale  = -28         # B+0 stored as DP fraction of 1
+dp     = true
+input  = true        # we write it on the way in …
+
+[[variables]]
+name   = "DLEWD"     # E7,1641 — LEWD iteration step
+scale  = -28         # B+0 fraction
+dp     = true
+input  = true        # … and again on the way out (round-trip check).
+
+# Outputs (re-read after the run; for the stub these should match inputs
+# since HUNTEST does not actually execute).
+[[variables]]
+name   = "LEWD"      # NOTE: duplicate name is allowed; the second entry
+scale  = -28         # marks LEWD as also being an *output* for the
+dp     = true        # round-trip read-back.
+input  = false
+
+[[variables]]
+name   = "DLEWD"
+scale  = -28
+dp     = true
+input  = false
+
+# ── Cases ───────────────────────────────────────────────────────────────────
+
+[[cases]]
+name        = "tc_huntest_round_trip_smoke"
+description = """
+Phase-3 scaffold smoke case: write LEWD=0.15 and DLEWD=-0.05 (matching
+the AGC's FOREHUNT initialisation constants LEWD1 and DLEWD0 from
+REENTRY_CONTROL.agc lines 1497 and 1503), spin yaAGC for one
+SERVICER cycle, read back. Since the AGC isn't actually executing
+HUNTEST, the outputs should equal the inputs to within a few-LSB
+quantisation tolerance."""
+
+[cases.inputs]
+LEWD   = 0.15
+DLEWD  = -0.05
+
+[cases.tolerance]
+LEWD   = 1.0e-4
+DLEWD  = 1.0e-4
