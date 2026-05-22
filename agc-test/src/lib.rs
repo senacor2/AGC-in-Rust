@@ -6,8 +6,11 @@
 //! - [`entry_sim`] — 3DOF atmospheric-entry integrator for end-to-end scenarios.
 //! - [`vagc_harness`] — yaAGC core-dump + symbol-table I/O for the
 //!   routine-level entry fixture-capture harness.
+//! - [`vagc_channel`] — TCP client for yaAGC's channel-word socket
+//!   protocol; foundation for the end-to-end channel-trace tests.
 
 pub mod agc_convert;
 pub mod entry_sim;
 pub mod fixtures;
+pub mod vagc_channel;
 pub mod vagc_harness;
