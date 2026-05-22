@@ -337,15 +337,16 @@ pub fn entry_servicer_exit(state: &mut crate::AgcState) {
     // from there.
     p63_check_threshold(state);
 
-    // Closed-loop guidance once we are past 0.05g. Two flavours:
-    //   - EntryPhase::Entry → MS-E3 HUNTEST Newton iteration.
-    //   - EntryPhase::Skip  → MS-E4 UPCONTRL / SKIPPER feedback law.
+    // Closed-loop guidance once we are past 0.05g. Three flavours:
+    //   - EntryPhase::Entry     → MS-E3 HUNTEST Newton iteration.
+    //   - EntryPhase::Skip      → MS-E4 UPCONTRL / SKIPPER feedback law.
+    //   - EntryPhase::Ballistic → MS-E5 P66 — freeze L/D, hold attitude.
     //
     // Order matters: predict_range first (consumes the previous LEWD),
     // then the per-phase L/D update, then resolve_roll, then select_phase.
     if matches!(
         state.entry.phase,
-        EntryPhase::Entry | EntryPhase::Skip
+        EntryPhase::Entry | EntryPhase::Skip | EntryPhase::Ballistic
     ) {
         use crate::guidance::entry;
 
@@ -354,6 +355,7 @@ pub fn entry_servicer_exit(state: &mut crate::AgcState) {
         let upd = match state.entry.phase {
             EntryPhase::Entry => entry::compute_ld_command(state),
             EntryPhase::Skip => entry::upcontrol_step(state),
+            EntryPhase::Ballistic => entry::ballistic_step(state),
             _ => unreachable!(),
         };
         state.entry.ld_command = upd.ld_command;

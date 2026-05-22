@@ -522,6 +522,30 @@ pub fn upcontrol_step(state: &AgcState) -> LdUpdate {
     }
 }
 
+/// P66 ballistic phase — zero-roll-rate hold, no closed loop.
+///
+/// AGC source: `KEP` block at `REENTRY_CONTROL.agc:1098` and surrounding
+/// P66 logic. Entered from `EntryPhase::Skip` when drag falls below `Q7`
+/// (above the sensible atmosphere) or from `EntryPhase::Entry` when the
+/// HUNTEST range prediction diverges beyond `RANGE_ERR_THRESHOLD_KM`.
+///
+/// Behaviour: returns the previous cycle's `ld_command`, `lewd_ref` and
+/// `diffold_km` verbatim with `dlewd_new = 0`. Resolves to the last
+/// `EntryRoll(_)` bank command via the SERVICER's standard pipeline, so
+/// the DAP keeps the spacecraft on its current trim attitude.
+///
+/// Exit conditions are evaluated in [`select_phase`] (currently: only
+/// the global `V < VFINAL1` terminal check applies — no automatic return
+/// from Ballistic to a closed-loop phase in this milestone).
+pub fn ballistic_step(state: &AgcState) -> LdUpdate {
+    LdUpdate {
+        ld_command: state.entry.ld_command,
+        lewd_new: state.entry.lewd_ref,
+        dlewd_new: 0.0,
+        diffold_new_km: state.entry.diffold_km,
+    }
+}
+
 /// Decide the next entry-guidance phase.
 ///
 /// Returns `Some(next_phase)` to request a transition, or `None` to stay in
@@ -537,8 +561,13 @@ pub fn upcontrol_step(state: &AgcState) -> LdUpdate {
 /// **From `EntryPhase::Skip`** (P65 UPCONTRL):
 /// - `Some(Final)` once `V < VFINAL1` *or* `V − VL < C18`
 ///   (AGC line 902 `VLTEST → PREFINAL`).
-/// - `Some(Ballistic)` if drag falls below `Q7MIN_G` for a coasting arc.
+/// - `Some(Ballistic)` if drag `D < Q7F_G` (AGC `KEP` routing at line 895
+///   — above the sensible atmosphere, coast ballistically).
+/// - `Some(Ballistic)` if `|range_error| > RANGE_ERR_THRESHOLD_KM`.
 /// - `None` otherwise.
+///
+/// **From `EntryPhase::Ballistic`** (P66): no automatic return to a
+/// closed-loop phase. Only the global `V < VFINAL1` terminal check fires.
 pub fn select_phase(state: &AgcState) -> Option<EntryPhase> {
     let v = velocity_mps(state);
 
@@ -574,12 +603,20 @@ pub fn select_phase(state: &AgcState) -> Option<EntryPhase> {
             if v - vl_proxy < C18_MPS {
                 return Some(EntryPhase::Final);
             }
+            // Low drag — above the sensible atmosphere, coast ballistically.
+            // AGC `D − Q7 NEG → KEP` at REENTRY_CONTROL.agc:895.
+            if state.entry.sensed_acceleration_g < Q7F_G {
+                return Some(EntryPhase::Ballistic);
+            }
             // Persistent divergence → P66 ballistic.
             if range_err_km > RANGE_ERR_THRESHOLD_KM {
                 return Some(EntryPhase::Ballistic);
             }
             None
         }
+        // P66 ballistic — hold trim. No automatic return to closed loop
+        // (the global V < VFINAL1 check above already routes to Final).
+        EntryPhase::Ballistic => None,
         _ => None,
     }
 }
@@ -1118,6 +1155,8 @@ mod tests {
     fn tc_mse4_sp_2_skip_nominal_no_transition() {
         let mut state = fixture(VFINAL1_MPS + 1_000.0);
         state.entry.phase = EntryPhase::Skip;
+        // Drag above Q7F_G so MS-E5's low-drag → Ballistic trigger doesn't fire.
+        state.entry.sensed_acceleration_g = 0.5;
         // Range error within both the Skip-stay band: not large enough to
         // trigger Ballistic, V well above VFINAL1.
         state.entry.target_range_km = state.entry.predicted_range_km + 200.0;
@@ -1129,7 +1168,65 @@ mod tests {
     fn tc_mse4_sp_3_skip_divergence_to_ballistic() {
         let mut state = fixture(VFINAL1_MPS + 1_000.0);
         state.entry.phase = EntryPhase::Skip;
+        // Drag above Q7F_G so the assertion exercises the *range-error*
+        // path, not the MS-E5 low-drag path.
+        state.entry.sensed_acceleration_g = 0.5;
         state.entry.target_range_km = state.entry.predicted_range_km + 1_500.0;
         assert_eq!(select_phase(&state), Some(EntryPhase::Ballistic));
+    }
+
+    // ── MS-E5 ballistic_step (P66) ────────────────────────────────────────────
+
+    /// TC-MSE5-BS-1: `ballistic_step` freezes all outputs and zeroes `dlewd`.
+    #[test]
+    fn tc_mse5_bs_1_freezes_outputs() {
+        let mut state = fixture(VFINAL1_MPS + 1_000.0);
+        state.entry.phase = EntryPhase::Ballistic;
+        state.entry.ld_command = 0.12;
+        state.entry.lewd_ref = 0.17;
+        state.entry.dlewd = 0.03;
+        state.entry.diffold_km = 80.0;
+
+        let upd = ballistic_step(&state);
+        assert!((upd.ld_command - 0.12).abs() < 1e-12);
+        assert!((upd.lewd_new - 0.17).abs() < 1e-12);
+        assert!(upd.dlewd_new.abs() < 1e-12);
+        assert!((upd.diffold_new_km - 80.0).abs() < 1e-12);
+    }
+
+    /// TC-MSE5-SP-1: in Skip, drag below `Q7F_G` transitions to Ballistic.
+    ///
+    /// AGC `D − Q7 NEG → KEP` at REENTRY_CONTROL.agc:895.
+    #[test]
+    fn tc_mse5_sp_1_low_drag_skip_to_ballistic() {
+        let mut state = fixture(VFINAL1_MPS + 1_000.0);
+        state.entry.phase = EntryPhase::Skip;
+        // 0.05 g — well below Q7F_G (0.186 g) but well above the 0.05 g
+        // entry-interface threshold (which is unrelated to this AGC test).
+        state.entry.sensed_acceleration_g = 0.10;
+        state.entry.target_range_km = state.entry.predicted_range_km;
+        assert_eq!(select_phase(&state), Some(EntryPhase::Ballistic));
+    }
+
+    /// TC-MSE5-SP-2: from Ballistic, no automatic transition while
+    /// V > VFINAL1 — the controller holds attitude indefinitely until
+    /// terminal velocity is reached.
+    #[test]
+    fn tc_mse5_sp_2_ballistic_no_return() {
+        let mut state = fixture(VFINAL1_MPS + 1_000.0);
+        state.entry.phase = EntryPhase::Ballistic;
+        // Make D high again and range-error favorable — neither should
+        // pull us out of Ballistic.
+        state.entry.sensed_acceleration_g = 0.5;
+        state.entry.target_range_km = state.entry.predicted_range_km;
+        assert_eq!(select_phase(&state), None);
+    }
+
+    /// TC-MSE5-SP-3: from Ballistic, terminal velocity still routes to Final.
+    #[test]
+    fn tc_mse5_sp_3_ballistic_to_final_at_terminal_v() {
+        let mut state = fixture(VFINAL1_MPS - 100.0);
+        state.entry.phase = EntryPhase::Ballistic;
+        assert_eq!(select_phase(&state), Some(EntryPhase::Final));
     }
 }
