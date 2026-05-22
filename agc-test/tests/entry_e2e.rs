@@ -111,39 +111,49 @@ fn entry_lunar_return() {
 
 // ── scenario runner ─────────────────────────────────────────────────────────
 
-/// Run one complete entry scenario through the AGC + integrator and assert
-/// the miss-distance acceptance criterion.
+/// Diagnostics for one closed-loop entry trajectory.
+#[derive(Clone, Debug)]
+struct ScenarioResult {
+    final_phase: EntryPhase,
+    drogue_deployed: bool,
+    elapsed_s: f64,
+    miss_km: f64,
+    landed_lat_deg: f64,
+    landed_lon_deg: f64,
+    min_altitude_km: f64,
+    max_sensed_g: f64,
+    last_history: Vec<(f64, EntryPhase, f64, f64)>,
+}
+
+/// Simulate one entry scenario all the way to drogue deploy (or the
+/// `MAX_SCENARIO_DURATION_S` timeout). No assertions — returns the
+/// diagnostics for the caller to inspect.
 ///
 /// `state` must already have the initial CSM state vector, target
 /// landing coordinates, MET, and GHA-epoch populated. This helper takes
-/// care of `init_p61 → init_p62 → init_p63 → start_servicer` and then
-/// pumps `servicer_task` until drogue deploys.
-fn run_entry_scenario(name: &str, mut state: AgcState, miss_threshold_km: f64) {
+/// care of `init_p61 → init_p62 → init_p63 → start_servicer`.
+fn simulate_to_drogue(mut state: AgcState) -> ScenarioResult {
     let integrator = EntryIntegrator::apollo_cm();
 
     init_p61(&mut state);
     init_p62(&mut state);
     init_p63(&mut state);
-    assert_eq!(
-        state.entry.phase,
-        EntryPhase::PreEntry,
-        "[{name}] fixture: P63 must leave phase=PreEntry"
-    );
+    debug_assert_eq!(state.entry.phase, EntryPhase::PreEntry);
 
-    // Kick off the SERVICER. servicer_task runs on each cycle.
     start_servicer(&mut state);
 
     let mut elapsed_s = 0.0;
     let mut history: Vec<(f64, EntryPhase, f64, f64)> = Vec::new();
+    let mut min_altitude_km = f64::INFINITY;
+    let mut max_sensed_g = 0.0_f64;
+
     loop {
-        // Read the bank command the DAP is currently holding.
         let bank_rad = match state.dap_state.mode {
             DapMode::EntryRoll(b) => b,
             _ => 0.0,
         };
         let ld_command = state.entry.ld_command;
 
-        // Advance the dynamics by one SERVICER cycle.
         let dv_inertial = integrator.integrate_cycle(
             state.csm_state.position,
             state.csm_state.velocity,
@@ -151,18 +161,9 @@ fn run_entry_scenario(name: &str, mut state: AgcState, miss_threshold_km: f64) {
             bank_rad,
             SERVICER_PERIOD_S,
         );
-
-        // Quantise into PIPA pulses for the SERVICER's normal pipeline.
-        // REFSMMAT defaults to identity → platform = inertial.
         state.pipa_counts = pipa_pulses_for_dv(dv_inertial, &state.pipa_cal);
 
-        // Run one SERVICER cycle: integrates state vector (with gravity),
-        // computes sensed_acceleration_g, dispatches the closed-loop
-        // L/D law per current phase, updates DAP, runs select_phase.
         servicer_task(&mut state);
-        // Drain the self-reschedule (real flight uses T3RUPT / agc-sim's
-        // WaitlistPump; this is the equivalent in a stripped-down test
-        // loop).
         let _ = state.waitlist.pop_task();
         elapsed_s += SERVICER_PERIOD_S;
 
@@ -171,6 +172,9 @@ fn run_entry_scenario(name: &str, mut state: AgcState, miss_threshold_km: f64) {
             + state.csm_state.position[2].powi(2))
         .sqrt();
         let altitude_km = (r_mag - R_EARTH_M) / 1000.0;
+        min_altitude_km = min_altitude_km.min(altitude_km);
+        max_sensed_g = max_sensed_g.max(state.entry.sensed_acceleration_g);
+
         history.push((
             elapsed_s,
             state.entry.phase,
@@ -178,31 +182,10 @@ fn run_entry_scenario(name: &str, mut state: AgcState, miss_threshold_km: f64) {
             altitude_km,
         ));
 
-        if state.entry.drogue_deployed {
+        if state.entry.drogue_deployed || elapsed_s >= MAX_SCENARIO_DURATION_S {
             break;
         }
-        assert!(
-            elapsed_s < MAX_SCENARIO_DURATION_S,
-            "[{name}] scenario did not reach drogue deploy within \
-             {MAX_SCENARIO_DURATION_S} s — phase={:?}, sensed_g={:.3}, \
-             altitude={altitude_km:.1} km\nlast 10 cycles:\n{}",
-            state.entry.phase,
-            state.entry.sensed_acceleration_g,
-            history
-                .iter()
-                .rev()
-                .take(10)
-                .map(|(t, p, g, h)| format!("  t={t:.1}s phase={p:?} g={g:.3} h={h:.1}km"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
     }
-
-    assert_eq!(
-        state.entry.phase,
-        EntryPhase::Final,
-        "[{name}] drogue deploy must land us in Final phase"
-    );
 
     let (landed_lat, landed_lon) = sub_satellite_lat_lon(&state);
     let miss_km = haversine_km(
@@ -211,20 +194,60 @@ fn run_entry_scenario(name: &str, mut state: AgcState, miss_threshold_km: f64) {
         state.entry.target_lat_rad,
         state.entry.target_lon_rad,
     );
+    let last_history = history.iter().rev().take(10).rev().cloned().collect();
+
+    ScenarioResult {
+        final_phase: state.entry.phase,
+        drogue_deployed: state.entry.drogue_deployed,
+        elapsed_s,
+        miss_km,
+        landed_lat_deg: landed_lat.to_degrees(),
+        landed_lon_deg: landed_lon.to_degrees(),
+        min_altitude_km,
+        max_sensed_g,
+        last_history,
+    }
+}
+
+/// Run one complete entry scenario through the AGC + integrator and assert
+/// the miss-distance acceptance criterion.
+fn run_entry_scenario(name: &str, state: AgcState, miss_threshold_km: f64) {
+    let r = simulate_to_drogue(state);
+
+    assert!(
+        r.drogue_deployed,
+        "[{name}] scenario did not reach drogue deploy within \
+         {MAX_SCENARIO_DURATION_S} s — phase={:?}, peak g={:.3}, \
+         min alt={:.1} km\nlast 10 cycles:\n{}",
+        r.final_phase,
+        r.max_sensed_g,
+        r.min_altitude_km,
+        r.last_history
+            .iter()
+            .map(|(t, p, g, h)| format!("  t={t:.1}s phase={p:?} g={g:.3} h={h:.1}km"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+
+    assert_eq!(
+        r.final_phase,
+        EntryPhase::Final,
+        "[{name}] drogue deploy must land us in Final phase"
+    );
+
     eprintln!(
         "[{name}] drogue at t={:.1}s, miss = {:.1} km (threshold {:.0} km)",
-        elapsed_s, miss_km, miss_threshold_km
+        r.elapsed_s, r.miss_km, miss_threshold_km
     );
     assert!(
-        miss_km < miss_threshold_km,
-        "[{name}] miss distance {miss_km:.1} km exceeds {miss_threshold_km} km threshold\n  \
-         target: lat={:.4} lon={:.4}\n  \
+        r.miss_km < miss_threshold_km,
+        "[{name}] miss distance {:.1} km exceeds {miss_threshold_km} km threshold\n  \
          landed: lat={:.4} lon={:.4}\n  \
-         elapsed: {elapsed_s:.1} s",
-        state.entry.target_lat_rad.to_degrees(),
-        state.entry.target_lon_rad.to_degrees(),
-        landed_lat.to_degrees(),
-        landed_lon.to_degrees(),
+         elapsed: {:.1} s",
+        r.miss_km,
+        r.landed_lat_deg,
+        r.landed_lon_deg,
+        r.elapsed_s,
     );
 }
 
@@ -270,4 +293,98 @@ fn sub_satellite_lat_lon(state: &AgcState) -> (f64, f64) {
     let lat = (pos[2] / r).asin();
     let lon = pos[1].atan2(pos[0]);
     (lat, lon)
+}
+
+// ── Footprint sweep (regenerator, #[ignore]) ───────────────────────────────
+
+/// Regenerate `docs/entry_footprint.md` by sweeping the flight-path
+/// angle from −5.5° to −7.5° in 0.25° steps for both the direct-LEO and
+/// lunar-return scenarios. Records drogue time, miss distance, minimum
+/// altitude, and peak sensed-g per cell.
+///
+/// `#[ignore]`-gated because it takes ~30–60 s wall-clock for the
+/// 18-cell sweep — too slow for normal `cargo test`. Run with:
+///
+/// ```sh
+/// cargo test -p agc-test --test entry_e2e regenerate_footprint_table \
+///     -- --ignored --nocapture
+/// ```
+///
+/// The committed Markdown table is the baseline; refinements landing
+/// in #32 / #33 / #34 (MS-E*b) should tighten the miss-distance
+/// column. After landing any such refinement, re-run this test and
+/// commit the updated table.
+#[test]
+#[ignore]
+fn regenerate_footprint_table() {
+    let fpa_grid: Vec<f64> = (0..=8).map(|i| -5.5 - 0.25 * i as f64).collect();
+
+    let mut rows = Vec::new();
+    for fpa in &fpa_grid {
+        let leo = simulate_to_drogue(make_initial_state(7_900.0, *fpa, 20.0));
+        rows.push(("direct_leo", *fpa, leo));
+        let lunar = simulate_to_drogue(make_initial_state(11_000.0, *fpa, 45.0));
+        rows.push(("lunar_return", *fpa, lunar));
+    }
+
+    let markdown = render_footprint_markdown(&rows);
+    let out_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("docs")
+        .join("entry_footprint.md");
+    std::fs::write(&out_path, markdown)
+        .unwrap_or_else(|e| panic!("cannot write {}: {}", out_path.display(), e));
+    eprintln!("wrote {}", out_path.display());
+}
+
+fn render_footprint_markdown(rows: &[(&str, f64, ScenarioResult)]) -> String {
+    let mut s = String::new();
+    s.push_str("# Entry Guidance Footprint Sweep\n\n");
+    s.push_str(
+        "Generated by `cargo test -p agc-test --test entry_e2e \
+         regenerate_footprint_table -- --ignored --nocapture`.\n\n",
+    );
+    s.push_str(
+        "Each row records the result of running one closed-loop entry \
+         scenario (P61→P67) end-to-end through the AGC + `EntryIntegrator`. \
+         The flight-path angle (FPA) is varied; all other initial \
+         conditions stay fixed per `setup_state_direct_leo` / \
+         `setup_state_lunar_return`.\n\n",
+    );
+    s.push_str(
+        "This is the **stage-A** baseline. Miss distances are expected \
+         to tighten as MS-E3b (#32), MS-E4b (#33), and MS-E6b (#34) land \
+         their fixture-validated refinements. Re-run the sweep and \
+         commit an updated table after each landing.\n\n",
+    );
+
+    // Split rows by scenario name into two tables for readability.
+    for scenario in ["direct_leo", "lunar_return"] {
+        let title = match scenario {
+            "direct_leo" => "Direct LEO (V = 7900 m/s at interface)",
+            "lunar_return" => "Lunar Return (V = 11 000 m/s at interface)",
+            _ => unreachable!(),
+        };
+        s.push_str(&format!("## {title}\n\n"));
+        s.push_str("| FPA (°) | Drogue at | Drogue? | Miss (km) | Min alt (km) | Peak g | Final phase |\n");
+        s.push_str("|---|---|---|---|---|---|---|\n");
+
+        for (name, fpa, r) in rows.iter().filter(|(n, _, _)| *n == scenario) {
+            let drogue_marker = if r.drogue_deployed { "✓" } else { "—" };
+            s.push_str(&format!(
+                "| {:>+6.2} | {:>6.1} s | {} | {:>7.1} | {:>7.1} | {:>5.2} | {:?} |\n",
+                fpa,
+                r.elapsed_s,
+                drogue_marker,
+                r.miss_km,
+                r.min_altitude_km,
+                r.max_sensed_g,
+                r.final_phase,
+            ));
+            // Silence the unused-binding warning when sweep grows.
+            let _ = name;
+        }
+        s.push('\n');
+    }
+    s
 }
