@@ -207,18 +207,35 @@ the committed summary.
 
 ### Known limitations from the first MS-E7e captures
 
-- **`ROLLC = 0` throughout.** Both scenarios observed
-  `bank ∈ [0.0, 0.0] rad` for every cycle. The `read_rollc_rad`
-  address resolution is correct (verified against the real
-  `MAIN.agc.lst` symtab — ROLLC is at bank 6 offset 205), so the AGC
-  is genuinely not writing a non-zero bank. The most likely cause is
-  the AGC's entry guidance never reaching HUNTEST in our preloaded
-  scenario — `MODREG`, `EXTVBACT`, the fresh-start flags, or the
-  entry-prelaunch path may need additional set-up before `V37 63
-  ENTR` actually lands the AGC in a working P63. The harness is
-  wired and the bank-history print at the end of each closed-loop
-  run will surface the moment ROLLC starts varying; diagnosing the
-  preload deficit is its own follow-on issue.
+- **`ROLLC = 0` throughout — diagnosed.** Both scenarios observed
+  `bank ∈ [0.0, 0.0] rad` for every cycle. Root cause (traced from a
+  one-off probe of the AGC's live erasable state):
+
+  1. The test sends `V37 63 ENTR`.
+  2. The AGC's `V37` (major-mode-change) routine looks up program 63
+     in the `PREMM1` dispatch table in
+     `Comanche055/FRESH_START_AND_RESTART.agc:1314-1347`.
+  3. Program 63 is **not** in `PREMM1`. Only P00, P01, P06, P17,
+     P20–23, P30–35, P37–41, P47, P51–54, **P61, P62**, and
+     P72–79 are. P63–P67 are dispatched internally from P62 (the
+     entry preparation program), not selectable from the DSKY.
+  4. The AGC takes the `V37NONO` branch (line 1059), lights the
+     `OPR ERR` lamp (channel 11 bit 7, observed as
+     `channel 0o11 = 0o100`), and rejects the request.
+  5. With no entry program running, no SERVICER runs and no
+     `HUNTEST` ever computes `ROLLC`. PIPA pulses still increment
+     the hardware counters (verified: `PIPAX/Y/Z` advance) but
+     `DELV` stays at 0 because the executive never consumes them.
+
+  **Fix shape** (deferred — see follow-up issue):
+  - Change the live test to send `V37 62 ENTR` (P62, the
+    entry-preparation program) — confirmed to set `MODREG = 62`.
+  - Then send a PROCEED (write to channel `0o32` with bit 14
+    cleared) to acknowledge P62's `V06N61` flashing display and
+    advance to P63. From there the SERVICER runs, sensed-g trips
+    the 0.05g threshold, P64/HUNTEST runs, and ROLLC starts being
+    written.
+
 - **`lunar_return` doesn't reach drogue within the 240 s wall-clock
   cap.** Closed-loop is ~10× slower per cycle than open-loop because
   of the per-cycle core-dump wait. The lunar trajectory under bank =
@@ -226,8 +243,8 @@ the committed summary.
   full trajectory exceeds the cap and the test exits early with
   `drogue_deployed = false`. The committed
   `lunar_return_closed_loop_summary.json` reflects this honestly.
-  Either tightening the per-cycle dump wait or raising the cap will
-  unblock it; both can wait until the ROLLC issue above is fixed.
+  Resolving the ROLLC issue above and possibly raising the cap will
+  unblock it.
 
 ## Out-of-scope (left for follow-ups)
 
