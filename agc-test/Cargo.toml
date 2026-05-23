@@ -25,3 +25,8 @@ vagc-capture = ["dep:toml"]
 name = "capture_huntest"
 path = "src/bin/capture_huntest.rs"
 required-features = ["vagc-capture"]
+
+[[bin]]
+name = "capture_entry_template"
+path = "src/bin/capture_entry_template.rs"
+required-features = ["vagc-capture"]

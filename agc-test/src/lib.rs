@@ -14,7 +14,9 @@
 //!   and Rust-side comparator for MS-E7c.
 
 pub mod agc_convert;
+pub mod entry_scenario;
 pub mod entry_sim;
+pub mod entry_state;
 pub mod fixtures;
 pub mod vagc_channel;
 pub mod vagc_driver;

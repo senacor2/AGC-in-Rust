@@ -103,6 +103,14 @@ Each milestone is independently testable. Each maps 1:1 to a GitHub issue (see Â
 - Sweep of entry-flight-path-angle and azimuth to map the footprint.
 - VirtualAGC end-to-end channel-trace comparison for both trajectories.
 
+Split into three sub-milestones once the work started:
+
+- **MS-E7 stage A** (commit `f985531` â€¦ `6d2ee58`). Rust-only closed-loop scenarios + footprint sweep, documented stage-A miss-distance bands.
+- **MS-E7c** (commit `8404f2b`, closes #36). yaAGC wire-protocol drivers (`DskyScript`, `PipaInjector`), channel-trace recorder + JSON fixture format, comparator. See `docs/entry_channel_trace.md`.
+- **MS-E7d** (this commit, closes #37). Erasable-state preload (`agc_test::entry_state`), `capture_entry_template` binary, live yaAGC scenario tests with summary-JSON regression oracle.
+
+The MS-E*b refinement track (#32 MS-E3b, #33 MS-E4b, #34 MS-E6b) is independent of MS-E7 and tightens the per-phase guidance accuracy. After each refinement lands, regenerate the MS-E7 footprint table and the MS-E7d summary fixtures.
+
 ## 6. Test strategy
 
 ### 6.1 Unit tests (`guidance/entry.rs::tests`)

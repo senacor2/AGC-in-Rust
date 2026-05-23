@@ -1,0 +1,21 @@
+{
+  "scenario": "direct_leo",
+  "provenance": "MS-E7d Rust pipeline reference",
+  "drogue_deployed": true,
+  "miss_distance_km": 733.680101550821,
+  "peak_sensed_g": 9.438126302886547,
+  "elapsed_s": 392.0,
+  "total_cycles": 196,
+  "landed_lat_deg": -0.0007080765460127755,
+  "landed_lon_deg": 13.401856366252325,
+  "min_altitude_km": 18.54278504864406,
+  "tolerance": {
+    "miss_km": 50.0,
+    "peak_g": 0.5,
+    "elapsed_s": 30.0,
+    "total_cycles": 20,
+    "landed_lat_deg": 1.0,
+    "landed_lon_deg": 1.0,
+    "min_altitude_km": 5.0
+  }
+}

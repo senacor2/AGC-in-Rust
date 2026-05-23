@@ -262,6 +262,20 @@ impl CoreImage {
         Self::parse(&text).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
+    /// Construct a fresh in-memory core image with all I/O channels and
+    /// erasable cells zeroed and no CPU-state suffix. Round-trip-stable
+    /// through `save`/`load`. Useful for unit tests that patch a
+    /// synthetic baseline.
+    pub fn empty() -> Self {
+        Self {
+            channels: vec![0; NUM_CHANNELS],
+            erasable: (0..NUM_ERASABLE_BANKS)
+                .map(|_| vec![0; WORDS_PER_BANK])
+                .collect(),
+            suffix: Vec::new(),
+        }
+    }
+
     /// Save the core image back to disk in yaAGC's exact text format.
     pub fn save(&self, path: &Path) -> io::Result<()> {
         let mut f = fs::File::create(path)?;

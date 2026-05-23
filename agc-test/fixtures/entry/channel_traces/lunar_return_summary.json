@@ -1,0 +1,21 @@
+{
+  "scenario": "lunar_return",
+  "provenance": "MS-E7d Rust pipeline reference",
+  "drogue_deployed": true,
+  "miss_distance_km": 1855.9519497513204,
+  "peak_sensed_g": 6.023938143252505,
+  "elapsed_s": 1084.0,
+  "total_cycles": 542,
+  "landed_lat_deg": -1.9826433410344697,
+  "landed_lon_deg": 61.57613134489267,
+  "min_altitude_km": 18.407581402797252,
+  "tolerance": {
+    "miss_km": 50.0,
+    "peak_g": 0.5,
+    "elapsed_s": 30.0,
+    "total_cycles": 20,
+    "landed_lat_deg": 1.0,
+    "landed_lon_deg": 1.0,
+    "min_altitude_km": 5.0
+  }
+}

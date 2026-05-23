@@ -103,32 +103,79 @@ the three buckets is flagged as `UnconfiguredChannel`. This is a
 forcing function — every channel observed must have an explicit
 tolerance decision before the test merges.
 
-## Scope and follow-on milestone
+## Erasable-state preload (MS-E7d)
 
-Out of scope for MS-E7c:
+`agc-test/src/entry_state.rs` encodes a high-level
+[`EntryInitialState`] (SI units, ECI frame) into a patched
+[`CoreImage`] by writing every Comanche055 erasable variable that
+P63 reads: `RN`, `VN`, `TET`, `REFSMMAT`, `LAT(SPL)` / `LNG(SPL)`,
+`EMSALT`, `ALFAPAD`, `HEADSUP`, `MODREG`, and the `REFSMFLG` bit
+inside `FLAGWRD3`. Each variable's symbol address comes from the
+yaYUL listing's symbol table; the B-scaling is documented per-
+variable against `Comanche055/ERASABLE_ASSIGNMENTS.agc` and
+`agc_convert.rs`.
 
-- **Driving yaAGC to drogue deploy on `entry_direct_leo` /
-  `entry_lunar_return`.** This requires staging the AGC erasable state
-  to the entry-interface configuration (REFSMMAT + ECI state vector +
-  target landmark + entry flags) before the first SERVICER tick. The
-  `YaAgcRun::core_in` core-resume plumbing exists in `vagc_harness.rs`,
-  but no fixture exists that captures a "ready to enter P63" template
-  core. Building that template core is the natural follow-on milestone
-  — call it MS-E7d.
+The patch path uses the existing `YaAgcRun::core_in` plumbing in
+`vagc_harness.rs`: cold-boot yaAGC once to capture
+`entry_template.core`, then per-test patch that template, save as
+`core_in`, and resume yaAGC from it via `--no-resume <core_in>`.
+The Rust-side helper is round-trip-tested in
+`agc-test/src/entry_state.rs::tests`; live AGC-acceptance
+validation happens when `tests/entry_e2e_vagc.rs` runs against a
+machine with VirtualAGC built.
 
-The current harness gives the next milestone everything it needs:
+### Regenerating the binary template core
 
-- a recorder that captures the live yaAGC trace
-- a JSON format the trace can be committed in
-- a comparator that asserts equivalence
-- drivers (`DskyScript`, `PipaInjector`) that emit the stimuli the
-  scenario needs once the AGC is in P63.
+```sh
+# One-time bootstrap (assembles MAIN.agc.bin etc).
+bash agc-test/scripts/assemble_comanche055.sh
 
-What's still required for MS-E7d is the **erasable-state preload**:
-either a manual V21 / V25 / V52 sequence executed via `DskyScript`
-before the integrator starts, or a captured core-resume file produced
-by running yaAGC through that sequence once and snapshotting the
-result.
+# Cold-boot yaAGC and capture entry_template.core.
+cargo run --features vagc-capture --bin capture_entry_template
+```
+
+The captured file lives at
+`agc-test/fixtures/entry/entry_template.core`. It is **not
+committed** — too large, fully deterministic given the rope, and
+only useful on a machine with the VirtualAGC build present. The
+live tests skip cleanly when it is absent.
+
+## Scenario summaries
+
+For each named scenario, a small `*_summary.json` fixture captures
+the scenario-level metrics that the Rust pipeline produces — drogue
+deployed yes/no, miss distance, peak sensed-g, elapsed seconds,
+total SERVICER cycles, final landed lat/lon, minimum altitude — plus
+per-metric tolerances. The Rust-only test
+`tc_e7d_summary_rust_pipeline` loads each summary and asserts the
+shared `simulate_to_drogue` runner matches it within tolerance.
+This is the regression oracle: an MS-E*b refinement that shifts the
+Rust pipeline's metrics will fail the test until the summary is
+regenerated.
+
+```sh
+# Regenerate summary fixtures after an MS-E*b refinement.
+cargo test -p agc-test --test entry_e2e_vagc regenerate_summary_fixtures \
+    -- --ignored --nocapture
+
+# Refresh BOTH the channel trace and the summary from a live yaAGC
+# run (requires VirtualAGC built locally + entry_template.core
+# captured):
+VAGC_CAPTURE=1 cargo test -p agc-test --test entry_e2e_vagc
+```
+
+## Out-of-scope for MS-E7d
+
+- **Closed-loop bidirectional drive.** The current live test
+  injects PIPA pulses derived from the **Rust** pipeline's
+  trajectory, not from yaAGC's bank commands. The AGC's view is
+  open-loop with respect to its own steering. A true closed loop —
+  read yaAGC's bank-command channel each cycle, feed it back into
+  the integrator — is MS-E7e.
+- **Faithful Rust-side AGC-display channel projector.** The summary
+  JSON oracle satisfies the "matching channel writes within
+  tolerance" exit criterion at the scenario-metric level; per-cycle
+  DSKY-display equivalence is also MS-E7e territory.
 
 ## Test plan
 
@@ -138,11 +185,18 @@ result.
 | `tc_pipa_enc_*`                   | `vagc_driver::tests`                | Always.         |
 | `tc_trace_io_*`                   | `vagc_trace::tests`                 | Always.         |
 | `tc_trace_cmp_*`                  | `vagc_trace::tests`                 | Always.         |
+| `tc_es_*`                         | `entry_state::tests`                | Always.         |
 | `tc_e7c_fixture_load_smoke`       | `tests/entry_channel_trace.rs`      | Always.         |
 | `tc_e7c_vagc_recorder_startup`    | `tests/entry_channel_trace.rs`      | VAGC available. |
 | `tc_e7c_vagc_dsky_keypress`       | `tests/entry_channel_trace.rs`      | VAGC available. |
+| `tc_e7d_summary_rust_pipeline`    | `tests/entry_e2e_vagc.rs`           | Always.         |
+| `tc_e7d_vagc_entry_direct_leo`    | `tests/entry_e2e_vagc.rs`           | VAGC + template.|
+| `tc_e7d_vagc_entry_lunar_return`  | `tests/entry_e2e_vagc.rs`           | VAGC + template.|
 
 The VAGC-gated tests look for `vagc_root()/yaAGC/yaAGC` and
-`vagc_root()/Comanche055/MAIN.agc.bin`. If either is missing, the test
+`vagc_root()/Comanche055/MAIN.agc.bin`. The MS-E7d live tests
+additionally require `agc-test/fixtures/entry/entry_template.core`,
+which is generated by `cargo run --features vagc-capture --bin
+capture_entry_template`. If any of these are missing, the test
 prints a skip message and returns successfully — the same pattern
 used elsewhere in the harness.

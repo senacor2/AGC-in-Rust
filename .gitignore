@@ -19,3 +19,17 @@ target
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# yaAGC core dumps left in the project root by accidental runs.
+/core
+
+# Developer-only VAGC capture artifacts — regenerable via
+#   cargo run --features vagc-capture --bin capture_entry_template
+# and the MS-E7d live tests with VAGC_CAPTURE=1. See
+# agc-test/fixtures/entry/README.md.
+/agc-test/fixtures/entry/entry_template.core
+/agc-test/fixtures/entry/channel_traces/direct_leo.json
+/agc-test/fixtures/entry/channel_traces/lunar_return.json
+
+# macOS Finder metadata.
+.DS_Store
