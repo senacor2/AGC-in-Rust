@@ -3,7 +3,7 @@
 //! Provides three building blocks used by the routine-level capture
 //! binaries (`agc-test/src/bin/capture_*`):
 //!
-//! 1. [`Symtab`] — parses `~/virtualagc/Comanche055/MAIN.agc.lst` and
+//! 1. [`Symtab`] — parses `~/dev/virtualagc/Comanche055/MAIN.agc.lst` and
 //!    yields named-symbol → AGC-memory-address lookups. Both
 //!    erasable (`E`) and fixed (`F`) symbols are stored; constants (`C`)
 //!    are skipped.
@@ -142,7 +142,7 @@ impl SymbolKind {
 /// Map of AGC symbol name → memory address.
 ///
 /// Parsed from the `Symbol Table` section of yaYUL's text assembly
-/// listing (`~/virtualagc/Comanche055/MAIN.agc.lst`).
+/// listing (`~/dev/virtualagc/Comanche055/MAIN.agc.lst`).
 #[derive(Clone, Debug, Default)]
 pub struct Symtab {
     symbols: HashMap<String, AgcAddress>,
@@ -293,9 +293,9 @@ impl CoreImage {
 
         let mut channels = Vec::with_capacity(NUM_CHANNELS);
         for (i, line) in lines.iter().enumerate().take(NUM_CHANNELS) {
-            channels.push(parse_octal(line).map_err(|e| {
-                format!("line {} (channel {}): {}", i + 1, i, e)
-            })?);
+            channels.push(
+                parse_octal(line).map_err(|e| format!("line {} (channel {}): {}", i + 1, i, e))?,
+            );
         }
 
         let mut erasable = Vec::with_capacity(NUM_ERASABLE_BANKS);
@@ -310,7 +310,10 @@ impl CoreImage {
             erasable.push(words);
         }
 
-        let suffix = lines[expected_min..].iter().map(|s| s.to_string()).collect();
+        let suffix = lines[expected_min..]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
 
         Ok(Self {
             channels,
@@ -613,15 +616,16 @@ impl YaAgcRun {
 
 /// Convenience: locate the developer's local VirtualAGC checkout.
 ///
-/// Returns `$VAGC_ROOT` if set, else `~/virtualagc`. Used by the
-/// fixture-capture binaries and by smoke tests that gate on the
-/// VirtualAGC build being present.
+/// Returns `$VAGC_ROOT` if set, else `~/dev/virtualagc` (the location
+/// produced by `run-virtualagc.sh`). Used by the fixture-capture
+/// binaries and by smoke tests that gate on the VirtualAGC build being
+/// present.
 pub fn vagc_root() -> PathBuf {
     if let Ok(p) = std::env::var("VAGC_ROOT") {
         return PathBuf::from(p);
     }
     if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join("virtualagc");
+        return PathBuf::from(home).join("dev").join("virtualagc");
     }
     PathBuf::from("/virtualagc")
 }
@@ -775,7 +779,10 @@ preamble\n\
         // but yaAGC's format is fully specified by save() so a round-
         // trip through load+save+load is sufficient.
         let mut bytes = Vec::new();
-        std::fs::File::open(&tmp).unwrap().read_to_end(&mut bytes).unwrap();
+        std::fs::File::open(&tmp)
+            .unwrap()
+            .read_to_end(&mut bytes)
+            .unwrap();
         assert!(!bytes.is_empty());
 
         std::fs::remove_file(tmp).ok();
@@ -851,11 +858,7 @@ preamble\n\
     /// available, so this test is non-blocking on CI.
     #[test]
     fn tc_vagc_lst_integ_real_listing() {
-        let path = std::path::PathBuf::from(
-            std::env::var("HOME")
-                .map(|h| format!("{h}/virtualagc/Comanche055/MAIN.agc.lst"))
-                .unwrap_or_default(),
-        );
+        let path = vagc_root().join("Comanche055").join("MAIN.agc.lst");
         if !path.exists() {
             eprintln!(
                 "skipping: no Comanche055 listing at {} \
@@ -873,10 +876,16 @@ preamble\n\
         // ROLLC: erasable in bank 7 from the listing (`E7,1633`,
         // shifted: storage offset = 0o1633 − 0o1400 = 0o233).
         let rollc = st.get("ROLLC").expect("ROLLC should be present");
-        assert!(matches!(rollc, AgcAddress::Erasable { .. }), "ROLLC ⇒ erasable");
+        assert!(
+            matches!(rollc, AgcAddress::Erasable { .. }),
+            "ROLLC ⇒ erasable"
+        );
         // UPCONTRL: fixed bank label.
         let upctl = st.get("UPCONTRL").expect("UPCONTRL should be present");
-        assert!(matches!(upctl, AgcAddress::Fixed { .. }), "UPCONTRL ⇒ fixed");
+        assert!(
+            matches!(upctl, AgcAddress::Fixed { .. }),
+            "UPCONTRL ⇒ fixed"
+        );
     }
 
     /// TC-VAGC-RUN-DBG-INTEG: spawn yaAGC in debugger mode with a
@@ -893,15 +902,15 @@ preamble\n\
         let yaagc = root.join("yaAGC/yaAGC");
         let rope = root.join("Comanche055/MAIN.agc.bin");
         let symtab = root.join("Comanche055/MAIN.agc.symtab");
-        if !yaagc.exists() || !rope.exists() || std::fs::metadata(&rope).map(|m| m.len()).unwrap_or(0) == 0 {
+        if !yaagc.exists()
+            || !rope.exists()
+            || std::fs::metadata(&rope).map(|m| m.len()).unwrap_or(0) == 0
+        {
             eprintln!("skipping: VirtualAGC build incomplete");
             return;
         }
 
-        let work_dir = std::env::temp_dir().join(format!(
-            "vagc_dbg_smoke_{}",
-            std::process::id()
-        ));
+        let work_dir = std::env::temp_dir().join(format!("vagc_dbg_smoke_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&work_dir);
         std::fs::create_dir_all(&work_dir).unwrap();
 
@@ -912,10 +921,7 @@ preamble\n\
             core_in: None,
             work_dir: work_dir.clone(),
             mode: RunMode::Debugger {
-                commands: vec![
-                    "COREDUMP core".into(),
-                    "QUIT".into(),
-                ],
+                commands: vec!["COREDUMP core".into(), "QUIT".into()],
             },
             timeout: Duration::from_secs(10),
         };
@@ -939,7 +945,10 @@ preamble\n\
         let root = vagc_root();
         let yaagc = root.join("yaAGC/yaAGC");
         let rope = root.join("Comanche055/MAIN.agc.bin");
-        if !yaagc.exists() || !rope.exists() || std::fs::metadata(&rope).map(|m| m.len()).unwrap_or(0) == 0 {
+        if !yaagc.exists()
+            || !rope.exists()
+            || std::fs::metadata(&rope).map(|m| m.len()).unwrap_or(0) == 0
+        {
             eprintln!(
                 "skipping: VirtualAGC build incomplete \
                  (yaAGC={}, rope={}). Run agc-test/scripts/assemble_comanche055.sh.",
@@ -949,10 +958,7 @@ preamble\n\
             return;
         }
 
-        let work_dir = std::env::temp_dir().join(format!(
-            "vagc_smoke_{}",
-            std::process::id()
-        ));
+        let work_dir = std::env::temp_dir().join(format!("vagc_smoke_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&work_dir);
 
         let run = YaAgcRun {

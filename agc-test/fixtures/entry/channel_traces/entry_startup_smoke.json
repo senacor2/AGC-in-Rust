@@ -1,0 +1,15 @@
+{
+  "scenario": "entry_startup_smoke",
+  "provenance": "Hand-built smoke fixture for MS-E7c. Validates the JSON schema and exercises the comparator's self-match path without requiring a yaAGC capture. Values mimic the shape of an AGC startup channel-write burst: a blanking pass over DSPTAB on channel 0o10, an alarm-light clear on channel 0o11, and an early DAP-jet quench on channel 0o05. Not a verified VirtualAGC trace — replace with a captured fixture once the end-to-end harness can stage erasable state.",
+  "events": [
+    { "t_ms": 0,   "channel": 8,  "value": 0 },
+    { "t_ms": 0,   "channel": 8,  "value": 0 },
+    { "t_ms": 0,   "channel": 9,  "value": 0 },
+    { "t_ms": 4,   "channel": 9,  "value": 5 },
+    { "t_ms": 12,  "channel": 10, "value": 0 },
+    { "t_ms": 20,  "channel": 10, "value": 12 },
+    { "t_ms": 32,  "channel": 11, "value": 0 },
+    { "t_ms": 120, "channel": 11, "value": 4 },
+    { "t_ms": 220, "channel": 5,  "value": 0 }
+  ]
+}
