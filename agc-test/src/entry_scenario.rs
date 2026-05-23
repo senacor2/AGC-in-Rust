@@ -54,14 +54,35 @@ pub struct ScenarioResult {
 }
 
 /// Simulate one entry scenario all the way to drogue deploy (or the
-/// [`MAX_SCENARIO_DURATION_S`] timeout). No assertions — returns the
-/// diagnostics for the caller to inspect.
+/// [`MAX_SCENARIO_DURATION_S`] timeout). The per-cycle bank is read
+/// from the AGC's own DAP state (`DapMode::EntryRoll(_)` defaults to
+/// 0 otherwise). No assertions — returns the diagnostics for the
+/// caller to inspect.
 ///
 /// `state` must already have the initial CSM state vector, target
 /// landing coordinates, MET, and GHA-epoch populated. This helper
 /// takes care of `init_p61` → `init_p62` → `init_p63` → `start_servicer`
 /// and then ticks the SERVICER loop until exit.
-pub fn simulate_to_drogue(mut state: AgcState) -> ScenarioResult {
+pub fn simulate_to_drogue(state: AgcState) -> ScenarioResult {
+    simulate_to_drogue_with_bank(state, |s| match s.dap_state.mode {
+        DapMode::EntryRoll(b) => b,
+        _ => 0.0,
+    })
+}
+
+/// Same as [`simulate_to_drogue`] but the per-cycle bank is supplied
+/// by the caller's `bank_source` closure. Used by the MS-E7e
+/// closed-loop live test to feed yaAGC's `ROLLC` back into the
+/// integrator each cycle.
+///
+/// The closure is invoked **before** each cycle's integration, with a
+/// `&AgcState` view of the current spacecraft and AGC state. The
+/// returned bank (radians, 0 = lift up, positive = right-bank) is
+/// passed straight to [`EntryIntegrator::integrate_cycle`].
+pub fn simulate_to_drogue_with_bank<F>(mut state: AgcState, mut bank_source: F) -> ScenarioResult
+where
+    F: FnMut(&AgcState) -> f64,
+{
     let integrator = EntryIntegrator::apollo_cm();
 
     init_p61(&mut state);
@@ -78,10 +99,7 @@ pub fn simulate_to_drogue(mut state: AgcState) -> ScenarioResult {
     let mut total_cycles: u32 = 0;
 
     loop {
-        let bank_rad = match state.dap_state.mode {
-            DapMode::EntryRoll(b) => b,
-            _ => 0.0,
-        };
+        let bank_rad = bank_source(&state);
         let ld_command = state.entry.ld_command;
 
         let dv_inertial = integrator.integrate_cycle(

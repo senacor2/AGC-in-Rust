@@ -164,18 +164,81 @@ cargo test -p agc-test --test entry_e2e_vagc regenerate_summary_fixtures \
 VAGC_CAPTURE=1 cargo test -p agc-test --test entry_e2e_vagc
 ```
 
-## Out-of-scope for MS-E7d
+## Closed-loop scenarios (MS-E7e)
 
-- **Closed-loop bidirectional drive.** The current live test
-  injects PIPA pulses derived from the **Rust** pipeline's
-  trajectory, not from yaAGC's bank commands. The AGC's view is
-  open-loop with respect to its own steering. A true closed loop —
-  read yaAGC's bank-command channel each cycle, feed it back into
-  the integrator — is MS-E7e.
+The MS-E7d live tests are open-loop: PIPA pulses are derived from
+the **Rust** pipeline's bank commands, so the AGC's `ROLLC`
+(the bank-command output of P63/P64/P65/P67) has no effect on the
+trajectory. MS-E7e adds two `VAGC_AVAILABLE`-gated companion tests
+that close the steering loop:
+
+- `tc_e7e_vagc_entry_direct_leo_closed_loop`
+- `tc_e7e_vagc_entry_lunar_return_closed_loop`
+
+Each spawns yaAGC with `--dump-time=2` so a fresh core dump arrives
+once per simulated SERVICER cycle. Per cycle the driver:
+
+1. Integrates the Rust state under the current `bank_rad` (initial
+   value: 0).
+2. Pushes the resulting Δv to yaAGC via `PipaInjector`.
+3. Waits for the `core` file's mtime to advance, with a 30 ms grace
+   period for the buffered write to flush.
+4. Loads the dump, extracts `ROLLC` via
+   `entry_state::read_rollc_rad`, uses it for the next cycle.
+
+`ROLLC` is the DP erasable at `ROLLTM + 1` (`Comanche055/
+ERASABLE_ASSIGNMENTS.agc:3181`) storing the bank command as a
+fraction of one revolution; the helper multiplies by 2π. The
+`Rust-only oracle for closed-loop summaries is structural only
+(`tc_e7e_closed_loop_summary_structural`) because the Rust pipeline's
+stage-A guidance does not reproduce Comanche055's full guidance — the
+regression check that does matter is the live test re-running against
+the committed summary.
+
+### Closed-loop fixtures
+
+- `*_closed_loop.json` — captured channel traces (`.gitignore`d like
+  the open-loop ones).
+- `*_closed_loop_summary.json` — committed ScenarioSummary derived
+  from the live run's Rust-side state. Wider default tolerances than
+  the open-loop summaries (2000 km miss, 5 g, 120 s elapsed, …)
+  because yaAGC's guidance and the Rust integrator's bank execution
+  combine into a different trajectory than either alone.
+
+### Known limitations from the first MS-E7e captures
+
+- **`ROLLC = 0` throughout.** Both scenarios observed
+  `bank ∈ [0.0, 0.0] rad` for every cycle. The `read_rollc_rad`
+  address resolution is correct (verified against the real
+  `MAIN.agc.lst` symtab — ROLLC is at bank 6 offset 205), so the AGC
+  is genuinely not writing a non-zero bank. The most likely cause is
+  the AGC's entry guidance never reaching HUNTEST in our preloaded
+  scenario — `MODREG`, `EXTVBACT`, the fresh-start flags, or the
+  entry-prelaunch path may need additional set-up before `V37 63
+  ENTR` actually lands the AGC in a working P63. The harness is
+  wired and the bank-history print at the end of each closed-loop
+  run will surface the moment ROLLC starts varying; diagnosing the
+  preload deficit is its own follow-on issue.
+- **`lunar_return` doesn't reach drogue within the 240 s wall-clock
+  cap.** Closed-loop is ~10× slower per cycle than open-loop because
+  of the per-cycle core-dump wait. The lunar trajectory under bank =
+  0 needs ~533 SERVICER cycles; at ~1 s wall-clock per cycle, the
+  full trajectory exceeds the cap and the test exits early with
+  `drogue_deployed = false`. The committed
+  `lunar_return_closed_loop_summary.json` reflects this honestly.
+  Either tightening the per-cycle dump wait or raising the cap will
+  unblock it; both can wait until the ROLLC issue above is fixed.
+
+## Out-of-scope (left for follow-ups)
+
 - **Faithful Rust-side AGC-display channel projector.** The summary
   JSON oracle satisfies the "matching channel writes within
   tolerance" exit criterion at the scenario-metric level; per-cycle
-  DSKY-display equivalence is also MS-E7e territory.
+  DSKY-display equivalence (channels 010 / 011 / 013) is a separate
+  body of work and is deferred.
+- **Diagnosing why the AGC's entry guidance doesn't reach HUNTEST in
+  the preloaded scenarios.** The MS-E7e harness will pick up the
+  fix automatically once a non-zero `ROLLC` starts being written.
 
 ## Test plan
 
@@ -192,6 +255,9 @@ VAGC_CAPTURE=1 cargo test -p agc-test --test entry_e2e_vagc
 | `tc_e7d_summary_rust_pipeline`    | `tests/entry_e2e_vagc.rs`           | Always.         |
 | `tc_e7d_vagc_entry_direct_leo`    | `tests/entry_e2e_vagc.rs`           | VAGC + template.|
 | `tc_e7d_vagc_entry_lunar_return`  | `tests/entry_e2e_vagc.rs`           | VAGC + template.|
+| `tc_e7e_closed_loop_summary_structural` | `tests/entry_e2e_vagc.rs`     | Always.         |
+| `tc_e7e_vagc_entry_direct_leo_closed_loop` | `tests/entry_e2e_vagc.rs` | VAGC + template.|
+| `tc_e7e_vagc_entry_lunar_return_closed_loop` | `tests/entry_e2e_vagc.rs` | VAGC + template.|
 
 The VAGC-gated tests look for `vagc_root()/yaAGC/yaAGC` and
 `vagc_root()/Comanche055/MAIN.agc.bin`. The MS-E7d live tests

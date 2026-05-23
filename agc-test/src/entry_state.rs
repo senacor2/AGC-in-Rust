@@ -33,7 +33,7 @@
 //! (`tests/entry_e2e_vagc.rs`) runs with a local VirtualAGC build —
 //! see `docs/entry_channel_trace.md` for the verification path.
 
-use crate::vagc_harness::{AgcAddress, CoreImage, ScaledVar, Symtab};
+use crate::vagc_harness::{read_scaled, AgcAddress, CoreImage, ScaledVar, Symtab};
 use crate::{agc_convert, vagc_harness::write_scaled};
 
 use std::f64::consts::TAU;
@@ -151,6 +151,34 @@ const SCALE_ALFA_FRACTION_SP: i8 = -14;
 /// per the AGC convention; comment in `ERASABLE_ASSIGNMENTS.agc:352`
 /// says "BIT 13 FLAG 3"). The set mask is `1 << (13 − 1) = 0x1000`.
 const REFSMFLG_BIT_MASK: u16 = 1 << 12;
+
+// ── Closed-loop bank readout (MS-E7e) ──────────────────────────────────────
+
+/// Read the AGC's current entry bank command `ROLLC` (a DP erasable
+/// holding `ROLLCOM / 360`) and return the corresponding bank angle in
+/// radians, sign convention matching
+/// [`crate::entry_sim::EntryIntegrator::integrate_cycle`]'s `bank_rad`
+/// argument (0 = lift up, positive = right-bank).
+///
+/// `ROLLC` is at the AGC symbol "ROLLC" (defined as `ROLLTM + 1` in
+/// `Comanche055/ERASABLE_ASSIGNMENTS.agc:3181`). Returns `None` if the
+/// symbol is missing from the table (stale assembly listing) or
+/// resolves to fixed memory.
+pub fn read_rollc_rad(core: &CoreImage, symtab: &Symtab) -> Option<f64> {
+    let addr = symtab.get("ROLLC")?;
+    if !matches!(addr, AgcAddress::Erasable { .. }) {
+        return None;
+    }
+    let fraction = read_scaled(
+        core,
+        &ScaledVar {
+            addr,
+            scale: SCALE_FRACTION,
+            dp: true,
+        },
+    )?;
+    Some(fraction * TAU)
+}
 
 // ── Patch entry point ──────────────────────────────────────────────────────
 
@@ -417,7 +445,7 @@ Symbol Table\n\
      6,E:   LAT(SPL)    E5,1500  \t   7,E:   LNG(SPL)    E5,1504  \n\
      8,E:   EMSALT      E5,1510  \t   9,E:   ALFAPAD     E5,1514  \n\
     10,E:   HEADSUP     E5,1516  \t  11,E:   MODREG      E5,1520  \n\
-    12,E:   FLAGWRD3    E5,1522  \n\
+    12,E:   FLAGWRD3    E5,1522  \t  13,E:   ROLLC       E5,1524  \n\
 ";
         Symtab::parse(text)
     }
@@ -646,6 +674,50 @@ Symbol Table\n\
         assert_eq!(core.read_sp(symtab.get("MODREG").unwrap()), Some(0));
     }
 
+    /// TC-ES-ROLLC-1: write a known bank fraction into `ROLLC` via
+    /// the existing `write_scaled` path, then `read_rollc_rad` recovers
+    /// it (in radians) within DP LSB tolerance. The conversion is
+    /// `radians = fraction_of_rev * 2π`, so a fraction of 0.25 rev =
+    /// 90° = π/2 rad.
+    #[test]
+    fn tc_es_rollc_1_round_trip() {
+        let symtab = fixture_symtab();
+        let mut core = empty_core();
+        let addr = symtab.get("ROLLC").unwrap();
+        // Write 0.25 rev → expect 90° = π/2 rad on readback.
+        let scaled = ScaledVar {
+            addr,
+            scale: SCALE_FRACTION,
+            dp: true,
+        };
+        assert!(write_scaled(&mut core, &scaled, 0.25));
+
+        let bank = read_rollc_rad(&core, &symtab).expect("rollc readback");
+        let expected = std::f64::consts::FRAC_PI_2;
+        assert!(
+            (bank - expected).abs() < 1e-6,
+            "ROLLC round-trip: expected {expected}, got {bank}"
+        );
+
+        // Negative bank (left bank) round-trips.
+        assert!(write_scaled(&mut core, &scaled, -0.125));
+        let bank = read_rollc_rad(&core, &symtab).unwrap();
+        let expected = -0.25 * std::f64::consts::PI;
+        assert!(
+            (bank - expected).abs() < 1e-6,
+            "ROLLC negative round-trip: expected {expected}, got {bank}"
+        );
+    }
+
+    /// TC-ES-ROLLC-2: a symbol table without `ROLLC` returns `None`
+    /// (catches stale assembly listings).
+    #[test]
+    fn tc_es_rollc_2_missing_symbol_none() {
+        let symtab = Symtab::parse("Symbol Table\n");
+        let core = empty_core();
+        assert!(read_rollc_rad(&core, &symtab).is_none());
+    }
+
     /// TC-ES-7: a missing symbol surfaces as `MissingSymbol`, not a
     /// silent zero write. Catches symtab drift early.
     #[test]
@@ -663,3 +735,4 @@ Symbol Table\n\
         }
     }
 }
+

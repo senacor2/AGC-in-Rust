@@ -1,0 +1,21 @@
+{
+  "scenario": "lunar_return",
+  "provenance": "MS-E7e closed-loop (yaAGC steers, Rust integrates)",
+  "drogue_deployed": false,
+  "miss_distance_km": 845.9438373005082,
+  "peak_sensed_g": 4.791716554225698,
+  "elapsed_s": 484.0,
+  "total_cycles": 242,
+  "landed_lat_deg": 0.0,
+  "landed_lon_deg": 37.39224429721854,
+  "min_altitude_km": 58.222837623845784,
+  "tolerance": {
+    "miss_km": 2000.0,
+    "peak_g": 5.0,
+    "elapsed_s": 120.0,
+    "total_cycles": 60,
+    "landed_lat_deg": 10.0,
+    "landed_lon_deg": 10.0,
+    "min_altitude_km": 30.0
+  }
+}

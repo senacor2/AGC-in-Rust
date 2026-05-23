@@ -1,0 +1,21 @@
+{
+  "scenario": "direct_leo",
+  "provenance": "MS-E7e closed-loop (yaAGC steers, Rust integrates)",
+  "drogue_deployed": true,
+  "miss_distance_km": 733.6098760289398,
+  "peak_sensed_g": 9.438126302886547,
+  "elapsed_s": 392.0,
+  "total_cycles": 196,
+  "landed_lat_deg": 0.0,
+  "landed_lon_deg": 13.40248788171813,
+  "min_altitude_km": 18.54241462681163,
+  "tolerance": {
+    "miss_km": 2000.0,
+    "peak_g": 5.0,
+    "elapsed_s": 120.0,
+    "total_cycles": 60,
+    "landed_lat_deg": 10.0,
+    "landed_lon_deg": 10.0,
+    "min_altitude_km": 30.0
+  }
+}

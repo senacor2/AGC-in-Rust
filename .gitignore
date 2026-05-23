@@ -30,6 +30,8 @@ target
 /agc-test/fixtures/entry/entry_template.core
 /agc-test/fixtures/entry/channel_traces/direct_leo.json
 /agc-test/fixtures/entry/channel_traces/lunar_return.json
+/agc-test/fixtures/entry/channel_traces/direct_leo_closed_loop.json
+/agc-test/fixtures/entry/channel_traces/lunar_return_closed_loop.json
 
 # macOS Finder metadata.
 .DS_Store
