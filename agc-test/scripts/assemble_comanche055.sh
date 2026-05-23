@@ -23,7 +23,7 @@
 
 set -euo pipefail
 
-VAGC_ROOT="${VAGC_ROOT:-$HOME/virtualagc}"
+VAGC_ROOT="${VAGC_ROOT:-$HOME/dev/virtualagc}"
 YAYUL_BIN="$VAGC_ROOT/yaYUL/yaYUL"
 SRC_DIR="$VAGC_ROOT/Comanche055"
 MAIN_SRC="$SRC_DIR/MAIN.agc"

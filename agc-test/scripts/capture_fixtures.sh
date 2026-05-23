@@ -7,7 +7,7 @@
 # Usage: bash agc-test/scripts/capture_fixtures.sh
 set -euo pipefail
 
-VAGC_DIR="$HOME/virtualagc"
+VAGC_DIR="$HOME/dev/virtualagc"
 YAAGC="$VAGC_DIR/yaAGC/yaAGC"
 COMANCHE="$VAGC_DIR/Comanche055/MAIN.agc.bin"
 SYMTAB="$VAGC_DIR/Comanche055/MAIN.agc.symtab"

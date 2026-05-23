@@ -7,7 +7,7 @@ set -euo pipefail
 
 REPO_URL="https://github.com/virtualagc/virtualagc"
 BRANCH="master"
-WORK_DIR="$HOME/virtualagc"
+WORK_DIR="$HOME/dev/virtualagc"
 
 echo ""
 echo "  VirtualAGC setup script"
