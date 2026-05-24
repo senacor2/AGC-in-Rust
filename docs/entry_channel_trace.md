@@ -247,38 +247,48 @@ The live yaAGC instance is spawned with `--inhibit-alarms` so a
 long wall-clock gap between PIPA bursts doesn't cause the Night
 Watchman alarm to FRESH-START the AGC (which would clobber MODREG).
 
-### Known limitation (partial fix in MS-E7g, deferred to MS-E7h, #41)
+### Known limitation (refined in MS-E7g + MS-E7h)
 
-With everything above the live test cleanly puts the AGC into P62
-(`MODREG = 0o076`), but P62 doesn't advance to P63. MS-E7g extended
-[`EntryInitialState`] with a `cmdapmod` field and `patch_into` now
-writes `CMDAPMOD = -1` by default (`Comanche055/ERASABLE_ASSIGNMENTS.agc:767`,
-`E6,1700`). That's the value P62's branch at `P61-P67.agc:260-265`
-tests against to take the "go directly to P63" branch instead of
-scheduling the `WAKEP62` attitude-maneuver wait task.
+With CMDAPMOD = -1 preloaded the AGC still doesn't advance from
+P62 to P63 — but the diagnosis is now precise:
 
-The preload is correct (a one-off probe confirmed `CMDAPMOD = 077776`
-survives across the run) but P62 still doesn't advance, because the
-check sits **after** P62's `GOFLASH V06N61` wait for PROCEED — and
-the PROCEED never wakes the wait:
+**What works** (verified by a one-off MS-E7h probe of the live
+core-dump state):
 
-- `V33 ENTR` (the keyboard form of PROCEED-WITHOUT-DATA via VBPROC)
-  fails to advance MODREG, even with 3-second delays before the
-  send. VERBREG stays at `0o045` (the V37 from the previous
-  sequence), suggesting no subsequent verb is being processed at
-  all while the GOFLASH wait is active.
-- The hardware PRO discrete on channel `0o32` bit 14 — toggled
-  press / release ~200 ms wall-clock — also doesn't advance MODREG.
-- Sending KEY RLSE before V33 ENTR doesn't help either.
+1. `V37 ENTR 62 ENTR` cleanly puts the AGC into P62
+   (`MODREG = 0o076`).
+2. P62 runs to `GOFLASH V06N61` and goes to sleep correctly —
+   **`CADRSTOR` becomes `0o021523`** (the return CADR of the
+   sleeping job). This is the AGC's "I'm waiting in ENDIDLE for
+   PROCEED" state and matches the
+   `PINBALL_GAME__BUTTONS_AND_LIGHTS.agc:3196` `TS CADRSTOR` write.
+3. The keyboard handler keeps running while P62 is sleeping. We
+   sent `V35 ENTR` (lamp test) post-V37 and observed `VERBREG`
+   transition to `0o043` and 13 fresh writes on channel `0o11`
+   (lamps lit) — so KEYRUPT → CHARIN → VERBTAB dispatch is alive.
+4. The wake mechanism is wired correctly: VBPROC's `RECALTST`
+   does `CCS CADRSTOR`, `XCH CADRSTOR`, `JOBWAKE` (line 3358),
+   and our `CADRSTOR != 0` would satisfy the first check.
 
-The diagnosis is that P62's GOFLASH wait isn't being woken by either
-PROCEED form in our setup. Likely candidates: a missing flagword
-that disables keyboard input, an AWAIT-job that timed out, or some
-PINBALL state we haven't initialised in the preload template. This
-is its own multi-session debugging exercise — tracked as MS-E7h
-(#41 → renumber on file). Until then the closed-loop test prints
-a `WARNING` and the committed `*_closed_loop_summary` fixtures
-still reflect the bank-zero trajectory.
+**What doesn't work**: `V33 ENTR` does NOT reach VBPROC. Sent
+directly (`press(Verb); press(3); press(3); press(Enter)`) with
+the 80 ms inter-key delay, `VERBREG` stays at `0o045` (the V37
+from the prior sequence) — `V35` transitions it to `0o043`,
+`V33` does not. The hardware PRO discrete on channel `0o32`
+bit 14, toggled 200 ms wall-clock, also doesn't move the needle.
+
+So the AGC's VERBTAB dispatch is selectively dropping V33 (and
+V32 RESEQUENCE) while accepting V35. Most likely PINBALL has a
+state flag set by GOFLASH that blocks "wake-class" verbs but not
+"display-class" verbs, and our cold-boot template is missing
+something the in-flight prelaunch sequence would have established.
+
+Diagnosing that — which flag, set by which prelaunch routine —
+needs either yaAGC GDB/MI debugger integration or a much deeper
+PINBALL-source dive. Out of scope for the current milestone train.
+Until that lands, the closed-loop test prints a `WARNING` and the
+committed `*_closed_loop_summary` fixtures still reflect the
+bank-zero trajectory.
 
 Before MS-E7f the tests sent `V37 63 ENTR` via `verb_noun(37, 63)`.
 That hit FOUR distinct problems compounding on each other: P63
