@@ -514,6 +514,10 @@ fn entry_initial_state_for(state: &AgcState) -> EntryInitialState {
         alfa_pad_deg: -20.0,
         lift_up: true,
         refsmmat: EntryInitialState::identity_refsmmat(),
+        // -1 ("rate-damp only") tells P62 to skip the WAKEP62
+        // attitude-maneuver wait and jump straight to P63 (see
+        // entry_state::EntryInitialState::cmdapmod for full context).
+        cmdapmod: -1,
     }
 }
 

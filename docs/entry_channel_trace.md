@@ -247,21 +247,38 @@ The live yaAGC instance is spawned with `--inhibit-alarms` so a
 long wall-clock gap between PIPA bursts doesn't cause the Night
 Watchman alarm to FRESH-START the AGC (which would clobber MODREG).
 
-### Known limitation (deferred to MS-E7g, #40)
+### Known limitation (partial fix in MS-E7g, deferred to MS-E7h, #41)
 
-With all of the above, the live test cleanly puts the AGC into
-P62 (`MODREG = 0o076`), but P62 doesn't always advance to P63. P62
-schedules a `WAKEP62` task that fires when the CM body attitude
-reaches the entry-attitude target; our integrator doesn't simulate
-the attitude maneuver, so `WAKEP62` never fires. Captured ROLLC
-history therefore stays at 0, the same as MS-E7e. The closed-loop
-test prints a `WARNING` and the committed `*_closed_loop_summary`
-fixtures still reflect the bank-zero trajectory.
+With everything above the live test cleanly puts the AGC into P62
+(`MODREG = 0o076`), but P62 doesn't advance to P63. MS-E7g extended
+[`EntryInitialState`] with a `cmdapmod` field and `patch_into` now
+writes `CMDAPMOD = -1` by default (`Comanche055/ERASABLE_ASSIGNMENTS.agc:767`,
+`E6,1700`). That's the value P62's branch at `P61-P67.agc:260-265`
+tests against to take the "go directly to P63" branch instead of
+scheduling the `WAKEP62` attitude-maneuver wait task.
 
-The remaining work — patching `CMDAPMOD` and other entry-DAP
-erasables so P62 takes the "go directly to P63" branch (line 263
-of P61-P67.agc), or alternatively simulating the attitude maneuver
-— is tracked in MS-E7g.
+The preload is correct (a one-off probe confirmed `CMDAPMOD = 077776`
+survives across the run) but P62 still doesn't advance, because the
+check sits **after** P62's `GOFLASH V06N61` wait for PROCEED — and
+the PROCEED never wakes the wait:
+
+- `V33 ENTR` (the keyboard form of PROCEED-WITHOUT-DATA via VBPROC)
+  fails to advance MODREG, even with 3-second delays before the
+  send. VERBREG stays at `0o045` (the V37 from the previous
+  sequence), suggesting no subsequent verb is being processed at
+  all while the GOFLASH wait is active.
+- The hardware PRO discrete on channel `0o32` bit 14 — toggled
+  press / release ~200 ms wall-clock — also doesn't advance MODREG.
+- Sending KEY RLSE before V33 ENTR doesn't help either.
+
+The diagnosis is that P62's GOFLASH wait isn't being woken by either
+PROCEED form in our setup. Likely candidates: a missing flagword
+that disables keyboard input, an AWAIT-job that timed out, or some
+PINBALL state we haven't initialised in the preload template. This
+is its own multi-session debugging exercise — tracked as MS-E7h
+(#41 → renumber on file). Until then the closed-loop test prints
+a `WARNING` and the committed `*_closed_loop_summary` fixtures
+still reflect the bank-zero trajectory.
 
 Before MS-E7f the tests sent `V37 63 ENTR` via `verb_noun(37, 63)`.
 That hit FOUR distinct problems compounding on each other: P63

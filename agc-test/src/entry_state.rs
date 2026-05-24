@@ -19,6 +19,7 @@
 //! | `ALFAPAD`   | SP × 1            | Hypersonic CM trim alpha (180°) |
 //! | `HEADSUP`   | SP × 1            | +1 lift-down, −1 lift-up |
 //! | `MODREG`    | SP × 1            | Major mode (0 = P00 idle) |
+//! | `CMDAPMOD`  | SP × 1            | Entry-DAP mode (-1 = direct P63) |
 //! | `FLAGWRD3`  | SP × 1            | OR-in REFSMFLG bit 13 |
 //!
 //! ## B-scaling
@@ -65,6 +66,29 @@ pub struct EntryInitialState {
     /// REFSMMAT (3 × 3 stable-member → ECI rotation). Row-major.
     /// Identity matrix when ECI ≡ IMU (the scenario default).
     pub refsmmat: [[f64; 3]; 3],
+    /// `CMDAPMOD` — the entry DAP mode selector
+    /// (`Comanche055/ERASABLE_ASSIGNMENTS.agc` line 767 = `E6,1700`).
+    /// P62 reads this after PROCEED to decide whether to schedule
+    /// `WAKEP62` (a task that waits for the body-attitude maneuver to
+    /// complete) or jump directly to P63:
+    ///
+    /// ```text
+    /// CS  CMDAPMOD     # P61-P67.agc:260-265
+    /// MASK ONE
+    /// BZF  P63.1       # taken if CMDAPMOD = -0 or +1  → WAKEP62 path
+    ///                  # otherwise (e.g. CMDAPMOD = -1 or +0) → TC P63 direct
+    /// ```
+    ///
+    /// Default `-1` (`0o77776` in 15-bit ones-complement) skips the
+    /// attitude-maneuver wait, which the harness does not simulate.
+    /// Stored as a raw 15-bit ones-complement word (not scaled).
+    ///
+    /// **Note (MS-E7g)**: the preload is in place but does not yet
+    /// drive a non-zero ROLLC end-to-end — P62's GOFLASH wait for
+    /// PROCEED currently doesn't wake on either V33 ENTR or the
+    /// hardware PRO discrete. See `docs/entry_channel_trace.md` and
+    /// the MS-E7h follow-up.
+    pub cmdapmod: i16,
 }
 
 impl EntryInitialState {
@@ -250,9 +274,20 @@ pub fn patch_into(
         },
     )?;
 
-    // MODREG (SP × 1, raw count). 0 = P00 idle so V37 63 ENTR is
-    // accepted on resume.
+    // MODREG (SP × 1, raw count). 0 = P00 idle so V37 ENTR 62 ENTR
+    // is accepted on resume.
     write_sp_raw(core, symtab, "MODREG", 0)?;
+
+    // CMDAPMOD (SP × 1, raw ones-complement count). See the
+    // `EntryInitialState::cmdapmod` doc-comment for the AGC decision
+    // path. Stored as the caller-supplied i16 packed to 15-bit
+    // ones-complement.
+    write_sp_raw(
+        core,
+        symtab,
+        "CMDAPMOD",
+        ones_complement_word(state.cmdapmod),
+    )?;
 
     // FLAGWRD3 — OR-in REFSMFLG bit 13 without disturbing the other
     // 14 flag bits. Read-modify-write.
@@ -446,6 +481,7 @@ Symbol Table\n\
      8,E:   EMSALT      E5,1510  \t   9,E:   ALFAPAD     E5,1514  \n\
     10,E:   HEADSUP     E5,1516  \t  11,E:   MODREG      E5,1520  \n\
     12,E:   FLAGWRD3    E5,1522  \t  13,E:   ROLLC       E5,1524  \n\
+    14,E:   CMDAPMOD    E5,1526  \n\
 ";
         Symtab::parse(text)
     }
@@ -465,6 +501,7 @@ Symbol Table\n\
             alfa_pad_deg: -20.0,
             lift_up: true,
             refsmmat: EntryInitialState::identity_refsmmat(),
+            cmdapmod: -1,
         }
     }
 
@@ -732,6 +769,29 @@ Symbol Table\n\
                 assert_eq!(symbol, "RN");
             }
             other => panic!("expected MissingSymbol, got {other:?}"),
+        }
+    }
+
+    /// TC-ES-CMDAPMOD-1: CMDAPMOD lands at the right address with the
+    /// expected 15-bit ones-complement bit pattern for `-1`, `0`, and
+    /// `+1`. The AGC's P62 decision branch
+    /// (`P61-P67.agc:260-265`) reads this raw word; getting the bit
+    /// pattern wrong silently re-routes through the WAKEP62 path.
+    #[test]
+    fn tc_es_cmdapmod_round_trip() {
+        let symtab = fixture_symtab();
+        let addr = symtab.get("CMDAPMOD").unwrap();
+
+        for (value, expected_raw) in [(-1_i16, 0o77776_u16), (0, 0), (1, 1)] {
+            let mut core = empty_core();
+            let mut state = default_state();
+            state.cmdapmod = value;
+            patch_into(&mut core, &symtab, &state).unwrap();
+            let raw = core.read_sp(addr).unwrap();
+            assert_eq!(
+                raw, expected_raw,
+                "CMDAPMOD={value} → expected raw {expected_raw:o}, got {raw:o}"
+            );
         }
     }
 }
