@@ -91,6 +91,25 @@ pub const Q7F_AGC: f64 = 0.007_453_416_1;
 /// branch (REENTRY_CONTROL.agc:895) compares against this threshold.
 pub const Q7F_G: f64 = Q7F_AGC * 25.0;
 
+/// HUNTEST `CHOOK` constant — base of the `AHOOKDV` correction
+/// (REENTRY_CONTROL.agc:1567 `2DEC 1 B-6` = `1 / 2⁶` = `1/64`).
+pub const CHOOK: f64 = 1.0 / 64.0;
+
+/// HUNTEST `CH1` constant — scales the `(AHOOKDV + 1/16) · DVL² / DHOOK / VBARS`
+/// correction subtracted from `GAMMAL1` (REENTRY_CONTROL.agc:1571
+/// `2DEC .32 B1` = `0.32 · 2` = `0.64`).
+pub const CH1: f64 = 0.64;
+
+/// HUNTEST `1/16TH` constant — added to `AHOOKDV` before the `CH1` scale,
+/// representing the "1 + AHOOK·DVL" term in the (AGC-fixed-point)
+/// correction (REENTRY_CONTROL.agc:1491 `DP2(-4)` = `2⁻⁴` = `0.0625`).
+pub const ONE_SIXTEENTH: f64 = 1.0 / 16.0;
+
+/// HUNTEST `AHOOKDV` divisor — equals `2⁶` (the `SR 6` in
+/// REENTRY_CONTROL.agc:621 trace; divides `DHOOK` before the `Q7`
+/// normalisation produces the dimensionless `AHOOKDV`).
+pub const AHOOKDV_DIVISOR: f64 = 64.0;
+
 /// AGC's "1 g" reference acceleration — 32.2 ft/s² in SI = 9.81456 m/s².
 ///
 /// Used to convert between `sensed_acceleration_g` (which uses the modern
@@ -208,8 +227,8 @@ pub const Q6_RAD: f64 = 0.034_9;
 /// AGC: `KC3 = -.0247622232` scaled `-(4 VS · VS / 2π · 805 · R_E)`. The
 /// underlying expression is `-4·VS²/(2π·805·R_E)`; we store the SI value
 /// `-4·VSAT²/(2π·g₀·R_E)` (nm·s²/m²).
-pub const KC3_NM_PER_M2_PER_S2: f64 = -4.0 * VSAT_MPS * VSAT_MPS
-    / (2.0 * core::f64::consts::PI * 9.815 * 6_462_643.92);
+pub const KC3_NM_PER_M2_PER_S2: f64 =
+    -4.0 * VSAT_MPS * VSAT_MPS / (2.0 * core::f64::consts::PI * 9.815 * 6_462_643.92);
 
 /// Up-range scaling constant `C12` (nautical miles, per natural-log unit).
 ///
