@@ -252,6 +252,49 @@ pub const KC3_AGC: f64 = -0.024_762_223_2;
 /// `ASPUP_rev = -C12 · log(...) / GAMMAL1` evaluation.
 pub const C12_AGC: f64 = 0.006_845_729_01;
 
+/// DOWNCNTL / CONSTD feedback gain `K1D` — physical (post-SL8) form.
+///
+/// AGC erasable: `K1D = 2DEC .0314453125` (REENTRY_CONTROL.agc:1547) =
+/// `C16·805/256` where C16 = 0.01. The `/256` is undone by the AGC's
+/// `SL 8D` shift at the end of CONSTD1 (line 1057). We bake the `·256`
+/// into the constant so SI call sites use it directly:
+/// `K1D · (D_AGC − DREF_AGC)` against AGC-normalised drag.
+///
+/// Numeric: `0.0314453125 · 256 = 8.05 = 0.01 · 805`.
+pub const K1D_AGC: f64 = 8.05;
+
+/// DOWNCNTL / CONSTD feedback gain `K2D` — physical (post-SL8) form.
+///
+/// AGC erasable: `K2D = 2DEC -.201298418` (REENTRY_CONTROL.agc:1549) =
+/// `-C17·2·VS/256` where C17 = 0.001 and `2·VS` is in ft/s. Same SL8
+/// deferral as [`K1D_AGC`]. Numeric: `-0.201298418 · 256 ≈ -51.532` —
+/// which equals `-0.001 · 2·VSAT_ft/s`. Applied to AGC-normalised
+/// `(RDOT − RDTR) = (rdot_n − lad·(v1_n−v_n))`, the contribution to L/D
+/// is `-0.00328 · rdot_mps`-equivalent (the `2·VSAT` normalisation
+/// cancels).
+pub const K2D_AGC: f64 = -51.532_395_008;
+
+/// CONSTD reference-drag coefficient `2HS` — AGC-native dimensionless value.
+///
+/// AGC: `2HS = 2DEC .0172786611` (REENTRY_CONTROL.agc:1581) =
+/// `2·28500·25·32.2 / (4·VS·VS)`. Pairs with `D0/V` in CONSTD's
+/// `RDOTREF = -2·HS·D0/V` (line 1045).
+pub const TWO_HS_AGC: f64 = 0.017_278_661_1;
+
+/// D0 initialiser `KA3` — AGC-native dimensionless value.
+///
+/// AGC: `KA3 = 2DEC .44720497` (REENTRY_CONTROL.agc:1603) = `90·4/805`.
+/// Used in `D0 = KA3·LEQ + KA4` (line 441-447), the equilibrium-drag fit
+/// that drives CONSTD's reference profile.
+pub const KA3_AGC: f64 = 0.447_204_97;
+
+/// D0 floor `KA4` — AGC-native dimensionless value.
+///
+/// AGC: `KA4 = 2DEC .049689441` (REENTRY_CONTROL.agc:1605) = `40/805` ≈
+/// 0.127 g. Same constant as `Q7MIN_G` reused in a different role: here
+/// it's the additive floor of the `D0 = KA3·LEQ + KA4` equilibrium drag.
+pub const KA4_AGC: f64 = 0.049_689_441;
+
 /// Pre-tabulated point along the entry reference profile (velocity sample).
 ///
 /// Source: REENTRY_CONTROL.agc lines 1412–1467 — four parallel columns

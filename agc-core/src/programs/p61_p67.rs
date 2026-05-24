@@ -153,6 +153,14 @@ pub struct EntryState {
     ///
     /// Saved at end of each HUNTEST pass for the next cycle's Newton step.
     pub diffold_km: f64,
+    /// SKIPPER nonlinear gain — `FACTOR` in REENTRY_CONTROL.agc.
+    ///
+    /// Updated each `Skip` cycle by UPCONTRL's CONTINU2 block (AGC lines
+    /// 955-968) when `D > Q7MIN`; frozen at the previous value otherwise.
+    /// `F1 = (A1 - Q7F) / (D - Q7F)` where `A1` is `D` (descending) or
+    /// `A0` (climbing), per HUNTEST lines 502 / 535. Stage-A default is
+    /// `1.0` (the previous fixed-gain approximation).
+    pub factor: f64,
     /// `false` until the first SERVICER cycle in `EntryPhase::Entry`.
     ///
     /// On the first cycle, `lewd_ref` and `dlewd` are initialised from the
@@ -184,6 +192,7 @@ impl EntryState {
             lewd_ref: 0.0,
             dlewd: 0.0,
             diffold_km: 0.0,
+            factor: 1.0,
             hunt_initialized: false,
             target_lat_rad: 0.0,
             target_lon_rad: 0.0,
@@ -365,6 +374,7 @@ pub fn entry_servicer_exit(state: &mut crate::AgcState) {
         state.entry.dlewd = upd.dlewd_new;
         state.entry.diffold_km = upd.diffold_new_km;
         state.entry.downrange_error_km = upd.diffold_new_km;
+        state.entry.factor = upd.factor_new;
         state.entry.hunt_initialized = true;
 
         state.entry.roll_command_rad = entry::resolve_roll(state, state.entry.ld_command);

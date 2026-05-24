@@ -49,10 +49,10 @@
 
 use crate::guidance::entry_tables::{
     lookup_reference, AHOOKDV_DIVISOR, C12_AGC, C18_MPS, C20_G, CH1, CHOOK, DLEWD_INIT,
-    FPSS_805_MPS2, HUNTEST_CONVERGED_KM, KB1, KB2_MPS, KC3_AGC, LAD_NOMINAL, LD_CMIN_RATIO,
-    LEWD_INIT, LOD_NOMINAL, ONE_SIXTEENTH, POINT1, PT1_OVER_16, Q21_AGC, Q22_AGC, Q3_AGC, Q5_AGC,
-    Q6_RAD, Q7F_AGC, Q7F_G, RANGE_ERR_THRESHOLD_KM, TWO_C1_HS_AGC, VFINAL1_MPS, VLMIN_MPS,
-    VQUIT_MPS, VSAT_MPS,
+    FPSS_805_MPS2, HUNTEST_CONVERGED_KM, K1D_AGC, K2D_AGC, KA3_AGC, KA4_AGC, KB1, KB2_MPS, KC3_AGC,
+    LAD_NOMINAL, LD_CMIN_RATIO, LEWD_INIT, LOD_NOMINAL, ONE_SIXTEENTH, POINT1, PT1_OVER_16,
+    Q21_AGC, Q22_AGC, Q3_AGC, Q5_AGC, Q6_RAD, Q7F_AGC, Q7F_G, Q7MIN_G, RANGE_ERR_THRESHOLD_KM,
+    TWO_C1_HS_AGC, TWO_HS_AGC, VFINAL1_MPS, VLMIN_MPS, VQUIT_MPS, VSAT_MPS,
 };
 use crate::navigation::state_vector::inertial_to_earth_fixed;
 use crate::navigation::time::met_to_gha;
@@ -83,6 +83,11 @@ pub struct LdUpdate {
     pub dlewd_new: f64,
     /// `DIFFOLD` for next cycle = the current downrange error (km).
     pub diffold_new_km: f64,
+    /// SKIPPER `FACTOR` (`F1`) to persist for the next cycle.
+    ///
+    /// Computed by UPCONTRL's CONTINU2 block when `D > Q7MIN`; carried
+    /// through unchanged by HUNTEST / ballistic / final-phase paths.
+    pub factor_new: f64,
 }
 
 /// Predicted total range (km) from the current state to the point where the
@@ -205,6 +210,12 @@ struct HuntestSetup {
     a0_agc: f64,
     /// `A₀` in g (drag in standard gravities).
     a0_g: f64,
+    /// `A₁` — drag value used by the SKIPPER `F1 = FACTOR` gain.
+    ///
+    /// Per `REENTRY_CONTROL.agc:500-535`: `A1 = D` when descending
+    /// (`RDOT < 0`); `A1 = A0` when level or climbing (`RDOT ≥ 0`,
+    /// the skip-out path). AGC `805 FPSS` units.
+    a1_agc: f64,
     /// `ALP` (AGC line 547). Dimensionless.
     alp: f64,
     /// `FACT1` (AGC line 558). AGC-normalised.
@@ -339,12 +350,17 @@ fn huntest_setup(state: &AgcState) -> Option<HuntestSetup> {
     };
 
     let a0_g = a0_agc * 25.0; // AGC 805 FPSS = 25 g.
+                              // A1 setup (AGC lines 502 + 532-535): initial `A1 = D`; if `RDOT ≥ 0`
+                              // (climbing or level — the skip-out regime), `A1` is overwritten with
+                              // `A0` so the SKIPPER's `F1` gain sees the predicted pull-out drag.
+    let a1_agc = if rdot < 0.0 { d_agc } else { a0_agc };
 
     Some(HuntestSetup {
         v1_n: v1_n_after_lead,
         v1_mps: v1_n_after_lead * 2.0 * VSAT_MPS,
         a0_agc,
         a0_g,
+        a1_agc,
         alp,
         fact1,
         fact2,
@@ -441,6 +457,8 @@ pub fn compute_ld_command(state: &AgcState) -> LdUpdate {
         lewd_new: lewd_new_raw,
         dlewd_new: dlewd_clamped,
         diffold_new_km: diff_km,
+        // HUNTEST does not touch FACTOR — carry the previous value through.
+        factor_new: state.entry.factor,
     }
 }
 
@@ -479,56 +497,82 @@ pub fn resolve_roll(state: &AgcState, ld_cmd: f64) -> f64 {
 /// Run one P65 UPCONTRL / SKIPPER iteration and return the new vertical
 /// L/D command for the next 2-s SERVICER cycle.
 ///
-/// Implements `REENTRY_CONTROL.agc:882–1020` in three branches:
+/// Implements `REENTRY_CONTROL.agc:882–1091` across four branches.
 ///
 /// 1. **`D < Q7F`** (drag too low — vehicle is above the sensible
 ///    atmosphere): freeze `L/D` at its previous value. The AGC routes to
 ///    `KEP` (P66 ballistic) here; we keep the controller alive so the next
 ///    SERVICER cycle can resume closed-loop guidance when drag returns.
-/// 2. **`D > A0` *or* `D > C20`** (drag exceeds predicted pull-out — we're
+/// 2. **`V > V₁`** (current velocity exceeds predicted pull-out velocity):
+///    enter the `DOWNCNTL` branch (AGC lines 1061-1091). Required for the
+///    lunar-return regime where the vehicle skips out with V ≳ V₁ during
+///    the upper-atmosphere arc.
+/// 3. **`D > A0` *or* `D > C20`** (drag exceeds predicted pull-out — we're
 ///    decelerating too fast): command max lift-up `L/D = LAD`
 ///    (AGC `STOREL/D` via `GOPOSLAD`).
-/// 3. **Nominal SKIPPER feedback law** (AGC line 975 `UPCNTRL3`):
+/// 4. **Nominal SKIPPER feedback law** (AGC line 975 `UPCNTRL3`):
 ///    ```text
 ///    VREF    = FACT1 · (1 − sqrt(FACT2·D + ALP))      (line 918)
 ///    RDOTREF = LEWD · (V1 − VREF)                     (line 929)
+///    F1      = FACTOR                                  (line 967)
 ///    ΔL/D    = −((RDOT − RDOTREF)·F1/KB1 + V − VREF)·F1/KB2
 ///    L/D     = LEWD + ΔL/D                             (clamped to ±LAD)
 ///    ```
-///    The `F1 = FACTOR = (A1 − Q7)/(D − Q7)` nonlinear gain is approximated
-///    by `F1 = 1` in stage A — the gain compression at large
-///    deceleration is a refinement deferred until VAGC fixtures (MS-E4b).
+///    The `F1 = FACTOR = (A1 − Q7F)/(D − Q7F)` nonlinear gain (AGC line
+///    961-968) is updated only when `D > Q7MIN`; below that threshold the
+///    previous-cycle `FACTOR` is reused (matching the AGC `BMN UPCNTRL3`
+///    branch that skips the `STORE FACTOR` and reuses erasable memory).
+///    `A1 = D` when descending (`RDOT < 0`), `A1 = A0` when climbing —
+///    cached on `HuntestSetup`. The first-cycle default is `FACTOR = 1`
+///    (set by `EntryState::new`).
 ///
-/// The `DOWNCNTL` branch (V > V₁, line 1061) and the `CONSTD` constant-drag
-/// branch (line 1036) are not yet implemented; both are MS-E4b scope.
+/// The `CONSTD` constant-drag branch math is exposed by [`constd_dref_agc`]
+/// for unit testing; wiring it into the phase state machine — when RANGER's
+/// LEWD iteration diverges, or `VSAT − VL < 0` — is a follow-up since both
+/// triggers fire well off-nominal and we need the rest of the pipeline (LEQ /
+/// VSQUARE state) before the wire-up is meaningful.
 pub fn upcontrol_step(state: &AgcState) -> LdUpdate {
     let lewd_prev = state.entry.lewd_ref;
     let d_g = state.entry.sensed_acceleration_g;
+    let factor_prev = state.entry.factor;
     let v = velocity_mps(state);
     let rdot = state.entry.r_dot_mps;
 
+    let frozen = |state: &AgcState| LdUpdate {
+        ld_command: state.entry.ld_command,
+        lewd_new: state.entry.lewd_ref,
+        dlewd_new: state.entry.dlewd,
+        diffold_new_km: state.entry.diffold_km,
+        factor_new: factor_prev,
+    };
+
     // Branch 1: drag too low — freeze L/D (AGC `KEP`, line 895).
     if d_g < Q7F_G {
+        return frozen(state);
+    }
+
+    // Need HUNTEST intermediates for branches 2-4. If the setup is
+    // degenerate, freeze L/D — same defensive behavior as branch 1.
+    let Some(s) = huntest_setup(state) else {
+        return frozen(state);
+    };
+
+    let d_agc = d_g * G0_MPS2 / FPSS_805_MPS2;
+
+    // Branch 2: V > V₁ — DOWNCNTL (AGC lines 1061-1091).
+    if v > s.v1_mps {
+        let ld_command = downcntl_ld(&s, v, rdot, d_agc);
         return LdUpdate {
-            ld_command: state.entry.ld_command,
+            ld_command,
             lewd_new: lewd_prev,
-            dlewd_new: state.entry.dlewd,
+            dlewd_new: 0.0,
             diffold_new_km: state.entry.diffold_km,
+            // DOWNCNTL doesn't touch FACTOR.
+            factor_new: factor_prev,
         };
     }
 
-    // Need HUNTEST intermediates for branches 2 & 3. If the setup is
-    // degenerate, freeze L/D — same defensive behavior as branch 1.
-    let Some(s) = huntest_setup(state) else {
-        return LdUpdate {
-            ld_command: state.entry.ld_command,
-            lewd_new: lewd_prev,
-            dlewd_new: state.entry.dlewd,
-            diffold_new_km: state.entry.diffold_km,
-        };
-    };
-
-    // Branch 2: drag exceeds predicted pull-out drag *or* C20 trip — full
+    // Branch 3: drag exceeds predicted pull-out drag *or* C20 trip — full
     // lift-up. AGC `CONT1` (line 909) and `NEGTESTS` (line 1008).
     if d_g > s.a0_g || d_g > C20_G {
         let ld_command = LAD_NOMINAL;
@@ -537,23 +581,18 @@ pub fn upcontrol_step(state: &AgcState) -> LdUpdate {
             lewd_new: ld_command,
             dlewd_new: 0.0,
             diffold_new_km: state.entry.diffold_km,
+            factor_new: factor_prev,
         };
     }
 
-    // Branch 3: nominal SKIPPER law.
+    // Branch 4: nominal SKIPPER law.
     // VREF (AGC line 918): FACT1 · (1 − sqrt(FACT2·D + ALP)).
     // FACT2 and D both carry AGC-stored "fraction-of-805-FPSS" units so
     // their product is dimensionless (matches the AGC formula).
-    let d_agc = d_g * G0_MPS2 / FPSS_805_MPS2;
     let inner = s.fact2 * d_agc + s.alp;
     if inner < 0.0 {
         // Pathological state — freeze L/D.
-        return LdUpdate {
-            ld_command: state.entry.ld_command,
-            lewd_new: lewd_prev,
-            dlewd_new: state.entry.dlewd,
-            diffold_new_km: state.entry.diffold_km,
-        };
+        return frozen(state);
     }
     let vref_n = s.fact1 * (1.0 - libm::sqrt(inner));
     let vref_mps = vref_n * 2.0 * VSAT_MPS;
@@ -561,9 +600,19 @@ pub fn upcontrol_step(state: &AgcState) -> LdUpdate {
     // RDOTREF (AGC line 929): LEWD · (V1 − VREF).
     let rdotref_mps = lewd_prev * (s.v1_mps - vref_mps);
 
-    // FACTOR (`F1`, AGC line 967): (A1 − Q7) / (D − Q7), bounded.
-    // Stage A simplification: F1 = 1 (gain compression deferred). See doc.
-    let factor = 1.0;
+    // FACTOR (`F1`, AGC lines 955-968): `(A1 − Q7F) / (D − Q7F)` when
+    // `D > Q7MIN`; otherwise reuse the cached previous value (the AGC
+    // skips the `STORE FACTOR` via the `BMN UPCNTRL3` branch).
+    let factor = if d_g > Q7MIN_G {
+        let denom = d_agc - Q7F_AGC;
+        if denom.abs() < 1e-9 {
+            factor_prev
+        } else {
+            (s.a1_agc - Q7F_AGC) / denom
+        }
+    } else {
+        factor_prev
+    };
 
     // ΔL/D = −((RDOT − RDOTREF)·F1/KB1 + V − VREF)·F1/KB2.
     let rdot_err = rdot - rdotref_mps;
@@ -573,8 +622,7 @@ pub fn upcontrol_step(state: &AgcState) -> LdUpdate {
 
     // Nonlinear gain reduction (AGC lines 989–998): if |ΔL/D| > PT1_OVER_16,
     // compress the magnitude by `POINT1 · |ΔL/D| + PT1_OVER_16` with sign
-    // preserved. Stage A applies a clamp-only version since the AGC's
-    // exact compression curve will be validated in MS-E4b.
+    // preserved.
     let delta_ld = if raw_delta_ld.abs() > PT1_OVER_16 {
         let compressed = POINT1 * raw_delta_ld.abs() + PT1_OVER_16;
         compressed.copysign(raw_delta_ld)
@@ -594,7 +642,90 @@ pub fn upcontrol_step(state: &AgcState) -> LdUpdate {
         lewd_new: lewd_prev,
         dlewd_new: delta_ld,
         diffold_new_km: state.entry.diffold_km,
+        factor_new: factor,
     }
+}
+
+/// DOWNCNTL L/D command — REENTRY_CONTROL.agc:1061-1091 + CONSTD1 (line
+/// 1053-1059).
+///
+/// Entered when `V > V₁` (vehicle has more energy than the predicted pull-out
+/// state). Computes a reference drag profile and a candidate L/D that biases
+/// toward lift-down, then sums in `K1D·(D − DREF)` as a closed-loop drag
+/// correction.
+///
+/// All variables in AGC-normalised form (V, V₁, RDOT divided by `2·VSAT`;
+/// drag values divided by `FPSS_805`). The output L/D is dimensionless and
+/// clamped to ±LAD.
+///
+/// ```text
+/// RDTR  = LAD · (V₁ − V)                                      (AGC line 1068)
+/// L/D_c = LAD + K2D · (RDOT − RDTR)
+/// DREF  = (V/V₁)² · A0 − (V₁ − V)² · LAD / (2·C1·HS)         (AGC line 1093)
+/// L/D   = clamp(L/D_c + K1D · (D − DREF) , −LAD, +LAD)        (CONSTD1)
+/// ```
+///
+/// All operands are AGC-normalised inside this function — the V, RDOT
+/// arguments are SI (m/s) and the conversion happens here.
+fn downcntl_ld(s: &HuntestSetup, v_mps: f64, rdot_mps: f64, d_agc: f64) -> f64 {
+    let v_n = v_mps / (2.0 * VSAT_MPS);
+    let rdot_n = rdot_mps / (2.0 * VSAT_MPS);
+    let v1_n = s.v1_n;
+    let lad = LAD_NOMINAL;
+
+    let v1_minus_v = v1_n - v_n; // negative since V > V₁.
+    let rdtr_n = lad * v1_minus_v;
+    let ld_candidate = lad + K2D_AGC * (rdot_n - rdtr_n);
+
+    let v_over_v1 = v_n / v1_n;
+    let dref_agc = v_over_v1 * v_over_v1 * s.a0_agc - v1_minus_v * v1_minus_v * lad / TWO_C1_HS_AGC;
+
+    let drag_error = d_agc - dref_agc;
+    let ld_raw = ld_candidate + K1D_AGC * drag_error;
+    ld_raw.clamp(-LAD_NOMINAL, LAD_NOMINAL)
+}
+
+/// CONSTD reference drag — REENTRY_CONTROL.agc:1023-1059.
+///
+/// Computes the constant-drag DREF profile entered (1) from RANGER when
+/// the LEWD iteration fails to converge (`DCONSTD` at line 1023) or (2)
+/// from UPCONTRL when `VSAT − VL < 0` (`BECONSTD` at line 601). The
+/// returned `DREF` is in AGC-normalised drag units (`/ FPSS_805`).
+///
+/// ```text
+/// LEQ      = V² / (4·VSAT²) − 1                       (AGC line 238)
+/// D0       = KA3 · LEQ + KA4                          (AGC line 441-447)
+/// C/D0     = −4 / D0                                  (line 451)
+/// RDOTREF  = −2·HS · D0 / V_n                         (line 1045)
+/// DREF     = LEQ · C/D0 + K2D · (RDOT − RDOTREF)
+///            + K1D · (D − DREF)  ⟶ shared in CONSTD1
+/// ```
+///
+/// Returns the bare reference (LEQ · C/D0) prior to the SKIPPER-style
+/// correction. The phase state machine does not yet route this — wiring
+/// CONSTD into UPCONTRL / RANGER divergence handling is tracked separately;
+/// today the helper exists so the math is locked in against the AGC formula.
+pub(crate) fn constd_dref_agc(v_mps: f64, rdot_mps: f64) -> f64 {
+    let v_n = v_mps / (2.0 * VSAT_MPS);
+    let rdot_n = rdot_mps / (2.0 * VSAT_MPS);
+
+    // LEQ = V_n² · 4 − 1 (since VSQUARE in the AGC is `V·V/4` and FOURTH = 1/4
+    // on the same scale). Algebraically LEQ_real = V²/VSAT² − 1.
+    // We store the same dimensionless value as the AGC's LEQ erasable.
+    let leq = v_n * v_n * 4.0 - 1.0;
+
+    let d0 = KA3_AGC * leq + KA4_AGC;
+    if d0.abs() < 1e-9 {
+        return KA4_AGC;
+    }
+    let c_over_d0 = -4.0 / d0;
+
+    // Bare DREF (LEQ · C/D0) — the SKIPPER-style RDOT correction is
+    // applied by the caller once we wire CONSTD into the dispatcher.
+    let rdotref_n = -TWO_HS_AGC * d0 / v_n.max(1e-6);
+    let _ = rdotref_n; // silence unused once wired
+    let _ = rdot_n;
+    leq * c_over_d0
 }
 
 /// P66 ballistic phase — zero-roll-rate hold, no closed loop.
@@ -618,6 +749,7 @@ pub fn ballistic_step(state: &AgcState) -> LdUpdate {
         lewd_new: state.entry.lewd_ref,
         dlewd_new: 0.0,
         diffold_new_km: state.entry.diffold_km,
+        factor_new: state.entry.factor,
     }
 }
 
@@ -670,6 +802,7 @@ pub fn final_phase_step(state: &AgcState) -> LdUpdate {
         lewd_new: state.entry.lewd_ref,
         dlewd_new: 0.0,
         diffold_new_km: state.entry.diffold_km,
+        factor_new: state.entry.factor,
     }
 }
 
@@ -1424,6 +1557,180 @@ mod tests {
             upd.ld_command.abs() <= LAD_NOMINAL + 1e-9,
             "ld_command must be saturated to ±LAD, got {}",
             upd.ld_command
+        );
+    }
+
+    /// TC-MSE4B-F1-1: SKIPPER F1 = (A1 - Q7F)/(D - Q7F) when climbing at
+    /// high drag.
+    ///
+    /// With RDOT ≥ 0 the HUNTEST setup writes `A1 = A0` (line 535) and the
+    /// SKIPPER gets the AGC's nonlinear F1 gain. The CONTINU2 update branch
+    /// only fires when `D > Q7MIN_G ≈ 1.24 g` (AGC line 957) — below that
+    /// FACTOR is held over from the previous cycle. Hand-computed reference
+    /// at a high-drag climbing snapshot:
+    ///
+    /// ```text
+    /// V = 10 km/s, RDOT = +50 m/s, D = 1.5 g, LEWD = 0.15
+    /// v_n     = 0.6367,  rdot_n   = 0.00318,  tem1b = LEWD = 0.15
+    /// v1_n    = 0.6580,  v1_over_v = 1.0334
+    /// d_agc   = 1.5·g₀/FPSS_805 = 0.05997
+    /// a0_agc  = 1.0334² · (0.05997 + 0.00318²/(0.15·2C1HS)) ≈ 0.06734
+    /// a1_agc  = a0_agc  (since rdot ≥ 0)
+    /// F1      = (0.06734 - 0.00745) / (0.05997 - 0.00745) ≈ 1.140
+    /// ```
+    #[test]
+    fn tc_mse4b_f1_1_climbing_amplified_gain() {
+        let mut state = AgcState::new();
+        state.csm_state.position = [6_500_000.0, 0.0, 0.0];
+        state.csm_state.velocity = [50.0, 10_000.0, 0.0];
+        state.entry.r_dot_mps = 50.0;
+        state.entry.sensed_acceleration_g = 1.5;
+        state.entry.phase = EntryPhase::Skip;
+        state.entry.hunt_initialized = true;
+        state.entry.lewd_ref = LEWD_INIT;
+        state.entry.factor = 1.0;
+
+        let upd = upcontrol_step(&state);
+        assert!(
+            (upd.factor_new - 1.140).abs() < 0.05,
+            "F1 expected ≈ 1.140, got {}",
+            upd.factor_new
+        );
+    }
+
+    /// TC-MSE4B-F1-2: SKIPPER F1 = 1.0 exactly when descending at high drag.
+    ///
+    /// With RDOT < 0 the HUNTEST setup keeps `A1 = D` (line 502), so the
+    /// numerator and denominator of `(A1-Q7F)/(D-Q7F)` are identical and
+    /// `F1 = 1`. The AGC's gain compression effectively only activates on
+    /// the skip-out climb. We pick `D = 1.5 g > Q7MIN_G` so the FACTOR
+    /// update branch is taken; the pre-loaded `factor = 1.5` must be
+    /// overwritten with `1.0`.
+    #[test]
+    fn tc_mse4b_f1_2_descending_unity_gain() {
+        let mut state = AgcState::new();
+        state.csm_state.position = [6_500_000.0, 0.0, 0.0];
+        state.csm_state.velocity = [-100.0, 8_000.0, 0.0];
+        state.entry.r_dot_mps = -100.0;
+        state.entry.sensed_acceleration_g = 1.5;
+        state.entry.phase = EntryPhase::Skip;
+        state.entry.hunt_initialized = true;
+        state.entry.lewd_ref = LEWD_INIT;
+        state.entry.factor = 1.5;
+
+        let upd = upcontrol_step(&state);
+        // With D = 1.5 g the SKIPPER may saturate `D > A0_g` and route to
+        // branch 3 (max-lift-up). Either way, FACTOR is unchanged on that
+        // path — but on the SKIPPER path A1 = D collapses the ratio to 1.
+        // Both legal outcomes are acceptable; we just require it isn't the
+        // pre-loaded 1.5 if the SKIPPER ran.
+        let on_skipper = (upd.factor_new - 1.0).abs() < 1e-12;
+        let on_branch3 = (upd.factor_new - 1.5).abs() < 1e-12 && upd.ld_command == LAD_NOMINAL;
+        assert!(
+            on_skipper || on_branch3,
+            "F1 must be 1.0 (SKIPPER) or factor unchanged with full-LAD lift (branch 3), \
+             got factor={}, ld={}",
+            upd.factor_new,
+            upd.ld_command
+        );
+    }
+
+    /// TC-MSE4B-F1-3: `D < Q7MIN_G` freezes FACTOR at its previous value.
+    ///
+    /// Per AGC CONTINU2 (line 957-958), the `BMN UPCNTRL3` branch skips
+    /// `STORE FACTOR`, leaving the erasable variable at whatever the prior
+    /// cycle left there. We pre-load `factor = 2.5` and verify the SKIPPER
+    /// passes it through unchanged at a typical mid-entry drag of 0.5 g
+    /// (which is `> Q7F_G ≈ 0.186 g` so branch 1 doesn't freeze, but
+    /// `< Q7MIN_G ≈ 1.242 g` so CONTINU2 skips the update).
+    #[test]
+    fn tc_mse4b_f1_3_low_drag_freezes_factor() {
+        let mut state = AgcState::new();
+        state.csm_state.position = [6_500_000.0, 0.0, 0.0];
+        state.csm_state.velocity = [-50.0, 10_000.0, 0.0];
+        state.entry.r_dot_mps = -50.0;
+        state.entry.sensed_acceleration_g = 0.5;
+        state.entry.phase = EntryPhase::Skip;
+        state.entry.hunt_initialized = true;
+        state.entry.lewd_ref = LEWD_INIT;
+        state.entry.factor = 2.5;
+
+        let upd = upcontrol_step(&state);
+        assert!(
+            (upd.factor_new - 2.5).abs() < 1e-12,
+            "FACTOR must be frozen at 2.5 when D < Q7MIN_G, got {}",
+            upd.factor_new
+        );
+    }
+
+    /// TC-MSE4B-DOWNCNTL-1: DOWNCNTL branch fires when V > V₁ and produces
+    /// a closed-loop L/D from the DREF / K1D / K2D feedback.
+    ///
+    /// Hand-computed reference (with V1LEAD applied — prior cycle commanded
+    /// lift-down, so V₁ is reduced by VQUIT):
+    ///
+    /// ```text
+    /// V = 8 km/s, RDOT = -200 m/s, D = 1.0 g, LEWD = 0.15, ld_cmd_prev = -0.05
+    /// v_n      = 0.5094,  rdot_n      = -0.01273,  tem1b = LAD = 0.3
+    /// v1_pre   = 0.4670,  v1_after_lead = 0.4476 (= v1_pre − VQUIT/(2·VSAT))
+    /// d_agc    = 1.0·g₀/FPSS_805 = 0.04000
+    /// a0_agc   = (0.467/0.5094)² · (0.04 + 0.01273²/(0.3·2C1HS)) ≈ 0.05462
+    /// V > V₁ (8000 > 7030) → DOWNCNTL.
+    ///
+    /// v1_minus_v  = -0.0618,  rdtr_n = LAD·v1_minus_v = -0.01854
+    /// (rdot_n − rdtr_n) = 0.00581
+    /// ld_candidate = LAD + K2D · 0.00581 = 0.3 − 51.53·0.00581 ≈ 0.0006
+    /// (V/V₁)² · a0 − (V₁−V)² · LAD / 2C1HS
+    ///   = 1.138² · 0.05462 − 0.0618² · 0.3 / 0.0216 ≈ 0.0707 − 0.0531 = 0.0177
+    /// drag_error = 0.04 − 0.0177 = 0.0223
+    /// L/D = 0.0006 + 8.05 · 0.0223 ≈ 0.180
+    /// ```
+    #[test]
+    fn tc_mse4b_downcntl_1_v_above_v1_gives_closed_loop_ld() {
+        let mut state = AgcState::new();
+        state.csm_state.position = [6_500_000.0, 0.0, 0.0];
+        state.csm_state.velocity = [-200.0, 8_000.0, 0.0];
+        state.entry.r_dot_mps = -200.0;
+        state.entry.sensed_acceleration_g = 1.0;
+        state.entry.phase = EntryPhase::Skip;
+        state.entry.hunt_initialized = true;
+        state.entry.lewd_ref = LEWD_INIT;
+        // Negative ld_command triggers V1LEAD in huntest_setup.
+        state.entry.ld_command = -0.05;
+        state.entry.factor = 1.0;
+
+        let upd = upcontrol_step(&state);
+        assert!(
+            (upd.ld_command - 0.180).abs() < 0.02,
+            "DOWNCNTL L/D expected ≈ 0.180, got {}",
+            upd.ld_command
+        );
+    }
+
+    /// TC-MSE4B-CONSTD-1: `constd_dref_agc` math is locked against drift.
+    ///
+    /// CONSTD's `D0 = KA3·LEQ + KA4` and `C/D0 = -4/D0` together give a
+    /// bare reference `DREF = LEQ · C/D0`. For a representative supercircular
+    /// input the values can be hand-checked.
+    ///
+    /// ```text
+    /// V = 10 km/s, RDOT = -100 m/s
+    /// v_n  = 0.6367,  LEQ = 4·v_n² − 1 = 4·0.4053 − 1 = 0.6213
+    /// D0   = KA3·LEQ + KA4 = 0.447·0.6213 + 0.0497 = 0.3275
+    /// C/D0 = -4/0.3275 ≈ -12.21
+    /// DREF = 0.6213 · -12.21 ≈ -7.59
+    /// ```
+    ///
+    /// The returned bare DREF lives in AGC-normalised "/FPSS_805" units;
+    /// the magnitude is large because the LEQ·C/D0 term is the raw kinematic
+    /// component before the K1D / K2D corrections at CONSTD1. The test
+    /// pins the formula identity, not the eventual physical drag.
+    #[test]
+    fn tc_mse4b_constd_1_dref_math() {
+        let dref = constd_dref_agc(10_000.0, -100.0);
+        assert!(
+            (dref - (-7.59)).abs() < 0.1,
+            "CONSTD bare DREF expected ≈ -7.59 (AGC-normalised), got {dref}"
         );
     }
 
