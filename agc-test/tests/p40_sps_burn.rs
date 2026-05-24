@@ -174,23 +174,23 @@ fn it_v37_p40_fires_sps_for_about_15s() {
         &mut state,
         1,
         &[
-            (1, SEED_POSITION_X_KM), // pos[0] +6778 km
-            (1, 0),                  // pos[1]  +0
-            (1, 0),                  // pos[2]  +0
-            (1, 0),                  // vel[0]  +0
+            (1, SEED_POSITION_X_KM),  // pos[0] +6778 km
+            (1, 0),                   // pos[1]  +0
+            (1, 0),                   // pos[2]  +0
+            (1, 0),                   // vel[0]  +0
             (1, SEED_VELOCITY_Y_M_S), // vel[1] +7669 m/s
-            (1, 0),                  // vel[2]  +0
+            (1, 0),                   // vel[2]  +0
         ],
     );
     assert_eq!(state.csm_state.position, [6_778_000.0, 0.0, 0.0]);
     assert_eq!(state.csm_state.velocity, [0.0, 7669.0, 0.0]);
 
-    // ── 2. V37 E30 E — select P30 ─────────────────────────────────────────
+    // ── 2. V37 ENTR 30 ENTR — select P30 (verb-then-MM, not verb-noun) ──
     feed_keys(
         &mut state,
-        &[Key::Verb, d(3), d(7), Key::Noun, d(3), d(0), Key::Entr],
+        &[Key::Verb, d(3), d(7), Key::Entr, d(3), d(0), Key::Entr],
     );
-    assert_eq!(state.major_mode, 30, "V37 E30 E must select P30");
+    assert_eq!(state.major_mode, 30, "V37 ENTR 30 ENTR must select P30");
 
     // ── 3. V25 N33 — load TIG = 0h 5m 0.00s (Met(30 000) cs) ─────────────
     // Five minutes ahead of MET 0 leaves a wide margin for the operator's
@@ -218,12 +218,12 @@ fn it_v37_p40_fires_sps_for_about_15s() {
         .expect("V25 N81 must produce a pending_maneuver");
     assert_eq!(pending.tig, Met(tig_cs), "TIG must round-trip through P30");
 
-    // ── 5. V37 E40 E — select P40 ─────────────────────────────────────────
+    // ── 5. V37 ENTR 40 ENTR — select P40 ─────────────────────────────────
     feed_keys(
         &mut state,
-        &[Key::Verb, d(3), d(7), Key::Noun, d(4), d(0), Key::Entr],
+        &[Key::Verb, d(3), d(7), Key::Entr, d(4), d(0), Key::Entr],
     );
-    assert_eq!(state.major_mode, 40, "V37 E40 E must select P40");
+    assert_eq!(state.major_mode, 40, "V37 ENTR 40 ENTR must select P40");
     assert!(
         state.burn.burn_active,
         "P40 must transfer pending_maneuver into BurnState"
@@ -311,8 +311,7 @@ fn it_v37_p40_fires_sps_for_about_15s() {
     }
 
     // ── Assertions on ignition timing ─────────────────────────────────────
-    let ignition_iter =
-        ignition_iter.expect("engine must ignite at some point during the loop");
+    let ignition_iter = ignition_iter.expect("engine must ignite at some point during the loop");
     // Ignition must occur within a couple of dap_step cycles of TIG. We
     // jumped to TIG-1 s above and walk at 10 cs, so ignition lands
     // within ≈ 100 iterations.

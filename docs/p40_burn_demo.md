@@ -159,8 +159,20 @@ panel beside the DSKY.
 ### Step 3 — Select P30 (External-ΔV targeting)
 
 ```
-V 3 7 N 3 0 ENTR
+V 3 7 ENTR  ← request major-mode change
+3 0 ENTR    ← MM = 30 (digits go into MMNUMBER, not NOUNREG)
 ```
+
+V37 is the AGC's **major-mode-request** verb — verb-then-MM, *not*
+verb-noun. The first ENTR puts PINBALL into the
+[`EnteringMajorMode`](../agc-core/src/services/v_n.rs) phase; the
+two digits between the ENTRs populate `MMNUMBER` (the AGC's program-
+selection register); the second ENTR dispatches into the program. The
+once-common shorthand `V 3 7 N 3 0 ENTR` (treating the program number
+as a noun) is rejected by both the real Comanche055 AGC (it takes the
+`V37NONO` branch and lights `OPR ERR`,
+`Comanche055/FRESH_START_AND_RESTART.agc:1059`) and the simulator
+post-MS-E7g.
 
 | AGC effect |
 |---|
@@ -207,7 +219,8 @@ V 2 5 N 8 1 ENTR
 ### Step 6 — Select P40 (SPS thrust program)
 
 ```
-V 3 7 N 4 0 ENTR
+V 3 7 ENTR  ← request major-mode change
+4 0 ENTR    ← MM = 40
 ```
 
 | AGC effect |

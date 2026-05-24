@@ -69,6 +69,12 @@ pub enum VnPhase {
     EnteringVerb { digits: u8, buf: u8 },
     /// NOUN pressed after verb complete, accumulating up to two digits.
     EnteringNoun { verb: u8, digits: u8, buf: u8 },
+    /// V37 ENTR pressed — the AGC's major-mode-request flow. Unlike a
+    /// verb-noun verb, V37 expects `V 3 7 ENTR <mm digits> ENTR`: the
+    /// digits between the two ENTRs populate `MMNUMBER` (not
+    /// `NOUNREG`) and the second ENTR dispatches into the program.
+    /// AGC source: `Comanche055/FRESH_START_AND_RESTART.agc:819` `V37`.
+    EnteringMajorMode { digits: u8, buf: u8 },
     /// Data entry in progress for a V21/V22/V23/V25 load.
     EnteringData {
         /// Initiating verb (21, 22, 23, or 25).
@@ -90,10 +96,7 @@ pub enum VnPhase {
     },
     /// V71 (P27 block update) — accumulating the starting logical address.
     /// First step of the P27 multi-keystroke sequence.
-    P27Address {
-        digits: u8,
-        buf: u32,
-    },
+    P27Address { digits: u8, buf: u32 },
     /// V71 (P27 block update) — accumulating the word count after the
     /// starting address has been committed.
     P27Count {
@@ -220,6 +223,18 @@ fn sync_display(state: &mut crate::AgcState) {
         }
         EnteringNoun { verb, digits, buf } => {
             state.dsky.verb = verb;
+            if digits > 0 {
+                state.dsky.noun = buf;
+            }
+            state.dsky.flashing = true;
+        }
+        EnteringMajorMode { digits, buf } => {
+            // V37 is showing; MM digits accumulate. We display the
+            // partial MM in `dsky.noun` so the crew sees what they're
+            // typing — the real DSKY shows the new mode in the PROG
+            // window after dispatch, but during entry the digits flash
+            // alongside the V37 cue.
+            state.dsky.verb = 37;
             if digits > 0 {
                 state.dsky.noun = buf;
             }
@@ -355,8 +370,14 @@ fn feed_key_inner(state: &mut crate::AgcState, key: Key) {
                     raise_opr_err(state);
                     return;
                 }
-                // Verbs that take no noun: V34, V35, V71, ...
-                if verb_takes_no_noun(buf) {
+                if buf == 37 {
+                    // V37 is verb-then-MM: ENTR after V37 transitions
+                    // to EnteringMajorMode (digits populate MMNUMBER,
+                    // not NOUNREG; a second ENTR dispatches). Real AGC
+                    // path: `FRESH_START_AND_RESTART.agc:819` V37.
+                    state.vn.phase = EnteringMajorMode { digits: 0, buf: 0 };
+                } else if verb_takes_no_noun(buf) {
+                    // Verbs that take no noun: V34, V35, V71, ...
                     dispatch_verb_noun(state, buf, 0);
                     // Some no-noun verbs (e.g. V71) transition the phase
                     // into a multi-step entry state of their own; only
@@ -367,6 +388,35 @@ fn feed_key_inner(state: &mut crate::AgcState, key: Key) {
                     }
                 } else {
                     raise_opr_err(state);
+                }
+            }
+            _ => raise_opr_err(state),
+        },
+
+        EnteringMajorMode { digits, buf } => match key {
+            Key::Digit(d) => {
+                if digits >= 2 {
+                    raise_opr_err(state);
+                    return;
+                }
+                let new_buf = buf * 10 + d;
+                state.vn.phase = EnteringMajorMode {
+                    digits: digits + 1,
+                    buf: new_buf,
+                };
+            }
+            Key::Entr => {
+                if digits != 2 {
+                    raise_opr_err(state);
+                    return;
+                }
+                v37_program_select(state, buf);
+                // v37_program_select may itself transition phase (it
+                // currently doesn't, but program inits could in the
+                // future). Only fall through to Idle if we are still
+                // in EnteringMajorMode.
+                if matches!(state.vn.phase, EnteringMajorMode { .. }) {
+                    state.vn.phase = Idle;
                 }
             }
             _ => raise_opr_err(state),
@@ -639,6 +689,14 @@ fn verb_takes_no_noun(verb: u8) -> bool {
 }
 
 /// Dispatch a completed VERB+NOUN (or noun-less VERB) command.
+///
+/// **V37 is NOT in this table.** V37 (major-mode request) uses the
+/// verb-then-MM keystroke pattern `V 3 7 ENTR <mm> ENTR` and is
+/// dispatched from the [`VnPhase::EnteringMajorMode`] arm in
+/// [`feed_key_inner`], not via verb-noun. Sending `V37 N## ENTR`
+/// reaches here with `verb = 37` and falls through to `raise_opr_err`,
+/// matching the real AGC's `V37NONO` behaviour
+/// (`Comanche055/FRESH_START_AND_RESTART.agc:1059`).
 fn dispatch_verb_noun(state: &mut crate::AgcState, verb: u8, noun: u8) {
     match verb {
         6 => v06_display_decimal(state, noun),
@@ -647,7 +705,6 @@ fn dispatch_verb_noun(state: &mut crate::AgcState, verb: u8, noun: u8) {
         25 => start_load(state, verb, noun, 3, 0),
         34 => v34_terminate(state),
         35 => v35_lamp_test(state),
-        37 => v37_program_select(state, noun),
         71 => v71_p27_block_update(state),
         _ => raise_opr_err(state),
     }
@@ -1121,7 +1178,11 @@ mod tests {
         assert_eq!(Key::from_code(0), None);
     }
 
-    // ── TC-VN-2: V37E00E selects P00 ──────────────────────────────────────────
+    // ── TC-VN-2: V37 ENTR 00 ENTR selects P00 ────────────────────────────────
+    //
+    // V37 is verb-then-MM (not verb-noun): the digits between the two
+    // ENTRs populate MMNUMBER, not NOUNREG. See
+    // `Comanche055/FRESH_START_AND_RESTART.agc:819` V37.
 
     #[test]
     fn tc_vn_2_v37_e00_e_selects_p00() {
@@ -1130,15 +1191,15 @@ mod tests {
 
         feed(
             &mut state,
-            &[Key::Verb, d(3), d(7), Key::Noun, d(0), d(0), Key::Entr],
+            &[Key::Verb, d(3), d(7), Key::Entr, d(0), d(0), Key::Entr],
         );
 
-        assert_eq!(state.major_mode, 0, "V37E00E must invoke P00 init");
+        assert_eq!(state.major_mode, 0, "V37 ENTR 00 ENTR must invoke P00 init");
         assert_eq!(state.vn.phase, VnPhase::Idle);
         assert!(!state.dsky.opr_err);
     }
 
-    // ── TC-VN-3: V37E30E selects P30 ──────────────────────────────────────────
+    // ── TC-VN-3: V37 ENTR 30 ENTR selects P30 ────────────────────────────────
 
     #[test]
     fn tc_vn_3_v37_e30_e_selects_p30() {
@@ -1146,11 +1207,36 @@ mod tests {
 
         feed(
             &mut state,
-            &[Key::Verb, d(3), d(7), Key::Noun, d(3), d(0), Key::Entr],
+            &[Key::Verb, d(3), d(7), Key::Entr, d(3), d(0), Key::Entr],
         );
 
         assert_eq!(state.major_mode, 30);
         assert_eq!(state.vn.phase, VnPhase::Idle);
+    }
+
+    // ── TC-VN-3b: V37 N## ENTR raises OPR ERR (not a valid V37 form) ─────────
+
+    #[test]
+    fn tc_vn_3b_v37_with_noun_is_opr_err() {
+        // The pre-MS-E7f code accepted `V37 N30 ENTR` and silently
+        // dispatched P30. The real AGC rejects this — V37 is
+        // verb-then-MM, and only the major-mode-request form
+        // (`V37 ENTR NN ENTR`) is valid. This test locks in the
+        // corrected behaviour.
+        let mut state = AgcState::new();
+        let starting_mode = 42;
+        state.major_mode = starting_mode;
+
+        feed(
+            &mut state,
+            &[Key::Verb, d(3), d(7), Key::Noun, d(3), d(0), Key::Entr],
+        );
+
+        assert_eq!(
+            state.major_mode, starting_mode,
+            "V37 N## ENTR must NOT dispatch — major mode stays unchanged"
+        );
+        assert!(state.dsky.opr_err, "V37 N## ENTR must light OPR ERR");
     }
 
     // ── TC-VN-4: V06N40E sets the display ─────────────────────────────────────
@@ -1224,6 +1310,10 @@ mod tests {
     }
 
     // ── TC-VN-9: VERB during EnteringNoun restarts the entry ──────────────────
+    //
+    // Exercises the global "Key::Verb always restarts" path from
+    // `feed_key_inner` (line ~315). Uses V06 (a real verb-noun verb)
+    // because V37 no longer reaches `EnteringNoun` post-MS-E7g.
 
     #[test]
     fn tc_vn_9_verb_during_noun_restarts() {
@@ -1231,7 +1321,7 @@ mod tests {
 
         feed(
             &mut state,
-            &[Key::Verb, d(3), d(7), Key::Noun, d(3), Key::Verb],
+            &[Key::Verb, d(0), d(6), Key::Noun, d(3), Key::Verb],
         );
 
         assert_eq!(state.vn.phase, VnPhase::EnteringVerb { digits: 0, buf: 0 });
@@ -1248,7 +1338,7 @@ mod tests {
         assert_eq!(state.vn.phase, VnPhase::Idle);
     }
 
-    // ── TC-VN-11: V37 with unknown program raises OPR ERR ────────────────────
+    // ── TC-VN-11: V37 ENTR 99 ENTR (unknown program) raises OPR ERR ────────
 
     #[test]
     fn tc_vn_11_v37_unknown_program_opr_err() {
@@ -1256,7 +1346,7 @@ mod tests {
         // Slot 99 is None in PROGRAM_TABLE.
         feed(
             &mut state,
-            &[Key::Verb, d(3), d(7), Key::Noun, d(9), d(9), Key::Entr],
+            &[Key::Verb, d(3), d(7), Key::Entr, d(9), d(9), Key::Entr],
         );
 
         assert!(state.dsky.opr_err);
@@ -1768,7 +1858,7 @@ mod tests {
 
         feed(
             &mut state,
-            &[Key::Verb, d(3), d(7), Key::Noun, d(1), d(1), Key::Entr],
+            &[Key::Verb, d(3), d(7), Key::Entr, d(1), d(1), Key::Entr],
         );
 
         assert_eq!(state.major_mode, 11);

@@ -72,10 +72,10 @@ fn main() {
         state.dsky.r[0], state.dsky.r[1], state.dsky.r[2]
     );
 
-    // V37 E30 E, V25 N33 (TIG = 5 min), V25 N81 (ΔV = +21).
+    // V37 ENTR 30 ENTR (verb-then-MM), V25 N33 (TIG = 5 min), V25 N81 (ΔV = +21).
     feed(
         &mut state,
-        &[Key::Verb, d(3), d(7), Key::Noun, d(3), d(0), Key::Entr],
+        &[Key::Verb, d(3), d(7), Key::Entr, d(3), d(0), Key::Entr],
     );
     feed(
         &mut state,
@@ -101,15 +101,15 @@ fn main() {
     feed_number(&mut state, 0);
     feed_key(&mut state, Key::Entr);
 
-    // V37 E40 E
+    // V37 ENTR 40 ENTR
     feed(
         &mut state,
-        &[Key::Verb, d(3), d(7), Key::Noun, d(4), d(0), Key::Entr],
+        &[Key::Verb, d(3), d(7), Key::Entr, d(4), d(0), Key::Entr],
     );
     dap_pump.tick(&mut state, &mut hw);
     waitlist_pump.tick(&mut state, &mut hw);
     println!(
-        "After V37 E40 E: verb={} noun={} burn_active={} pending_v50={}",
+        "After V37 ENTR 40 ENTR: verb={} noun={} burn_active={} pending_v50={}",
         state.dsky.verb,
         state.dsky.noun,
         state.burn.burn_active,
