@@ -76,6 +76,17 @@ use agc_core::types::Vec3;
 /// AGC DSKY input channel (`MNKEYIN` in `KEYRUPT1`).
 pub const CHAN_KEYIN: u16 = 0o15;
 
+/// AGC input discrete channel that carries the PROCEED / STBY / etc.
+/// hand-controller discretes (see `Comanche055/FRESH_START_AND_RESTART.agc:1990`
+/// and `:2061` for the `InputChannel[032] & 020000` PROCEED check).
+pub const CHAN_INPUT_DISCRETES: u16 = 0o32;
+
+/// Bit 14 (AGC 1-indexed = 2¹³ = `0o20000`) of channel `0o32` is the
+/// PROCEED discrete. Active-low: bit clear = pressed, bit set =
+/// released. The AGC's idle value for channel `0o32` is `0o77777`
+/// (all discretes released).
+pub const PRO_BIT: u16 = 0o20000;
+
 /// Counter-increment marker bit in the wire `channel` byte.
 const COUNTER_FLAG: u16 = 0x80;
 
@@ -142,26 +153,55 @@ impl DskyKey {
     }
 }
 
+/// Default delay after each [`DskyScript::press`]. The AGC's KEYRUPT1
+/// handler reads channel-015 once per fired interrupt; without a gap
+/// between successive keypress packets the second one would
+/// overwrite the channel-015 register before the AGC could service
+/// the first. 80 ms wall-clock ≈ 1.5 simulated seconds at yaAGC's
+/// typical ~20× pace — well above KEYRUPT's handler runtime (a few
+/// hundred microseconds) and the CHARIN job-dispatch overhead.
+const DEFAULT_INTER_KEY_DELAY: std::time::Duration = std::time::Duration::from_millis(80);
+
 /// Drive an AGC's DSKY input channel via the yaAGC TCP socket protocol.
 ///
 /// Wraps a [`YaAgcClient`] and emits channel-015 writes for each
 /// keypress. Each write fires KEYRUPT1 on the AGC and delivers the
 /// 5-bit code to `CHARIN`.
 ///
+/// A small post-keystroke delay (default [`DEFAULT_INTER_KEY_DELAY`])
+/// is applied inside [`press`](Self::press) so back-to-back calls
+/// like `verb_noun(37, 62)` give the AGC time to service KEYRUPT
+/// between keystrokes. Use [`with_inter_key_delay`](Self::with_inter_key_delay)
+/// to override (e.g., `Duration::ZERO` for a packet-rate test).
+///
 /// The client is owned by the script; if a test needs to read AGC →
 /// peripheral writes in parallel (e.g., to capture the DSKY display
 /// channel), use a separate [`YaAgcClient`] on a second connection.
 pub struct DskyScript {
     client: YaAgcClient,
+    inter_key_delay: std::time::Duration,
 }
 
 impl DskyScript {
-    /// Build a scripter over an already-connected client.
+    /// Build a scripter over an already-connected client. Uses
+    /// [`DEFAULT_INTER_KEY_DELAY`] between successive keypresses.
     pub fn new(client: YaAgcClient) -> Self {
-        Self { client }
+        Self {
+            client,
+            inter_key_delay: DEFAULT_INTER_KEY_DELAY,
+        }
     }
 
-    /// Send one keypress.
+    /// Override the post-keypress delay. Pass `Duration::ZERO` for
+    /// the protocol-only behaviour useful in unit tests that just
+    /// want to count packets.
+    pub fn with_inter_key_delay(mut self, delay: std::time::Duration) -> Self {
+        self.inter_key_delay = delay;
+        self
+    }
+
+    /// Send one keypress and sleep for [`Self::inter_key_delay`]
+    /// afterwards.
     ///
     /// Returns `io::Error` of kind `InvalidInput` for an out-of-range
     /// `DskyKey::Digit(n)` (n > 9) and any TCP error from the
@@ -177,7 +217,11 @@ impl DskyScript {
             channel: CHAN_KEYIN,
             value: code,
             u_bit: false,
-        })
+        })?;
+        if !self.inter_key_delay.is_zero() {
+            std::thread::sleep(self.inter_key_delay);
+        }
+        Ok(())
     }
 
     /// Convenience: send ENTR.
@@ -207,10 +251,53 @@ impl DskyScript {
         self.press(digit(noun % 10))
     }
 
-    /// Convenience: send the canonical `VnnNnnE` 6-key sequence.
+    /// Convenience: send the canonical `VnnNnnE` 7-key sequence
+    /// (`VERB n n NOUN n n ENTR`). Suitable for verb-noun pairs like
+    /// V16 N36 (monitor time); **not** suitable for V37 (major-mode
+    /// request) — use [`verb_major_mode`](Self::verb_major_mode) for
+    /// that.
     pub fn verb_noun(&mut self, verb: u8, noun: u8) -> io::Result<()> {
         self.verb(verb)?;
         self.noun(noun)?;
+        self.enter()
+    }
+
+    /// Send `V37 ENTR <mm digits> ENTR` — the AGC's major-mode
+    /// request sequence. V37 uses a verb-then-digits pattern, not
+    /// verb-noun: the digits entered after the first ENTR populate
+    /// the `MMNUMBER` register (not `NOUNREG`) and the second ENTR
+    /// dispatches into the program. Sending `V37 N62 ENTR` (via
+    /// [`verb_noun`](Self::verb_noun)) leaves the AGC waiting for
+    /// `NOUNREG` data that never arrives, and MMNUMBER stays at 0.
+    pub fn verb_major_mode(&mut self, major_mode: u8) -> io::Result<()> {
+        let mm = major_mode % 100;
+        self.verb(37)?;
+        self.enter()?;
+        self.press(digit(mm / 10))?;
+        self.press(digit(mm % 10))?;
+        self.enter()
+    }
+
+    /// Send `V33 ENTR` — the AGC's PROCEED-WITHOUT-DATA verb
+    /// (`Comanche055/ASSEMBLY_AND_OPERATION_INFORMATION.agc:184`,
+    /// `PINBALL_GAME__BUTTONS_AND_LIGHTS.agc:2902` `VBPROC`).
+    ///
+    /// Used to acknowledge flashing displays (`V06 N61`, etc.) and
+    /// advance the AGC through programs that pause for crew input
+    /// — e.g., P62 → ROLLC init → P63.
+    ///
+    /// V33 ENTR is preferred over the hardware PRO discrete on
+    /// channel `0o32` bit 14 (`PRO_BIT`):
+    /// - The hardware bit is sampled by T4RUPT every ~120 ms
+    ///   simulated, so a press has to be held across at least one
+    ///   sample edge to be detected — sensitive to yaAGC's pace.
+    /// - The same bit doubles as the STANDBY discrete; holding it
+    ///   for over 1.28 s simulated puts the AGC into standby
+    ///   (`agc_engine.c:2058`).
+    /// - V33 ENTR is keyboard-driven (KEYRUPT → CHARIN → VBPROC)
+    ///   and has none of those timing pitfalls.
+    pub fn proceed(&mut self) -> io::Result<()> {
+        self.verb(33)?;
         self.enter()
     }
 
@@ -405,5 +492,32 @@ mod tests {
     fn tc_pipa_enc_3_sign_branch() {
         assert_eq!(INC_PINC, 0);
         assert_eq!(INC_MINC, 2);
+    }
+
+    /// TC-PRO-ENC-1: PRO bit position matches the AGC source's
+    /// `InputChannel[032] & 020000` PROCEED check
+    /// (`Comanche055/FRESH_START_AND_RESTART.agc:1990`). With all
+    /// other channel-32 bits at their idle "released" value of 1, the
+    /// pressed-PRO packet has value `0o57777` (only bit 14 cleared)
+    /// and the released packet has value `0o77777`.
+    #[test]
+    fn tc_pro_enc_1_pro_bit_position() {
+        assert_eq!(PRO_BIT, 0o20000);
+        assert_eq!(0o77777 & !PRO_BIT, 0o57777);
+        assert_eq!(CHAN_INPUT_DISCRETES, 0o32);
+        // The pressed-PRO packet on the wire round-trips through
+        // ChannelPacket::pack/unpack.
+        let p = ChannelPacket {
+            channel: CHAN_INPUT_DISCRETES,
+            value: 0o77777 & !PRO_BIT,
+            u_bit: false,
+        };
+        let round = ChannelPacket::unpack(p.pack()).unwrap();
+        assert_eq!(round, p);
+        assert_eq!(
+            round.value & PRO_BIT,
+            0,
+            "PRO bit must be CLEAR in pressed packet"
+        );
     }
 }

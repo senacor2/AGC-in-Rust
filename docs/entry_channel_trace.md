@@ -205,46 +205,71 @@ the committed summary.
   because yaAGC's guidance and the Rust integrator's bank execution
   combine into a different trajectory than either alone.
 
-### Known limitations from the first MS-E7e captures
+### Entry-program keystroke flow (MS-E7f)
 
-- **`ROLLC = 0` throughout — diagnosed.** Both scenarios observed
-  `bank ∈ [0.0, 0.0] rad` for every cycle. Root cause (traced from a
-  one-off probe of the AGC's live erasable state):
+The live tests enter the AGC's entry pipeline via **`V37 ENTR
+62 ENTR` + `V33 ENTR`** (PROCEED-without-data). P63–P67 are *not*
+directly selectable via V37 — only P00, P01, P06, P17, P20–23,
+P30–35, P37–41, P47, P51–54, **P61, P62**, and P72–79 are in
+`PREMM1` (`Comanche055/FRESH_START_AND_RESTART.agc:1314-1347`). P63
+is dispatched internally from P62 once the crew acknowledges the
+flashing `V06N61` (LAT/LNG/HEADSUP) display via PROCEED. From there:
 
-  1. The test sends `V37 63 ENTR`.
-  2. The AGC's `V37` (major-mode-change) routine looks up program 63
-     in the `PREMM1` dispatch table in
-     `Comanche055/FRESH_START_AND_RESTART.agc:1314-1347`.
-  3. Program 63 is **not** in `PREMM1`. Only P00, P01, P06, P17,
-     P20–23, P30–35, P37–41, P47, P51–54, **P61, P62**, and
-     P72–79 are. P63–P67 are dispatched internally from P62 (the
-     entry preparation program), not selectable from the DSKY.
-  4. The AGC takes the `V37NONO` branch (line 1059), lights the
-     `OPR ERR` lamp (channel 11 bit 7, observed as
-     `channel 0o11 = 0o100`), and rejects the request.
-  5. With no entry program running, no SERVICER runs and no
-     `HUNTEST` ever computes `ROLLC`. PIPA pulses still increment
-     the hardware counters (verified: `PIPAX/Y/Z` advance) but
-     `DELV` stays at 0 because the executive never consumes them.
+- P62 sets the initial ROLLC, advances to P63.
+- P63 starts SERVICER, monitors sensed-g, trips the 0.05g threshold.
+- P64 (HUNTEST/INITROLL) writes the first non-trivial ROLLC value.
+- P65/P67 continue updating ROLLC through the rest of entry.
 
-  **Fix shape** (deferred — see follow-up issue):
-  - Change the live test to send `V37 62 ENTR` (P62, the
-    entry-preparation program) — confirmed to set `MODREG = 62`.
-  - Then send a PROCEED (write to channel `0o32` with bit 14
-    cleared) to acknowledge P62's `V06N61` flashing display and
-    advance to P63. From there the SERVICER runs, sensed-g trips
-    the 0.05g threshold, P64/HUNTEST runs, and ROLLC starts being
-    written.
+Three drivers-level details matter for any code that wants to drive
+yaAGC through this path:
 
-- **`lunar_return` doesn't reach drogue within the 240 s wall-clock
-  cap.** Closed-loop is ~10× slower per cycle than open-loop because
-  of the per-cycle core-dump wait. The lunar trajectory under bank =
-  0 needs ~533 SERVICER cycles; at ~1 s wall-clock per cycle, the
-  full trajectory exceeds the cap and the test exits early with
-  `drogue_deployed = false`. The committed
-  `lunar_return_closed_loop_summary.json` reflects this honestly.
-  Resolving the ROLLC issue above and possibly raising the cap will
-  unblock it.
+- **V37 is verb-then-MM, not verb-noun.** V37 ENTR followed by NN
+  ENTR is the program-request sequence; the two digits go into
+  `MMNUMBER`, not `NOUNREG`. Use [`DskyScript::verb_major_mode`] for
+  this; [`DskyScript::verb_noun`] sends `V37 N62 ENTR` instead and
+  leaves the AGC waiting for noun data that never arrives.
+- **Inter-key delay is required.** Back-to-back keypress packets
+  overwrite channel `0o15` before the AGC's KEYRUPT1 has a chance
+  to read each one; the second-arriving keystroke wins, intermediate
+  digits are lost, and the verb is silently dropped. [`DskyScript`]
+  applies an 80 ms wall-clock delay after every [`press`](Self::press)
+  by default; override with `with_inter_key_delay` for protocol tests
+  that just want to count packets.
+- **`V33 ENTR` is preferred over the hardware PRO discrete.** Bit 14
+  of channel `0o32` doubles as STBY/PRO; T4RUPT samples it every
+  ~120 ms simulated, and holding it across two 1.28 s samples
+  triggers STANDBY (`agc_engine.c:2058`). `V33 ENTR` is keyboard-
+  driven (KEYRUPT → CHARIN → VBPROC,
+  `PINBALL_GAME__BUTTONS_AND_LIGHTS.agc:2902`) and has none of those
+  timing pitfalls. [`DskyScript::proceed`] sends `V33 ENTR`.
+
+The live yaAGC instance is spawned with `--inhibit-alarms` so a
+long wall-clock gap between PIPA bursts doesn't cause the Night
+Watchman alarm to FRESH-START the AGC (which would clobber MODREG).
+
+### Known limitation (deferred to MS-E7g, #40)
+
+With all of the above, the live test cleanly puts the AGC into
+P62 (`MODREG = 0o076`), but P62 doesn't always advance to P63. P62
+schedules a `WAKEP62` task that fires when the CM body attitude
+reaches the entry-attitude target; our integrator doesn't simulate
+the attitude maneuver, so `WAKEP62` never fires. Captured ROLLC
+history therefore stays at 0, the same as MS-E7e. The closed-loop
+test prints a `WARNING` and the committed `*_closed_loop_summary`
+fixtures still reflect the bank-zero trajectory.
+
+The remaining work — patching `CMDAPMOD` and other entry-DAP
+erasables so P62 takes the "go directly to P63" branch (line 263
+of P61-P67.agc), or alternatively simulating the attitude maneuver
+— is tracked in MS-E7g.
+
+Before MS-E7f the tests sent `V37 63 ENTR` via `verb_noun(37, 63)`.
+That hit FOUR distinct problems compounding on each other: P63
+isn't in `PREMM1` (so V37NONO fired OPR ERR), `verb_noun` sends
+`N62` instead of `MM=62`, back-to-back keystrokes overwrote each
+other, and the Night Watchman was clobbering MODREG mid-run. The
+MS-E7f drivers fix all four; MS-E7g handles the P62 → P63 attitude
+gap.
 
 ## Out-of-scope (left for follow-ups)
 
@@ -253,9 +278,11 @@ the committed summary.
   tolerance" exit criterion at the scenario-metric level; per-cycle
   DSKY-display equivalence (channels 010 / 011 / 013) is a separate
   body of work and is deferred.
-- **Diagnosing why the AGC's entry guidance doesn't reach HUNTEST in
-  the preloaded scenarios.** The MS-E7e harness will pick up the
-  fix automatically once a non-zero `ROLLC` starts being written.
+- **Porting the CM/RCS DAP's jet-modulated bank execution.** The
+  closed-loop driver currently assumes bank is achieved
+  instantaneously each cycle. Modelling the DAP would change the
+  shape of the bank-history time series but not the broad
+  trajectory.
 
 ## Test plan
 
@@ -275,6 +302,7 @@ the committed summary.
 | `tc_e7e_closed_loop_summary_structural` | `tests/entry_e2e_vagc.rs`     | Always.         |
 | `tc_e7e_vagc_entry_direct_leo_closed_loop` | `tests/entry_e2e_vagc.rs` | VAGC + template.|
 | `tc_e7e_vagc_entry_lunar_return_closed_loop` | `tests/entry_e2e_vagc.rs` | VAGC + template.|
+| `tc_pro_enc_1_pro_bit_position`   | `vagc_driver::tests`                | Always.         |
 
 The VAGC-gated tests look for `vagc_root()/yaAGC/yaAGC` and
 `vagc_root()/Comanche055/MAIN.agc.bin`. The MS-E7d live tests

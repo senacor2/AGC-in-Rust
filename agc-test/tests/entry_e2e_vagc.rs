@@ -18,10 +18,12 @@
 //! 2. **`tc_e7d_vagc_entry_direct_leo`** — `VAGC_AVAILABLE`-gated.
 //!    Patches the `entry_template.core` with direct-LEO state,
 //!    spawns yaAGC + `DskyScript` + `PipaInjector` +
-//!    `ChannelTraceRecorder`, sends `V37 63 ENTR`, drives PIPA
-//!    pulses for the Rust pipeline's reference cycle count, then
-//!    serialises the captured trace and the Rust-side summary.
-//!    `VAGC_CAPTURE=1` refreshes the committed fixtures.
+//!    `ChannelTraceRecorder`, sends `V37 62 ENTR + PROCEED` (P63
+//!    isn't directly V37-selectable — P62 dispatches to it after
+//!    PROCEED), drives PIPA pulses for the Rust pipeline's
+//!    reference cycle count, then serialises the captured trace and
+//!    the Rust-side summary. `VAGC_CAPTURE=1` refreshes the
+//!    committed fixtures.
 //!
 //! 3. **`tc_e7d_vagc_entry_lunar_return`** — same as (2), super-
 //!    circular trajectory.
@@ -41,12 +43,9 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use agc_core::services::average_g::SERVICER_PERIOD_S;
-use agc_core::AgcState;
-
-use agc_core::control::DapMode;
 use agc_core::programs::p61_p67::{init_p61, init_p62, init_p63, EntryPhase};
-use agc_core::services::average_g::{servicer_task, start_servicer};
+use agc_core::services::average_g::{servicer_task, start_servicer, SERVICER_PERIOD_S};
+use agc_core::AgcState;
 
 use agc_test::entry_scenario::{
     setup_state_direct_leo, setup_state_lunar_return, simulate_to_drogue, sub_satellite_lat_lon,
@@ -278,10 +277,15 @@ fn tc_e7e_closed_loop_summary_structural() {
         }
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        let s: ScenarioSummary = serde_json::from_str(&text)
-            .unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
+        let s: ScenarioSummary =
+            serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
 
-        assert_eq!(s.scenario, scenario, "scenario field mismatch in {}", path.display());
+        assert_eq!(
+            s.scenario,
+            scenario,
+            "scenario field mismatch in {}",
+            path.display()
+        );
         assert!(!s.provenance.is_empty(), "[{scenario}] provenance is empty");
         assert!(
             s.elapsed_s > 0.0,
@@ -294,9 +298,7 @@ fn tc_e7e_closed_loop_summary_structural() {
             s.total_cycles
         );
         assert!(
-            s.tolerance.miss_km > 0.0
-                && s.tolerance.peak_g > 0.0
-                && s.tolerance.elapsed_s > 0.0,
+            s.tolerance.miss_km > 0.0 && s.tolerance.peak_g > 0.0 && s.tolerance.elapsed_s > 0.0,
             "[{scenario}] all tolerances must be positive (got {:?})",
             s.tolerance
         );
@@ -376,12 +378,16 @@ fn run_live_scenario(scenario: &str) {
     let core_in = work.join("core_in");
     core.save(&core_in).unwrap();
 
-    // Step 3: spawn yaAGC on a fresh port.
+    // Step 3: spawn yaAGC on a fresh port. `--inhibit-alarms`
+    // suppresses Night Watchman / Rupt Lock / TC Trap so a long
+    // wall-clock gap doesn't cause a FRESH-START reset that
+    // clobbers MODREG.
     let port = pick_port();
     let mut child = std::process::Command::new(&yaagc)
         .current_dir(&work)
         .arg("--quiet")
         .arg("--nodebug")
+        .arg("--inhibit-alarms")
         .arg(format!("--port={port}"))
         .arg(&rope)
         .arg(&core_in)
@@ -405,13 +411,26 @@ fn run_live_scenario(scenario: &str) {
     );
     let mut recorder = ChannelTraceRecorder::new(connect_with_retry(port + 2));
 
-    // Step 5: warm-up drain, send V37 63 ENTR.
+    // Step 5: warm-up drain, then enter P62 (the entry-preparation
+    // program) via `V37 62 ENTR`. P63–P67 are NOT directly selectable
+    // via V37 — only P00, P01, P06, P17, P20–23, P30–35, P37–41, P47,
+    // P51–54, P61, P62, and P72–79 are in the AGC's `PREMM1` dispatch
+    // table (`Comanche055/FRESH_START_AND_RESTART.agc:1314-1347`).
+    // P62 displays the flashing `V06N61` (LAT/LNG/HEADSUP) noun and
+    // waits for PROCEED to set ROLLC and dispatch to P63.
     let warmup_end = Instant::now() + Duration::from_millis(500);
     while Instant::now() < warmup_end {
         recorder.drain(Duration::from_millis(50));
     }
     let mut dsky = dsky;
-    dsky.verb_noun(37, 63).expect("V37 63 ENTR");
+    dsky.verb_major_mode(62).expect("V37 ENTR 62 ENTR");
+    // Give the AGC ~600 ms wall (~12 simulated s) to bring up P62 and
+    // start flashing N61 before we acknowledge it.
+    let p62_end = Instant::now() + Duration::from_millis(600);
+    while Instant::now() < p62_end {
+        recorder.drain(Duration::from_millis(50));
+    }
+    dsky.proceed().expect("PROCEED out of P62 N61");
 
     // Step 6: drive PIPA pulses for `target_cycles` cycles, draining
     // channel writes between bursts. yaAGC runs at its own real-time
@@ -623,28 +642,32 @@ fn run_live_scenario_closed_loop(scenario: &str) {
 
     let mut core = CoreImage::load(&template_path)
         .unwrap_or_else(|e| panic!("load template {}: {e}", template_path.display()));
-    let symtab = Symtab::load(&listing)
-        .unwrap_or_else(|e| panic!("load symtab {}: {e}", listing.display()));
+    let symtab =
+        Symtab::load(&listing).unwrap_or_else(|e| panic!("load symtab {}: {e}", listing.display()));
     let init = entry_initial_state_for(&initial);
     patch_into(&mut core, &symtab, &init)
         .unwrap_or_else(|e| panic!("patch failed for {scenario}: {e}"));
 
-    let work = std::env::temp_dir().join(format!(
-        "vagc_e7e_{scenario}_{}",
-        std::process::id()
-    ));
+    let work = std::env::temp_dir().join(format!("vagc_e7e_{scenario}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&work);
     std::fs::create_dir_all(&work).unwrap();
     let core_in = work.join("core_in");
     core.save(&core_in).unwrap();
 
     // Spawn yaAGC with --dump-time=2 so a fresh core dump appears
-    // every simulated SERVICER cycle.
+    // every simulated SERVICER cycle. `--inhibit-alarms` suppresses
+    // the simulated hardware-restart triggers (Night Watchman, Rupt
+    // Lock, TC Trap) — our per-cycle test cadence has long gaps
+    // (1+ s wall-clock per cycle) during which the AGC's executive
+    // legitimately has nothing to do, but the Night Watchman would
+    // otherwise misinterpret that as a stuck-CPU condition and
+    // FRESH-START the AGC, losing all state (MODREG → 0).
     let port = pick_port();
     let mut child = std::process::Command::new(&yaagc)
         .current_dir(&work)
         .arg("--quiet")
         .arg("--nodebug")
+        .arg("--inhibit-alarms")
         .arg("--dump-time=2")
         .arg(format!("--port={port}"))
         .arg(&rope)
@@ -663,12 +686,19 @@ fn run_live_scenario_closed_loop(scenario: &str) {
     );
     let mut recorder = ChannelTraceRecorder::new(connect_with_retry(port + 2));
 
-    // Warm up + V37 63 ENTR.
+    // Warm up, V37 62 ENTR (P63 isn't selectable via V37 — only
+    // P61/P62 are; P62 dispatches to P63 after PROCEED), then
+    // PROCEED past N61 to advance to ROLLC init / P63.
     let warmup_end = Instant::now() + Duration::from_millis(500);
     while Instant::now() < warmup_end {
         recorder.drain(Duration::from_millis(50));
     }
-    dsky.verb_noun(37, 63).expect("V37 63 ENTR");
+    dsky.verb_major_mode(62).expect("V37 ENTR 62 ENTR");
+    let p62_end = Instant::now() + Duration::from_millis(600);
+    while Instant::now() < p62_end {
+        recorder.drain(Duration::from_millis(50));
+    }
+    dsky.proceed().expect("PROCEED out of P62 N61");
 
     let dump_path = work.join("core");
     let mut last_dump_mtime = current_mtime(&dump_path);
@@ -815,23 +845,41 @@ fn run_live_scenario_closed_loop(scenario: &str) {
 
     // Diagnostic: log bank history extremes so a stuck-at-zero ROLLC
     // is obvious on the first capture.
-    let bank_min = bank_history
-        .iter()
-        .cloned()
-        .fold(f64::INFINITY, f64::min);
+    let bank_min = bank_history.iter().cloned().fold(f64::INFINITY, f64::min);
     let bank_max = bank_history
         .iter()
         .cloned()
         .fold(f64::NEG_INFINITY, f64::max);
+    let bank_range = bank_max - bank_min;
+    let last_bank = bank_history.last().copied().unwrap_or(0.0);
     eprintln!(
         "[{scenario}] closed-loop: {total_cycles} cycles, drogue={drogue_deployed}, \
          miss={miss_km:.1} km, peak g={max_sensed_g:.2}, \
-         bank ∈ [{bank_min:+.3}, {bank_max:+.3}] rad",
+         bank ∈ [{bank_min:+.3}, {bank_max:+.3}] rad (range {bank_range:.3}, last {last_bank:+.3})",
         total_cycles = result.total_cycles,
         drogue_deployed = result.drogue_deployed,
         miss_km = result.miss_km,
         max_sensed_g = result.max_sensed_g,
     );
+
+    // Goal: with `V37 ENTR 62 ENTR + V33 ENTR PROCEED + --inhibit-
+    // alarms`, the AGC's entry guidance should run — once sensed-g
+    // trips the 0.05g threshold, P64's HUNTEST and P65's UPCONTRL
+    // should write non-zero ROLLC values.
+    //
+    // Current state (MS-E7f): the AGC reaches P62 (`MODREG = 0o076`)
+    // cleanly, but P62 doesn't advance to P63 because its WAKEP62
+    // task waits for a CM body-attitude maneuver that our integrator
+    // doesn't simulate. We print the bank-history extremes here as
+    // a diagnostic; the hard assertion is deferred to MS-E7g
+    // (#40) which will close this last gap.
+    if bank_range <= 0.05 {
+        eprintln!(
+            "[{scenario}] WARNING: closed-loop bank stayed flat \
+             (range {bank_range:.4} rad). AGC didn't advance from P62 \
+             to P63 (see #40 / MS-E7g for the remaining gap)."
+        );
+    }
 
     let trace = recorder.into_trace(
         scenario,
@@ -849,9 +897,7 @@ fn run_live_scenario_closed_loop(scenario: &str) {
 
     if vagc_capture_enabled() {
         write_closed_loop_fixture(&trace, &summary, scenario);
-        eprintln!(
-            "[{scenario}] VAGC_CAPTURE=1 — refreshed closed-loop fixtures."
-        );
+        eprintln!("[{scenario}] VAGC_CAPTURE=1 — refreshed closed-loop fixtures.");
     } else {
         verify_closed_loop_against_committed(&summary, scenario);
     }
@@ -887,10 +933,34 @@ fn verify_closed_loop_against_committed(summary: &ScenarioSummary, scenario: &st
     // Use the committed tolerance bands for the live-vs-committed
     // checks — they were authored to cover yaAGC's run-to-run jitter.
     let tol = &committed.tolerance;
-    check_within(&committed, "miss_distance_km", committed.miss_distance_km, summary.miss_distance_km, tol.miss_km);
-    check_within(&committed, "peak_sensed_g", committed.peak_sensed_g, summary.peak_sensed_g, tol.peak_g);
-    check_within(&committed, "elapsed_s", committed.elapsed_s, summary.elapsed_s, tol.elapsed_s);
-    check_within(&committed, "total_cycles", committed.total_cycles as f64, summary.total_cycles as f64, tol.total_cycles as f64);
+    check_within(
+        &committed,
+        "miss_distance_km",
+        committed.miss_distance_km,
+        summary.miss_distance_km,
+        tol.miss_km,
+    );
+    check_within(
+        &committed,
+        "peak_sensed_g",
+        committed.peak_sensed_g,
+        summary.peak_sensed_g,
+        tol.peak_g,
+    );
+    check_within(
+        &committed,
+        "elapsed_s",
+        committed.elapsed_s,
+        summary.elapsed_s,
+        tol.elapsed_s,
+    );
+    check_within(
+        &committed,
+        "total_cycles",
+        committed.total_cycles as f64,
+        summary.total_cycles as f64,
+        tol.total_cycles as f64,
+    );
 }
 
 // ── Core-dump polling primitives ───────────────────────────────────────
@@ -931,12 +1001,6 @@ fn try_load_core(path: &std::path::Path) -> Option<CoreImage> {
         }
     }
     None
-}
-
-// Silence unused-import warnings for items only used by closed-loop:
-#[allow(dead_code)]
-fn _suppress_unused_imports() {
-    let _ = DapMode::EntryRoll(0.0);
 }
 
 // ── Regenerate the committed summary fixtures from the Rust pipeline.
