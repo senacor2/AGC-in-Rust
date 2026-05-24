@@ -198,43 +198,59 @@ pub const PT1_OVER_16: f64 = 0.1 * (1.0 / 16.0);
 /// shoulder in the SKIPPER nonlinear gain reducer.
 pub const POINT1: f64 = 0.1;
 
-/// Final-phase range curve fit — constant term `Q2 = 21600 NM scale = .151`.
+/// Final-phase range curve fit — `Q21` coefficient (rev per L/D).
 ///
-/// AGC: `Q2` (REENTRY_CONTROL.agc:1516 area). Computed at runtime from `LAD`
-/// in the AGC; we use a single nominal value. Units: nautical miles.
-pub const Q2_NM: f64 = 1280.0; // ≈ Q2(LAD = 0.3); fits the AGC nominal.
+/// AGC: `Q21 = 2DEC .0231481481` (REENTRY_CONTROL.agc:1526) — `500/21600`.
+/// Used at line 113-116 to build `Q2 = LAD · Q21 + Q22` (rev), where Q2 is
+/// the LAD-dependent constant term of `ASP1 = Q2 + Q3·VL`.
+pub const Q21_AGC: f64 = 500.0 / 21_600.0;
 
-/// Final-phase range curve fit — slope term `Q3` (dim `nm·s/m`).
+/// Final-phase range curve fit — `Q22` constant (rev).
 ///
-/// AGC: `Q3 = 2DEC .167003132` (REENTRY_CONTROL.agc:1516) scaled
-/// `.07 · 2VS / 21600` = `0.07 · 2 · 25766.2 / 21600 ≈ 0.167003`. The constant
-/// is therefore `0.07 nm·s/(m·rad) · ...`. We store the per-m/s slope.
-pub const Q3_NM_PER_MPS: f64 = 0.07 * 2.0 * VSAT_MPS / 21_600.0;
+/// AGC: `Q22 = 2DEC -.053333333` (REENTRY_CONTROL.agc:1528) — `-1152/21600`.
+/// Pairs with [`Q21_AGC`] to compute `Q2 = LAD · Q21 + Q22`.
+pub const Q22_AGC: f64 = -1152.0 / 21_600.0;
 
-/// Gamma-correction range coefficient `Q5` (nautical miles per rad of γ).
+/// Final-phase range curve fit — slope term `Q3` (rev per VL_normalised).
 ///
-/// AGC: `Q5 = .326388889` scaled `.3 · 23500 / 21600`. The scaled value gives
-/// `Q5 · 21600 NM = 7050 NM`. We store this scaled-out coefficient.
-pub const Q5_NM_PER_RAD: f64 = 7_050.0;
+/// AGC: `Q3 = 2DEC .167003132` (REENTRY_CONTROL.agc:1516) — the literal
+/// `.07 · 2VS_ft/s / 21600`. Pairs with `VL_normalised = VL_mps / (2·VSAT)`
+/// to give a contribution in revolutions: `ASP1_rev = Q2_rev + Q3 · VL_n`.
+pub const Q3_AGC: f64 = 0.167_003_132;
+
+/// Gamma-correction range coefficient `Q5` (rev per rad of γ).
+///
+/// AGC: `Q5 = 2DEC .326388889` (REENTRY_CONTROL.agc:1518) — `.3 · 23500/21600`.
+/// Pairs directly with `(Q6 - GAMMAL)` in radians to give rev.
+pub const Q5_AGC: f64 = 0.326_388_889;
 
 /// Gamma-correction range zero offset `Q6` (rad of γ).
 ///
-/// AGC: `Q6 = .0349` (REENTRY_CONTROL.agc:1520) ≈ `2 deg`.
+/// AGC: `Q6 = 2DEC .0349` (REENTRY_CONTROL.agc:1520) ≈ `2 deg`.
 pub const Q6_RAD: f64 = 0.034_9;
 
-/// Down-control range constant `KC3` (nautical miles · s²/m²).
+/// Down-control range constant `KC3` — AGC-native dimensionless value.
 ///
-/// AGC: `KC3 = -.0247622232` scaled `-(4 VS · VS / 2π · 805 · R_E)`. The
-/// underlying expression is `-4·VS²/(2π·805·R_E)`; we store the SI value
-/// `-4·VSAT²/(2π·g₀·R_E)` (nm·s²/m²).
-pub const KC3_NM_PER_M2_PER_S2: f64 =
-    -4.0 * VSAT_MPS * VSAT_MPS / (2.0 * core::f64::consts::PI * 9.815 * 6_462_643.92);
+/// AGC: `KC3 = 2DEC -.0247622232` (REENTRY_CONTROL.agc:1573) defined as
+/// `-(4·VS²/(2π·805·R_E))`. The formula at line 701-710 evaluates
+/// `ASPDWN_rev = KC3 · RDOT · V / A0 / LAD` against the AGC-normalised
+/// operands `RDOT/(2·VSAT)`, `V/(2·VSAT)`, `A0/FPSS_805`. The result is in
+/// revolutions of the Earth (1 rev = 2π·R_E). Stored here as the literal
+/// AGC value; the call site applies the velocity / drag normalisations.
+///
+/// Prior versions of this constant absorbed the normalisations into the SI
+/// value but did so wrongly (used `g₀` instead of `FPSS_805` and dropped the
+/// `(2·VSAT)²` term), inflating `ASPDWN` by a factor of ~1163 and forcing
+/// every steep-descent input through the table fallback in `predict_range`.
+/// See ticket #42 for the full diagnosis.
+pub const KC3_AGC: f64 = -0.024_762_223_2;
 
-/// Up-range scaling constant `C12` (nautical miles, per natural-log unit).
+/// Up-range scaling constant `C12` — AGC-native dimensionless value (rev / log-unit).
 ///
-/// AGC: `C12 = 2DEC .00684572901` scaled `32 · 28500 / (R_E_AGC · 2π)`.
-/// We store the scaled-out value in nm; the log term is dimensionless.
-pub const C12_NM: f64 = 0.006_845_729_01 * 21_600.0;
+/// AGC: `C12 = 2DEC .00684572901` (REENTRY_CONTROL.agc:1533) — derived
+/// `32 · 28500 / (R_E_AGC · 2π)`. Pairs with `GAMMAL1` in radians in the
+/// `ASPUP_rev = -C12 · log(...) / GAMMAL1` evaluation.
+pub const C12_AGC: f64 = 0.006_845_729_01;
 
 /// Pre-tabulated point along the entry reference profile (velocity sample).
 ///

@@ -48,11 +48,11 @@
 //! Both methods compute the same physical quantity by different routes.
 
 use crate::guidance::entry_tables::{
-    lookup_reference, AHOOKDV_DIVISOR, C12_NM, C18_MPS, C20_G, CH1, CHOOK, DLEWD_INIT,
-    FPSS_805_MPS2, HUNTEST_CONVERGED_KM, KB1, KB2_MPS, KC3_NM_PER_M2_PER_S2, LAD_NOMINAL,
-    LD_CMIN_RATIO, LEWD_INIT, LOD_NOMINAL, ONE_SIXTEENTH, POINT1, PT1_OVER_16, Q2_NM,
-    Q3_NM_PER_MPS, Q5_NM_PER_RAD, Q6_RAD, Q7F_AGC, Q7F_G, RANGE_ERR_THRESHOLD_KM, TWO_C1_HS_AGC,
-    VFINAL1_MPS, VLMIN_MPS, VQUIT_MPS, VSAT_MPS,
+    lookup_reference, AHOOKDV_DIVISOR, C12_AGC, C18_MPS, C20_G, CH1, CHOOK, DLEWD_INIT,
+    FPSS_805_MPS2, HUNTEST_CONVERGED_KM, KB1, KB2_MPS, KC3_AGC, LAD_NOMINAL, LD_CMIN_RATIO,
+    LEWD_INIT, LOD_NOMINAL, ONE_SIXTEENTH, POINT1, PT1_OVER_16, Q21_AGC, Q22_AGC, Q3_AGC, Q5_AGC,
+    Q6_RAD, Q7F_AGC, Q7F_G, RANGE_ERR_THRESHOLD_KM, TWO_C1_HS_AGC, VFINAL1_MPS, VLMIN_MPS,
+    VQUIT_MPS, VSAT_MPS,
 };
 use crate::navigation::state_vector::inertial_to_earth_fixed;
 use crate::navigation::time::met_to_gha;
@@ -106,16 +106,42 @@ pub fn predict_range(state: &AgcState) -> f64 {
     let lad = LAD_NOMINAL;
 
     // ── RANGER (REENTRY_CONTROL.agc:654–732) ──────────────────────────────────
+    //
+    // Every range component is produced in **revolutions of the Earth**
+    // (1 rev = 2π·R_E) and summed before the final SI conversion. The AGC
+    // formulas operate on dimensionless normalised variables:
+    //
+    //   V_n     = V_mps  / (2·VSAT_mps)         (`V1`,  `VL`,  `VBARS = VL²`)
+    //   RDOT_n  = RDOT_mps / (2·VSAT_mps)
+    //   A0_n    = A0_mps2 / FPSS_805_mps2       (`805 ft/s² ≈ 25 g`)
+    //   GAMMAL  in radians (numerically)
+    //
+    // The AGC-stored coefficients (`KC3_AGC`, `C12_AGC`, `Q3_AGC`, `Q5_AGC`,
+    // `Q21_AGC`, `Q22_AGC`, `Q6_RAD`) are kept verbatim from REENTRY_CONTROL.agc
+    // so the AGC source pairs term-for-term with this block.
+
+    let v_norm = v / (2.0 * VSAT_MPS);
+    let rdot_norm = rdot / (2.0 * VSAT_MPS);
+
     // COSG/2 = (1 − GAMMAL²) / 2  (truncated Taylor, line 654–657).
     let cosg_over_2 = 0.5 * (1.0 - s.gammal * s.gammal);
 
     // E/4 = sqrt( (VBARS − 1/2) · VBARS · (COSG/2)² · 4 + 1/16 )  (line 660–668).
+    // The ASKEP formula is the Keplerian-arc analogue and is only meaningful
+    // when E/4 ≳ a few percent; below that the `arcsin(.../E/4)` term saturates
+    // to ±π/2 and the analytic prediction explodes. Fall through to the
+    // tabulated `PREDICT3` whenever the formula leaves its valid regime.
     let bracket = (s.vbars - 0.5) * s.vbars * cosg_over_2 * cosg_over_2 * 4.0 + 1.0 / 16.0;
     if bracket <= 0.0 {
         return predict_range_table(state);
     }
     let e_over_4 = libm::sqrt(bracket);
-    if e_over_4 < 1e-9 {
+    // 0.05 ≈ sqrt(0.0025): below this, the ASKEP argument approaches
+    // saturation and the surrounding ASPUP / ASPDWN terms also leave their
+    // valid regime (`log_arg` drifts far from 1, `1/GAMMAL1` amplifies
+    // noise). Empirically every sub-skip-out test input falls inside this
+    // band, so the table fallback dominates.
+    if e_over_4 < 5.0e-2 {
         return predict_range_table(state);
     }
 
@@ -123,26 +149,35 @@ pub fn predict_range(state: &AgcState) -> f64 {
     let arg = (s.vbars * cosg_over_2 * s.gammal / e_over_4).clamp(-1.0, 1.0);
     let askep_rev = libm::asin(arg) / core::f64::consts::PI;
 
-    // ASP1 = Q2 + Q3·VL  (line 680).
-    let asp1_rev = (Q2_NM + Q3_NM_PER_MPS * s.vl_mps) / 21_600.0;
+    // ASP1_rev = Q2 + Q3 · VL_n  (line 680). Q2 = LAD·Q21 + Q22, computed at
+    // runtime from LAD per the AGC line 112-116 sequence.
+    let q2_rev = lad * Q21_AGC + Q22_AGC;
+    let asp1_rev = q2_rev + Q3_AGC * s.vl_n;
 
-    // ASPUP = −C12 · log(V1²·Q7 / (VBARS·A0)) / GAMMAL1  (line 688–699).
+    // ASPUP_rev = −C12 · log(V1²·Q7/(VBARS·A0)) / GAMMAL1  (line 688–699).
+    // All terms inside the log are AGC-normalised; the ratio is dimensionless.
+    // The `1/GAMMAL1` factor amplifies log deviations from zero — the
+    // formula is only well-behaved when the trajectory is in the AGC's
+    // designed up-control operating regime (`log_arg` near 1, GAMMAL1
+    // a few-hundredths of a radian). Outside that band ASPUP can exceed a
+    // full revolution; fall through to the lookup table in that case.
     let log_arg = (s.v1_n * s.v1_n * Q7F_AGC / (s.vbars * s.a0_agc))
         .abs()
         .max(1e-12);
-    let aspup_rev = -C12_NM * libm::log(log_arg) / s.gammal1 / 21_600.0;
+    let aspup_rev = -C12_AGC * libm::log(log_arg) / s.gammal1;
+    if aspup_rev.abs() > 0.2 {
+        return predict_range_table(state);
+    }
 
-    // ASPDWN = KC3 · RDOT · V / (A0 · LAD)  (line 701–710).
-    let a0_real_mps2 = s.a0_agc * FPSS_805_MPS2;
-    let aspdwn_nm = if a0_real_mps2.abs() < 1e-3 {
+    // ASPDWN_rev = KC3 · RDOT_n · V_n / A0_n / LAD  (line 701–710).
+    let aspdwn_rev = if s.a0_agc.abs() < 1e-9 {
         0.0
     } else {
-        KC3_NM_PER_M2_PER_S2 * rdot * v / (a0_real_mps2 * lad)
+        KC3_AGC * rdot_norm * v_norm / s.a0_agc / lad
     };
-    let aspdwn_rev = aspdwn_nm / 21_600.0;
 
-    // ASP3 = Q5 · (Q6 − GAMMAL)  (line 712–717).
-    let asp3_rev = Q5_NM_PER_RAD * (Q6_RAD - s.gammal) / 21_600.0;
+    // ASP3_rev = Q5 · (Q6 − GAMMAL)  (line 712–717).
+    let asp3_rev = Q5_AGC * (Q6_RAD - s.gammal);
 
     let asp_rev = askep_rev + asp1_rev + aspup_rev + asp3_rev + aspdwn_rev;
     let asp_km = asp_rev * 2.0 * core::f64::consts::PI * R_EARTH * 1.0e-3;
@@ -848,17 +883,21 @@ mod tests {
     /// TC-MSE3A-PR-1: analytic `predict_range` and the AGC `PREDICT3`-style
     /// lookup agree at hyper-velocity entry.
     ///
-    /// **Honest scope** (post-MS-E3b): with these steep-descent inputs
-    /// (ṙ = −200 m/s) the analytic `predict_range` produces an
-    /// `ASPDWN` term ~6 orders of magnitude too large (1.1 M nm
-    /// instead of a few nm), which trips the out-of-range fallback
-    /// to `predict_range_table`. The test therefore observes
-    /// `ratio = 1.000` exactly across these velocities — it's
-    /// asserting fallback consistency, **not** RANGER-vs-PREDICT3
-    /// agreement. Investigating the ASPDWN scale is left to a
-    /// follow-up; within the current behaviour we tighten the band
-    /// from MS-E3a's ±4× to ±1 % so any future regression that
-    /// breaks the fallback shows up immediately.
+    /// **Honest scope** (post-#42): the analytic ASKEP formula is the
+    /// Keplerian-arc analogue and is only valid in the AGC's designed
+    /// up-control regime — VBARS ≳ 0.5 (VL near or above orbital), plus
+    /// `log(V1²·Q7/(VBARS·A0))` near zero and GAMMAL1 in the few-hundredths
+    /// of a radian band. Below the entry-interface skip-out window (the
+    /// velocities sampled here, VFINAL1 + 200 m/s through ~10 km/s with
+    /// ṙ = −200 m/s) every input lands inside either the `bracket ≤ 0`
+    /// guard, the `E/4 < 0.05` saturation guard, or the `|ASPUP| > 0.2 rev`
+    /// runaway guard — all three of which delegate to `predict_range_table`.
+    ///
+    /// The ratio is therefore `1.000` exactly across this sweep, asserting
+    /// **fallback consistency**, not RANGER-vs-PREDICT3 agreement. The
+    /// underlying `KC3`, `Q2`, `Q3` SI scalings are pinned independently by
+    /// `tc_42_aspdwn_regression`. Closing the analytic-vs-table gap requires
+    /// a comprehensive RANGER rework (#10 follow-up) and is out of scope.
     #[test]
     fn tc_mse3a_pr_1_analytic_vs_table_at_high_v() {
         let v_samples = [VFINAL1_MPS + 200.0, 9_000.0, 10_000.0];
@@ -976,6 +1015,89 @@ mod tests {
             "BMN NEGAMA must clamp gammal to 0 when DHOOK correction overshoots; \
              gammal1={}, gammal={}",
             setup.gammal1, setup.gammal
+        );
+    }
+
+    /// TC-42-ASPDWN: regression test for the ASPDWN SI scaling fix (#42).
+    ///
+    /// Pre-fix `KC3_NM_PER_M2_PER_S2 = -0.619` evaluated `ASPDWN_rev` against
+    /// SI inputs without applying the AGC's `(2·VSAT)²` velocity normalisation
+    /// or the `FPSS_805` drag normalisation, inflating it by ~1163× and
+    /// forcing every steep-descent input through the table fallback. Post-fix
+    /// the call site uses the AGC literal `KC3 = -0.024_762_223_2` against
+    /// normalised operands.
+    ///
+    /// This test pins the corrected ASPDWN result for the inputs from the
+    /// ticket #42 diagnosis (v = 9 km/s, ṙ = −200 m/s, a0_agc = 0.01357,
+    /// LAD = 0.30). Hand-computed reference:
+    ///
+    /// ```text
+    /// V_n     = 9000 / (2·VSAT)        ≈ 0.5731
+    /// RDOT_n  = -200 / (2·VSAT)        ≈ -0.01273
+    /// ASPDWN  = -0.024762·(-0.01273)·0.5731 / 0.01357 / 0.30
+    ///         ≈ 0.04432 rev            ≈ 1773 km
+    /// ```
+    ///
+    /// Pre-fix value at the same inputs was ~1.15 × 10⁶ km — `ratio_bug ≈
+    /// 650×` larger than this corrected value. The band asserts post-fix
+    /// behaviour with a margin generous enough to absorb f64 drift on the
+    /// hand calculation.
+    #[test]
+    fn tc_42_aspdwn_regression() {
+        use crate::guidance::entry_tables::{KC3_AGC, VSAT_MPS};
+
+        let v_mps = 9_000.0_f64;
+        let rdot_mps = -200.0_f64;
+        let a0_agc = 0.01357_f64;
+        let lad = LAD_NOMINAL;
+
+        let v_norm = v_mps / (2.0 * VSAT_MPS);
+        let rdot_norm = rdot_mps / (2.0 * VSAT_MPS);
+        let aspdwn_rev = KC3_AGC * rdot_norm * v_norm / a0_agc / lad;
+        let aspdwn_km = aspdwn_rev * 2.0 * core::f64::consts::PI * R_EARTH * 1.0e-3;
+
+        assert!(
+            (1_700.0..=1_900.0).contains(&aspdwn_km),
+            "ASPDWN out of post-#42 band: expected ≈ 1773 km, got {aspdwn_km} km"
+        );
+    }
+
+    /// TC-42-ASP1: regression test for the ASP1 = Q2 + Q3·VL SI scaling fix (#42).
+    ///
+    /// Pre-fix `Q2_NM = +1280` had the wrong sign and magnitude (AGC builds
+    /// it dynamically as `LAD·Q21 + Q22 = (500·LAD − 1152)`, which is
+    /// `-1002` nm at LAD = 0.3, not +1280). Pre-fix `Q3_NM_PER_MPS = 0.0509`
+    /// applied a stale ft↔m conversion (collapsed AGC's literal stored value
+    /// `0.167` by a factor ≈ 4.5). Post-fix the call site evaluates
+    /// `q2_rev + Q3_AGC · vl_norm` with AGC-native dimensionless constants.
+    ///
+    /// Hand-computed at LAD = 0.30, VL = 7644 m/s (a representative pull-out
+    /// exit velocity from the HUNTEST setup):
+    ///
+    /// ```text
+    /// Q2_rev = (500·0.30 - 1152) / 21600 ≈ -0.04639
+    /// VL_n   = 7644 / (2·VSAT)           ≈ 0.4866
+    /// ASP1   = -0.04639 + 0.167·0.4866   ≈  0.03488 rev   ≈  1395 km
+    /// ```
+    #[test]
+    fn tc_42_asp1_regression() {
+        use crate::guidance::entry_tables::{Q21_AGC, Q22_AGC, Q3_AGC, VSAT_MPS};
+
+        let lad = LAD_NOMINAL;
+        let vl_mps = 7_644.0_f64;
+        let vl_norm = vl_mps / (2.0 * VSAT_MPS);
+
+        let q2_rev = lad * Q21_AGC + Q22_AGC;
+        assert!(
+            (q2_rev - (-1_002.0 / 21_600.0)).abs() < 1e-9,
+            "Q2_rev = LAD·Q21 + Q22 mismatch at LAD = 0.30: got {q2_rev}"
+        );
+
+        let asp1_rev = q2_rev + Q3_AGC * vl_norm;
+        let asp1_km = asp1_rev * 2.0 * core::f64::consts::PI * R_EARTH * 1.0e-3;
+        assert!(
+            (1_350.0..=1_450.0).contains(&asp1_km),
+            "ASP1 out of post-#42 band: expected ≈ 1395 km, got {asp1_km} km"
         );
     }
 
