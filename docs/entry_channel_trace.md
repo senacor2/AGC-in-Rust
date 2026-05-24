@@ -1,5 +1,25 @@
 # Entry-Guidance Channel-Trace Harness (MS-E7c)
 
+> **Status (post-MS-E7h)**: Experimental / diagnostic only — **not** part
+> of the regression strategy. After the MS-E7c through MS-E7h
+> investigation (#36–#41), the project decided **per-routine** VAGC
+> fixture capture (#32 MS-E3b HUNTEST, #33 MS-E4b UPCONTRL, #34 MS-E6b
+> GLIM/PREDICT3) is the appropriate level for AGC-source-of-truth
+> validation. Per-cycle channel-trace comparison adds little value over
+> per-routine math validation and ran into a PINBALL state-flag blocker
+> (P62's GOFLASH wait for PROCEED doesn't wake under our cold-boot
+> preload — see the "Known limitation" section at the bottom). MS-E7
+> (#10) was closed under an amended exit criterion that drops the
+> channel-trace half.
+>
+> The infrastructure in this document — `vagc_driver`, `vagc_trace`,
+> `entry_state`, `capture_entry_template`, `tests/entry_e2e_vagc.rs` —
+> stays in tree as a diagnostic tool for one-off yaAGC exploration. It
+> is **not** wired into the canonical test suite as a regression
+> oracle. The Rust-only `tests/entry_e2e.rs` is the trajectory-level
+> regression oracle; #32 / #33 / #34 will land the routine-level
+> AGC-source validation as captures.
+
 Infrastructure for capturing AGC → peripheral channel writes from a
 running yaAGC instance, comparing them against a Rust-side trace, and
 asserting cycle-by-cycle equivalence. The harness builds on the
