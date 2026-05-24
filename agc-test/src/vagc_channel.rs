@@ -99,16 +99,28 @@ impl ChannelPacket {
     /// Returns `Err` if any of the framing bits are wrong.
     pub fn unpack(bytes: [u8; 4]) -> Result<Self, ProtocolError> {
         if (0xc0 & bytes[0]) != 0x00 {
-            return Err(ProtocolError::BadFraming { byte: 0, got: bytes[0] });
+            return Err(ProtocolError::BadFraming {
+                byte: 0,
+                got: bytes[0],
+            });
         }
         if (0xc0 & bytes[1]) != 0x40 {
-            return Err(ProtocolError::BadFraming { byte: 1, got: bytes[1] });
+            return Err(ProtocolError::BadFraming {
+                byte: 1,
+                got: bytes[1],
+            });
         }
         if (0xc0 & bytes[2]) != 0x80 {
-            return Err(ProtocolError::BadFraming { byte: 2, got: bytes[2] });
+            return Err(ProtocolError::BadFraming {
+                byte: 2,
+                got: bytes[2],
+            });
         }
         if (0xc0 & bytes[3]) != 0xc0 {
-            return Err(ProtocolError::BadFraming { byte: 3, got: bytes[3] });
+            return Err(ProtocolError::BadFraming {
+                byte: 3,
+                got: bytes[3],
+            });
         }
         let channel = (((bytes[0] & 0x1F) as u16) << 3) | (((bytes[1] >> 3) & 7) as u16);
         let value = (((bytes[1] & 0x07) as u16) << 12)
@@ -135,10 +147,9 @@ pub enum ProtocolError {
 impl std::fmt::Display for ProtocolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ProtocolError::BadFraming { byte, got } => write!(
-                f,
-                "invalid packet framing at byte {byte}: 0x{got:02X}"
-            ),
+            ProtocolError::BadFraming { byte, got } => {
+                write!(f, "invalid packet framing at byte {byte}: 0x{got:02X}")
+            }
         }
     }
 }
@@ -347,8 +358,7 @@ mod tests {
         let _ = child.wait();
         let _ = std::fs::remove_dir_all(work_dir);
 
-        let pkt =
-            result.expect("expected at least one channel packet from yaAGC within 2 s");
+        let pkt = result.expect("expected at least one channel packet from yaAGC within 2 s");
         // Sanity-check that the channel number is in the documented
         // Comanche055 output-channel range. We don't validate the
         // *value*, just that we got framed protocol output.

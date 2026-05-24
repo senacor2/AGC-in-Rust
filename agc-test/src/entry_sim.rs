@@ -298,7 +298,10 @@ mod tests {
         // Drag is along -V (−Y). At 50 km without bank-management the CM
         // can hit several g of deceleration; over 2 s that's tens to a few
         // hundred m/s. Plausible band: 10–500 m/s.
-        assert!(dv[1] < -1.0, "expected significant deceleration on +Y, got dv={dv:?}");
+        assert!(
+            dv[1] < -1.0,
+            "expected significant deceleration on +Y, got dv={dv:?}"
+        );
         assert!(
             (10.0..500.0).contains(&(-dv[1])),
             "expected |dv| in 10..500 m/s range, got {dv:?}"

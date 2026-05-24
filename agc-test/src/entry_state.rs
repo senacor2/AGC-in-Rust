@@ -795,4 +795,3 @@ Symbol Table\n\
         }
     }
 }
-

@@ -714,7 +714,10 @@ mod tests {
         );
         // The attitude_error field should reflect the roll error.
         let err = state.dap_state.attitude_error;
-        assert!((err[0] - bank_cmd).abs() < 1e-9, "roll error mirrors command");
+        assert!(
+            (err[0] - bank_cmd).abs() < 1e-9,
+            "roll error mirrors command"
+        );
         assert_eq!(err[1], 0.0, "pitch error component must be zero");
         assert_eq!(err[2], 0.0, "yaw error component must be zero");
     }

@@ -55,11 +55,7 @@ impl Waitlist {
     /// Returns `ScheduleResult::OkReloadT3(cs)` if the new task became the earliest
     /// (caller must call `hw.timers().arm_t3(cs)`), `ScheduleResult::Ok` if inserted
     /// but not earliest, or `ScheduleResult::Full` if the waitlist is full.
-    pub fn schedule(
-        &mut self,
-        centiseconds: u16,
-        task: TaskFn,
-    ) -> ScheduleResult {
+    pub fn schedule(&mut self, centiseconds: u16, task: TaskFn) -> ScheduleResult {
         if self.count >= MAX_WAITLIST_TASKS {
             return ScheduleResult::Full;
         }

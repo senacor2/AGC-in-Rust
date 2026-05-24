@@ -114,8 +114,8 @@ fn main() {
 
     let config_text = std::fs::read_to_string(&input_path)
         .unwrap_or_else(|e| die(&format!("cannot read {}: {}", input_path.display(), e)));
-    let config: CaptureConfig = toml::from_str(&config_text)
-        .unwrap_or_else(|e| die(&format!("cannot parse TOML: {}", e)));
+    let config: CaptureConfig =
+        toml::from_str(&config_text).unwrap_or_else(|e| die(&format!("cannot parse TOML: {}", e)));
 
     let root = vagc_root();
     let yaagc = root.join("yaAGC/yaAGC");
@@ -158,7 +158,8 @@ fn main() {
 
     for case in &config.cases {
         eprintln!("Capturing case: {}", case.name);
-        let captured = capture_one_case(case, &resolved, &template.core, &yaagc, &rope, &symtab_path);
+        let captured =
+            capture_one_case(case, &resolved, &template.core, &yaagc, &rope, &symtab_path);
         out.cases.push(captured);
     }
 

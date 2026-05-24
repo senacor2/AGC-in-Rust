@@ -204,12 +204,7 @@ pub fn range(r_active: Vec3, r_target: Vec3) -> f64 {
 /// (O'Brien p. 316).  The AGC stored `RDOT` at scale B+7 m/s in erasable.
 ///
 /// Spec: rendezvous-spec.md §6.4
-pub fn range_rate(
-    r_active: Vec3,
-    v_active: Vec3,
-    r_target: Vec3,
-    v_target: Vec3,
-) -> Option<f64> {
+pub fn range_rate(r_active: Vec3, v_active: Vec3, r_target: Vec3, v_target: Vec3) -> Option<f64> {
     let rho = vsub(r_active, r_target);
     let rho_dot = vsub(v_active, v_target);
     let rng = norm(rho);
@@ -680,8 +675,7 @@ mod tests {
         // Flipped: separating at +20 m/s radially.
         let v_a_separating: Vec3 = [20.0, 7500.0, 0.0];
 
-        let rdot_closing =
-            range_rate(r_a, v_a_closing, r_t, v_t).expect("TC-REND-I2: range > 0");
+        let rdot_closing = range_rate(r_a, v_a_closing, r_t, v_t).expect("TC-REND-I2: range > 0");
         let rdot_separating =
             range_rate(r_a, v_a_separating, r_t, v_t).expect("TC-REND-I2: range > 0");
 

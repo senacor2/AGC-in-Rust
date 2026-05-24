@@ -120,10 +120,7 @@ pub fn restart(state: &mut AgcState) {
 /// fixtures can populate entries without touching any global state.
 /// Production code calls [`restart`], which delegates here with the const
 /// [`RESTART_GROUP_TABLE`].
-pub fn restart_with_table(
-    state: &mut AgcState,
-    table: &[RestartGroupEntry; NUM_RESTART_GROUPS],
-) {
+pub fn restart_with_table(state: &mut AgcState, table: &[RestartGroupEntry; NUM_RESTART_GROUPS]) {
     // Navigation state is PRESERVED — do not touch csm_state, target_state,
     // refsmmat, or time.
 

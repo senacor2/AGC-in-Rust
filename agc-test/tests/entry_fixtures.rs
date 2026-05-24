@@ -21,8 +21,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-const HUNTEST_FIXTURE_JSON: &str =
-    include_str!("../fixtures/entry/huntest_cases.json");
+const HUNTEST_FIXTURE_JSON: &str = include_str!("../fixtures/entry/huntest_cases.json");
 
 #[derive(Debug, Deserialize)]
 struct FixtureFile {
@@ -51,8 +50,8 @@ struct FixtureCase {
 /// asserting its result matches `expected`.
 #[test]
 fn huntest_fixtures_round_trip() {
-    let fixture: FixtureFile = serde_json::from_str(HUNTEST_FIXTURE_JSON)
-        .expect("huntest_cases.json must deserialize");
+    let fixture: FixtureFile =
+        serde_json::from_str(HUNTEST_FIXTURE_JSON).expect("huntest_cases.json must deserialize");
 
     assert!(
         !fixture.cases.is_empty(),

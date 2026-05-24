@@ -192,10 +192,7 @@ pub fn snapshot_for_restart(state: &AgcState, backup: &mut BackupState) {
 /// Validates the magic word, version, and checksum before touching `state`.
 /// On any failure the function returns `Err` and `state` is left unchanged
 /// — the caller is expected to fall back to FRESH START.
-pub fn restore_from_backup(
-    state: &mut AgcState,
-    backup: &BackupState,
-) -> Result<(), RestoreError> {
+pub fn restore_from_backup(state: &mut AgcState, backup: &BackupState) -> Result<(), RestoreError> {
     if backup.header.magic != MAGIC {
         return Err(RestoreError::MagicMismatch);
     }
@@ -327,14 +324,12 @@ mod tests {
             epoch: Met(50_000),
             frame: Frame::EarthInertial,
         };
-        state.refsmmat = [
-            [0.0, 1.0, 0.0],
-            [-1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0],
-        ];
+        state.refsmmat = [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
         state.time = Met(123_456);
         state.gha_epoch_rad = 1.234_567_8;
-        state.restart.set_phase(crate::executive::GROUP_3, crate::executive::Phase::new(2));
+        state
+            .restart
+            .set_phase(crate::executive::GROUP_3, crate::executive::Phase::new(2));
         state.pipa_cal = PipaCalibration {
             scale: 0.1,
             bias: [1, -2, 3],

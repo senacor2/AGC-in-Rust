@@ -305,8 +305,8 @@ fn compute_range_to_go_km(state: &crate::AgcState) -> f64 {
     let dlon = state.entry.target_lon_rad - lon;
     let sd_lat = libm::sin(dlat * 0.5);
     let sd_lon = libm::sin(dlon * 0.5);
-    let a = sd_lat * sd_lat
-        + libm::cos(lat) * libm::cos(state.entry.target_lat_rad) * sd_lon * sd_lon;
+    let a =
+        sd_lat * sd_lat + libm::cos(lat) * libm::cos(state.entry.target_lat_rad) * sd_lon * sd_lon;
     let c = 2.0 * libm::atan2(libm::sqrt(a), libm::sqrt((1.0 - a).max(0.0)));
     R_EARTH * c / 1000.0
 }

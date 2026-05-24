@@ -456,10 +456,7 @@ mod tests {
             DapMode::Tvc,
             "TIG ignition must promote DAP to Tvc mode"
         );
-        assert!(
-            !state.burn.armed,
-            "TIG ignition must clear burn.armed"
-        );
+        assert!(!state.burn.armed, "TIG ignition must clear burn.armed");
     }
 
     /// TC-DAP-PUMP-2: pump is a no-op while mode == Off and does not

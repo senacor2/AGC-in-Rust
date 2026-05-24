@@ -114,11 +114,7 @@ impl StateVector {
 pub fn inertial_to_earth_fixed(pos: Vec3, gha_rad: f64) -> Vec3 {
     let c = libm::cos(gha_rad);
     let s = libm::sin(gha_rad);
-    [
-        pos[0] * c + pos[1] * s,
-        -pos[0] * s + pos[1] * c,
-        pos[2],
-    ]
+    [pos[0] * c + pos[1] * s, -pos[0] * s + pos[1] * c, pos[2]]
 }
 
 /// Rotate an Earth-fixed (ECEF) position vector to the inertial (ECI) frame.
@@ -127,11 +123,7 @@ pub fn inertial_to_earth_fixed(pos: Vec3, gha_rad: f64) -> Vec3 {
 pub fn earth_fixed_to_inertial(pos: Vec3, gha_rad: f64) -> Vec3 {
     let c = libm::cos(gha_rad);
     let s = libm::sin(gha_rad);
-    [
-        pos[0] * c - pos[1] * s,
-        pos[0] * s + pos[1] * c,
-        pos[2],
-    ]
+    [pos[0] * c - pos[1] * s, pos[0] * s + pos[1] * c, pos[2]]
 }
 
 /// Rotate an inertial velocity to the Earth-fixed frame.
@@ -364,7 +356,11 @@ mod tests {
     fn tc_frame_2_quarter_revolution() {
         let out = inertial_to_earth_fixed([1.0, 0.0, 0.0], core::f64::consts::FRAC_PI_2);
         assert!(out[0].abs() < 1e-15, "x should be 0, got {}", out[0]);
-        assert!((out[1] - -1.0).abs() < 1e-15, "y should be -1, got {}", out[1]);
+        assert!(
+            (out[1] - -1.0).abs() < 1e-15,
+            "y should be -1, got {}",
+            out[1]
+        );
         assert!(out[2].abs() < 1e-15, "z should be 0, got {}", out[2]);
     }
 
@@ -394,13 +390,21 @@ mod tests {
         let v_eci = earth_fixed_to_inertial_vel(r_ef, v_ef, 0.0);
 
         let expected_mag = OMEGA_EARTH * R_EARTH_TEST;
-        assert!(v_eci[0].abs() < 1e-9, "v_eci x should be ~0, got {}", v_eci[0]);
+        assert!(
+            v_eci[0].abs() < 1e-9,
+            "v_eci x should be ~0, got {}",
+            v_eci[0]
+        );
         assert!(
             (v_eci[1] - expected_mag).abs() < 1e-9,
             "v_eci y should be {expected_mag}, got {}",
             v_eci[1]
         );
-        assert!(v_eci[2].abs() < 1e-9, "v_eci z should be ~0, got {}", v_eci[2]);
+        assert!(
+            v_eci[2].abs() < 1e-9,
+            "v_eci z should be ~0, got {}",
+            v_eci[2]
+        );
         // Magnitude ≈ 465 m/s sanity range.
         assert!(
             (expected_mag - 465.1).abs() < 1.0,
