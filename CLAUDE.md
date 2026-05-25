@@ -43,6 +43,16 @@ cargo test <name>                                              # run a single te
 cargo clippy                                                   # lint
 ```
 
+## Version control and task tracking
+
+The project is held in a git repository which is synched to the github senacor2/AGC-in-Rust remote.
+All tasks shall be tracked as github issues. Any task lists in markdown files or tasks left in specifactions
+are deprecated. Update the issue status when you start working on the ticket and when you close the work package. Issues shall have acceptance criteria and before the issue is closed, the criteria must be fulfilled.
+
+We use feature branching to implement major changes with one feature per change.
+The feature branch must be linked to the top-level issue and the name must match the change.
+
+
 ## Architecture Constraints
 
 The Rust implementation must reflect the original AGC constraints:
