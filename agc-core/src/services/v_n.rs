@@ -153,6 +153,10 @@ pub struct VnState {
     /// Consumed by P22 (landmark tracking).
     /// AGC source: Comanche055/PINBALL_NOUN_TABLES.agc, N72.
     pub crew_landmark: Option<[f64; 3]>,
+    /// Target geodetic point entered by crew via V25 N89. R1 = lat (deg),
+    /// R2 = lon (deg), R3 = alt (m). P29 reads R2 (longitude); the lat and
+    /// alt fields are informational/reserved (matching the AGC's N89 reuse).
+    pub crew_p29_target: Option<[f64; 3]>,
 }
 
 impl VnState {
@@ -164,6 +168,7 @@ impl VnState {
             pending_v50: None,
             crew_star_code: None,
             crew_landmark: None,
+            crew_p29_target: None,
         }
     }
 }
@@ -1012,6 +1017,7 @@ fn noun_scale(noun: u8) -> f64 {
         70 => 1.0,  // star/planet code — integer
         72 => 1.0,  // landmark lat/lon/alt — degrees / metres, integer
         81 => 1.0,  // LVLH ΔV — m/s, integer
+        89 => 0.01, // P29 target geodetic point — deg×100 input → degrees
         _ => 1.0,   // default pass-through
     }
 }
@@ -1053,6 +1059,7 @@ fn noun_commit(state: &mut crate::AgcState, _verb: u8, noun: u8, values: [f64; 3
         70 => noun_70_commit_star_code(state, values[0]),
         72 => noun_72_commit_landmark(state, values),
         81 => noun_81_commit_dv_lvlh(state, values),
+        89 => noun_89_commit_p29_target(state, values),
         _ => {
             // Unknown nouns are silently ignored. Future phases
             // will populate the DSKY R registers from `values`.
@@ -1122,6 +1129,22 @@ fn noun_70_commit_star_code(state: &mut crate::AgcState, code: f64) {
 /// AGC source: Comanche055/PINBALL_NOUN_TABLES.agc, N72.
 fn noun_72_commit_landmark(state: &mut crate::AgcState, values: [f64; 3]) {
     state.vn.crew_landmark = Some(values);
+}
+
+/// N89 commit — target geodetic point → `vn.crew_p29_target`.
+///
+/// R1 = latitude (degrees, informational), R2 = longitude (degrees, consumed
+/// by P29), R3 = altitude (metres, informational). When P29 is the active
+/// major mode at commit time, immediately runs the solver and displays
+/// V06 N34 (or raises the corresponding alarm).
+///
+/// AGC source: Comanche055/PINBALL_NOUN_TABLES.agc, N89 (Landmark Definition
+/// — reused for P29 target longitude per the P29 plan §6).
+fn noun_89_commit_p29_target(state: &mut crate::AgcState, values: [f64; 3]) {
+    state.vn.crew_p29_target = Some(values);
+    if state.major_mode == 29 {
+        crate::programs::p29::p29_compute_and_display(state);
+    }
 }
 
 /// N81 commit — consume the pending TIG and call `p30_load_dv_lvlh`.
@@ -2259,6 +2282,55 @@ mod tests {
         assert_eq!(lm[0], 285.0, "TC-VND-12: lat");
         assert_eq!(lm[1], -7742.0, "TC-VND-12: lon");
         assert_eq!(lm[2], 100.0, "TC-VND-12: alt");
+    }
+
+    /// TC-VND-12B: V25 N89 stages the P29 target and, when P29 is the active
+    /// major mode, triggers the P29 solver through `noun_89_commit_p29_target`.
+    #[test]
+    fn tc_vnd_12b_v25_n89_p29_target() {
+        use crate::navigation::gravity::MU_EARTH;
+        use crate::programs::p21::R_EARTH;
+        use crate::types::Met;
+
+        let mut state = AgcState::new();
+        // Stage a canned LEO state vector.
+        let r = R_EARTH + 300_000.0;
+        let v = libm::sqrt(MU_EARTH / r);
+        state.csm_state.position = [r, 0.0, 0.0];
+        state.csm_state.velocity = [0.0, v, 0.0];
+        state.csm_state.epoch = Met(100_000);
+        state.gha_epoch_rad = 0.0;
+        state.time = Met(100_000);
+        // Activate P29 so the commit handler triggers compute_and_display.
+        crate::programs::p29::p29_init(&mut state);
+
+        feed(
+            &mut state,
+            &[Key::Verb, d(2), d(5), Key::Noun, d(8), d(9), Key::Entr],
+        );
+        // R1 = +00000 (lat, ignored)
+        feed_key(&mut state, Key::Plus);
+        feed_number(&mut state, 0);
+        feed_key(&mut state, Key::Entr);
+        // R2 = +03000 (lon = 30.00°)
+        feed_key(&mut state, Key::Plus);
+        feed_number(&mut state, 3000);
+        feed_key(&mut state, Key::Entr);
+        // R3 = +00000 (alt, ignored)
+        feed_key(&mut state, Key::Plus);
+        feed_number(&mut state, 0);
+        feed_key(&mut state, Key::Entr);
+
+        assert_eq!(state.vn.phase, VnPhase::Idle);
+        let target = state
+            .vn
+            .crew_p29_target
+            .expect("TC-VND-12B: crew_p29_target must be Some");
+        assert!((target[1] - 30.0).abs() < 1e-9, "TC-VND-12B: lon");
+        // P29 compute_and_display must have run and switched DSKY to V06 N34.
+        assert_eq!(state.dsky.verb, 6, "TC-VND-12B: V06 after P29 compute");
+        assert_eq!(state.dsky.noun, 34, "TC-VND-12B: N34 after P29 compute");
+        assert!(!state.alarm.lit, "no alarm expected for canned LEO");
     }
 
     // ── Time noun commits ────────────────────────────────────────────────────

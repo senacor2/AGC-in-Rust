@@ -14,8 +14,9 @@
 
 use crate::math::linalg::{cross, dot, mxv, norm, vscale, vsub};
 use crate::navigation::gravity::{MU_EARTH, MU_MOON, R_EARTH, R_MOON};
-use crate::navigation::state_vector::{Frame, StateVector};
-use crate::types::Met;
+use crate::navigation::state_vector::{inertial_to_earth_fixed, Frame, StateVector};
+use crate::navigation::time::OMEGA_EARTH;
+use crate::types::{Met, Vec3};
 use core::f64::consts::{PI, TAU};
 
 pub use crate::math::kepler::kepler_step;
@@ -477,6 +478,170 @@ pub fn apoapsis_altitude_moon(el: &OrbitalElements) -> f64 {
     apoapsis_radius(el) - R_MOON
 }
 
+// ── P29 Time-of-Longitude Solver ──────────────────────────────────────────────
+
+/// Result of a successful [`time_of_longitude`] call.
+#[derive(Clone, Copy, Debug)]
+pub struct TimeOfLongitudeResult {
+    /// Mission Elapsed Time at which the CSM ground track crosses the target
+    /// longitude (seconds since launch / mission epoch).
+    pub time_of_crossing_s: f64,
+    /// Geodetic latitude at the crossing (rad). Computed as `asin(z/r)` of the
+    /// ECEF position — geocentric, matching `p21_compute_ground_track`.
+    pub lat_rad: f64,
+    /// Altitude above the Earth's mean radius at the crossing (m).
+    pub alt_m: f64,
+}
+
+/// Reasons a [`time_of_longitude`] call may fail.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum P29Error {
+    /// The input state vector is on a hyperbolic or parabolic trajectory —
+    /// there is no orbital period, hence no recurring ground-track crossing.
+    Hyperbolic,
+    /// Newton iteration did not converge within the iteration cap.
+    NoConvergence,
+    /// Angular momentum is zero (degenerate input — CSM moving radially).
+    ZeroAngularMomentum,
+}
+
+/// P29 — Time-of-Longitude solver.
+///
+/// Given the current CSM state vector and a target geographic longitude,
+/// returns the Mission Elapsed Time at which the CSM ground track crosses
+/// that longitude (next crossing after `epoch_s`), plus the geodetic latitude
+/// and altitude at the crossing point.
+///
+/// **Algorithm** (Newton–Raphson on time):
+///
+/// 1. Compute the orbital period from specific energy (`a = -μ/(2ε)`,
+///    `T = 2π√(a³/μ)`). Returns `P29Error::Hyperbolic` if `ε ≥ 0`.
+/// 2. Use the angular-momentum z-component to detect prograde vs. retrograde.
+///    The ground-track longitude drift rate (linearised) is
+///    `dlon/dt ≈ sgn(h_z) · 2π/T - OMEGA_EARTH`.
+/// 3. Initial guess: `t₀ = epoch_s + Δlon / (dlon/dt)`, where `Δlon` is the
+///    shortest signed angular distance from the current longitude to the
+///    target, taken in the direction of drift.
+/// 4. Newton iterate: propagate via `kepler_step` to candidate `t`, rotate
+///    to ECEF, extract longitude, wrap the residual to `(-π, π]`, and update
+///    `t ← t - err / (dlon/dt)`. Converges to `|err| < 1e-5 rad` (~100 m at
+///    the equator). Capped at 20 iterations; failure returns
+///    `P29Error::NoConvergence`.
+///
+/// **Limitations**:
+/// - Crossings count is hard-coded to 1 (next crossing); the AGC P29 had no
+///   crew-selectable count and neither do we.
+/// - For highly-inclined orbits the ground track is non-monotonic in time
+///   (longitude oscillates within a period). The Newton iteration with the
+///   linearised drift rate converges on the crossing closest to the initial
+///   guess; pathological inputs where the target longitude is at the very
+///   edge of the inclination band may converge slowly or land on a different
+///   crossing than ground-station planners expect. Stable for orbits up to
+///   ~30° inclination at LEO altitudes; degrades for steeper geometries.
+///
+/// AGC source: `Comanche055/P20-P25.agc` P29 entry sequence (P29 itself is a
+/// thin program shell; the math is the same orbital-mechanics-with-Earth-
+/// rotation pattern as P21).
+pub fn time_of_longitude(
+    csm_pos: Vec3,
+    csm_vel: Vec3,
+    epoch_s: f64,
+    target_lon_rad: f64,
+    gha_epoch_rad: f64,
+) -> Result<TimeOfLongitudeResult, P29Error> {
+    // ── Step 1: orbital period from specific energy ──────────────────────────
+    let r = norm(csm_pos);
+    let v2 = dot(csm_vel, csm_vel);
+    let energy = 0.5 * v2 - MU_EARTH / r;
+    if energy >= 0.0 {
+        return Err(P29Error::Hyperbolic);
+    }
+    let a = -MU_EARTH / (2.0 * energy);
+    let t_orb = TAU * libm::sqrt(a * a * a / MU_EARTH);
+
+    // ── Step 2: prograde sense from angular momentum ─────────────────────────
+    let h = cross(csm_pos, csm_vel);
+    if norm(h) < 1.0e-9 {
+        return Err(P29Error::ZeroAngularMomentum);
+    }
+    let prograde_sign = if h[2] >= 0.0 { 1.0 } else { -1.0 };
+    let dlon_dt = prograde_sign * (TAU / t_orb) - OMEGA_EARTH;
+
+    // ── Step 3: current ground-track longitude ───────────────────────────────
+    let gha_epoch = gha_epoch_rad + OMEGA_EARTH * epoch_s;
+    let pos_ef_now = inertial_to_earth_fixed(csm_pos, gha_epoch);
+    let lon_now = libm::atan2(pos_ef_now[1], pos_ef_now[0]);
+
+    // ── Step 4: initial-guess time, marching in the drift direction ──────────
+    // Wrap Δlon into the same sign as `dlon_dt` so the guess is strictly in
+    // the future (after epoch_s) and corresponds to the next crossing.
+    let mut dlon = target_lon_rad - lon_now;
+    if dlon_dt > 0.0 {
+        while dlon < 0.0 {
+            dlon += TAU;
+        }
+        while dlon >= TAU {
+            dlon -= TAU;
+        }
+    } else if dlon_dt < 0.0 {
+        while dlon > 0.0 {
+            dlon -= TAU;
+        }
+        while dlon <= -TAU {
+            dlon += TAU;
+        }
+    } else {
+        // Geosynchronous edge case (impossible at LEO with prograde, but the
+        // formula goes singular). Treat as no convergence.
+        return Err(P29Error::NoConvergence);
+    }
+    let mut t = epoch_s + dlon / dlon_dt;
+
+    // ── Step 5: Newton iteration ────────────────────────────────────────────
+    const MAX_ITER: u32 = 20;
+    const TOL: f64 = 1.0e-5;
+    let (mut final_pos_ef, mut converged) = ([0.0_f64; 3], false);
+
+    for _ in 0..MAX_ITER {
+        let dt = t - epoch_s;
+        let (pos_t, _vel_t) = if dt == 0.0 {
+            (csm_pos, csm_vel)
+        } else {
+            kepler_step(csm_pos, csm_vel, dt, MU_EARTH)
+        };
+        let gha = gha_epoch_rad + OMEGA_EARTH * t;
+        let pos_ef = inertial_to_earth_fixed(pos_t, gha);
+        let lon = libm::atan2(pos_ef[1], pos_ef[0]);
+
+        // Wrap residual to (-π, π] so Newton steps in the shortest direction.
+        let mut err = lon - target_lon_rad;
+        while err > PI {
+            err -= TAU;
+        }
+        while err <= -PI {
+            err += TAU;
+        }
+
+        if err.abs() < TOL {
+            final_pos_ef = pos_ef;
+            converged = true;
+            break;
+        }
+        t -= err / dlon_dt;
+    }
+
+    if !converged {
+        return Err(P29Error::NoConvergence);
+    }
+
+    let r_mag = norm(final_pos_ef);
+    Ok(TimeOfLongitudeResult {
+        time_of_crossing_s: t,
+        lat_rad: libm::asin(final_pos_ef[2] / r_mag),
+        alt_m: r_mag - R_EARTH,
+    })
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -885,5 +1050,156 @@ mod tests {
             orbits_expected,
             (orbits_per_day - orbits_expected).abs()
         );
+    }
+
+    // ── P29 (Time-of-Longitude) ────────────────────────────────────────────────
+
+    /// Helper: circular equatorial LEO at 300 km altitude, Greenwich meridian
+    /// on ECI X-axis at epoch 0.
+    fn p29_leo_fixture() -> ([f64; 3], [f64; 3]) {
+        // Circular-orbit velocity at altitude h: v = sqrt(μ/r).
+        let r = R_EARTH + 300_000.0;
+        let v = libm::sqrt(MU_EARTH / r);
+        let csm_pos: [f64; 3] = [r, 0.0, 0.0];
+        let csm_vel: [f64; 3] = [0.0, v, 0.0];
+        (csm_pos, csm_vel)
+    }
+
+    /// TC-P29-1: Quarter-orbit eastward crossing — circular equatorial LEO from
+    /// `lon = 0`, target `lon = π/2`. The CSM ground track drifts east at
+    /// `(2π/T_orb - OMEGA_EARTH)` rad/s; the crossing time is `(π/2) / drift`.
+    #[test]
+    fn tc_p29_1_quarter_orbit_east() {
+        let (csm_pos, csm_vel) = p29_leo_fixture();
+        let r = norm(csm_pos);
+        let t_orb = TAU * libm::sqrt(r * r * r / MU_EARTH);
+        let drift = TAU / t_orb - OMEGA_EARTH;
+        let t_expected = (PI / 2.0) / drift;
+
+        let result = time_of_longitude(csm_pos, csm_vel, 0.0, PI / 2.0, 0.0)
+            .expect("non-degenerate circular LEO");
+        assert!(
+            (result.time_of_crossing_s - t_expected).abs() < 1.0,
+            "expected t ≈ {} s, got {}",
+            t_expected,
+            result.time_of_crossing_s
+        );
+        // Equatorial orbit: latitude at crossing ≈ 0.
+        assert!(
+            result.lat_rad.abs() < 1.0e-4,
+            "expected lat ≈ 0, got {}",
+            result.lat_rad
+        );
+        // Altitude at crossing ≈ 300 km.
+        assert!(
+            (result.alt_m - 300_000.0).abs() < 1.0,
+            "expected alt ≈ 300 km, got {} m",
+            result.alt_m
+        );
+    }
+
+    /// TC-P29-2: Half-orbit eastward crossing — target `lon = π`.
+    #[test]
+    fn tc_p29_2_half_orbit_east() {
+        let (csm_pos, csm_vel) = p29_leo_fixture();
+        let r = norm(csm_pos);
+        let t_orb = TAU * libm::sqrt(r * r * r / MU_EARTH);
+        let drift = TAU / t_orb - OMEGA_EARTH;
+        let t_expected = PI / drift;
+
+        let result = time_of_longitude(csm_pos, csm_vel, 0.0, PI, 0.0).expect("non-degenerate");
+        assert!(
+            (result.time_of_crossing_s - t_expected).abs() < 1.0,
+            "expected t ≈ {} s, got {}",
+            t_expected,
+            result.time_of_crossing_s
+        );
+    }
+
+    /// TC-P29-3: Retrograde orbit — ground track drifts WEST relative to the
+    /// rotating Earth. Same target `lon = π/2` should still be reached, but
+    /// the time-of-crossing differs from the prograde case and is computed
+    /// against the retrograde-direction drift rate.
+    #[test]
+    fn tc_p29_3_retrograde_sign() {
+        let r = R_EARTH + 300_000.0;
+        let v = libm::sqrt(MU_EARTH / r);
+        let csm_pos: [f64; 3] = [r, 0.0, 0.0];
+        let csm_vel: [f64; 3] = [0.0, -v, 0.0]; // retrograde (negative y-velocity)
+
+        let result = time_of_longitude(csm_pos, csm_vel, 0.0, PI / 2.0, 0.0)
+            .expect("non-degenerate retrograde LEO");
+        // Retrograde drift: -2π/T_orb - OMEGA_EARTH (both negative). The
+        // ground track moves west; reaching east-π/2 means going 3π/2 west.
+        let t_orb = TAU * libm::sqrt(r * r * r / MU_EARTH);
+        let drift = -TAU / t_orb - OMEGA_EARTH;
+        // Δlon wrapped to negative range: target - lon_now = π/2; for
+        // negative drift this wraps to π/2 - 2π = -3π/2.
+        let t_expected = (-3.0 * PI / 2.0) / drift;
+        assert!(
+            (result.time_of_crossing_s - t_expected).abs() < 1.0,
+            "expected t ≈ {} s, got {}",
+            t_expected,
+            result.time_of_crossing_s
+        );
+        assert!(
+            result.time_of_crossing_s > 0.0,
+            "crossing must lie after epoch"
+        );
+    }
+
+    /// TC-P29-4: Hyperbolic trajectory — escape velocity returns Hyperbolic.
+    #[test]
+    fn tc_p29_4_hyperbolic_error() {
+        let r = R_EARTH + 300_000.0;
+        // Escape velocity at this altitude is sqrt(2μ/r). Use 1.1× that.
+        let v_esc = libm::sqrt(2.0 * MU_EARTH / r) * 1.1;
+        let csm_pos: [f64; 3] = [r, 0.0, 0.0];
+        let csm_vel: [f64; 3] = [0.0, v_esc, 0.0];
+
+        let err = time_of_longitude(csm_pos, csm_vel, 0.0, PI / 2.0, 0.0).unwrap_err();
+        assert_eq!(err, P29Error::Hyperbolic);
+    }
+
+    /// TC-P29-5: Round-trip with `p21_compute_ground_track` — at the converged
+    /// time, the longitude reported by P21 matches the target within solver
+    /// tolerance.
+    #[test]
+    fn tc_p29_5_roundtrip_with_p21() {
+        use crate::programs::p21::p21_compute_ground_track;
+
+        let (csm_pos, csm_vel) = p29_leo_fixture();
+        let target_lon = PI / 3.0; // 60° east
+        let result =
+            time_of_longitude(csm_pos, csm_vel, 0.0, target_lon, 0.0).expect("non-degenerate LEO");
+
+        let gt = p21_compute_ground_track(csm_pos, csm_vel, 0.0, result.time_of_crossing_s, 0.0);
+        let err = gt.lon_rad - target_lon;
+        let err_wrapped = if err > PI {
+            err - TAU
+        } else if err < -PI {
+            err + TAU
+        } else {
+            err
+        };
+        assert!(
+            err_wrapped.abs() < 1.0e-5,
+            "P21 longitude at converged time: {} rad, target {} rad, err {}",
+            gt.lon_rad,
+            target_lon,
+            err_wrapped
+        );
+    }
+
+    /// TC-P29-6: Zero angular momentum (radially-falling input) returns
+    /// `ZeroAngularMomentum` rather than dividing by zero downstream.
+    #[test]
+    fn tc_p29_6_zero_angular_momentum() {
+        let csm_pos: [f64; 3] = [R_EARTH + 1_000_000.0, 0.0, 0.0];
+        let csm_vel: [f64; 3] = [-1000.0, 0.0, 0.0]; // purely radial (toward Earth)
+                                                     // Specific energy still has to be negative for the hyperbolic check
+                                                     // not to fire first; r = 7.371 Mm, v = 1000, ε = 5e5 - μ/r ≈ -5.0e7 < 0.
+        let err = time_of_longitude(csm_pos, csm_vel, 0.0, PI / 2.0, 0.0).unwrap_err();
+        assert_eq!(err, P29Error::ZeroAngularMomentum);
     }
 }
