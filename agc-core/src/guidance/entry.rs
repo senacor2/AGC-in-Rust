@@ -49,10 +49,11 @@
 
 use crate::guidance::entry_tables::{
     lookup_reference, AHOOKDV_DIVISOR, C12_AGC, C18_MPS, C20_G, CH1, CHOOK, DLEWD_INIT,
-    FPSS_805_MPS2, HUNTEST_CONVERGED_KM, K1D_AGC, K2D_AGC, KA3_AGC, KA4_AGC, KB1, KB2_MPS, KC3_AGC,
-    LAD_NOMINAL, LD_CMIN_RATIO, LEWD_INIT, LOD_NOMINAL, ONE_SIXTEENTH, POINT1, PT1_OVER_16,
-    Q21_AGC, Q22_AGC, Q3_AGC, Q5_AGC, Q6_RAD, Q7F_AGC, Q7F_G, Q7MIN_G, RANGE_ERR_THRESHOLD_KM,
-    TWO_C1_HS_AGC, TWO_HS_AGC, VFINAL1_MPS, VLMIN_MPS, VQUIT_MPS, VSAT_MPS,
+    FPSS_805_MPS2, GMAX_G, GMAX_HALF_G, HUNTEST_CONVERGED_KM, K1D_AGC, K2D_AGC, KA3_AGC, KA4_AGC,
+    KB1, KB2_MPS, KC3_AGC, LAD_NOMINAL, LD_CMIN_RATIO, LEWD_INIT, LOD_NOMINAL, ONE_SIXTEENTH,
+    POINT1, PT1_OVER_16, Q21_AGC, Q22_AGC, Q3_AGC, Q5_AGC, Q6_RAD, Q7F_AGC, Q7F_G, Q7MIN_G,
+    RANGE_ERR_THRESHOLD_KM, TWO_C1_HS_AGC, TWO_HS_AGC, TWO_HS_GMAX_SQ_AGC, VFINAL1_MPS, VLMIN_MPS,
+    VQUIT_MPS, VSAT_MPS,
 };
 use crate::navigation::state_vector::inertial_to_earth_fixed;
 use crate::navigation::time::met_to_gha;
@@ -758,34 +759,34 @@ pub fn ballistic_step(state: &AgcState) -> LdUpdate {
 ///
 /// AGC source: `REENTRY_CONTROL.agc:1139–1235`. Algorithm:
 ///
-/// 1. Linearly interpolate the reference profile (RTOGO, RDOTREF, F1, F2,
-///    Y) at the current velocity. `F1 = ∂Range/∂A`, `F2 = ∂Range/∂RDOT`,
-///    `Y = ∂Range/∂(L/D)`. The MS-E3 table has RTOGO, RDOTREF and Y; for
-///    F1 and F2 we use the sensitivity columns at AGC lines 1383–1408.
+/// 1. Linearly interpolate the reference profile (RTOGO, RDOTREF, AREF, F1,
+///    F2, Y) at the current velocity. `F1 = ∂Range/∂D`, `F2 = ∂Range/∂RDOT`,
+///    `Y = ∂Range/∂(L/D)`.
 /// 2. Compute predicted range:
 ///    `PREDANG = RTOGO + F1·(D − AREF) + F2·(RDOT − RDOTREF)`
-///    where `AREF = REFERENCE_PROFILE[..].neg_aref_g` (already in g units,
-///    sign carries through).
+///    where the stored `neg_aref_g` is `−AREF`, so `D_g - AREF_g = D_g +
+///    neg_aref_g`.
 /// 3. Compute L/D command:
 ///    `L/D = LOD_NOMINAL + (THETAH − PREDANG) / Y`
 ///    where THETAH is the actual range-to-go from `state.entry.target_range_km`.
-/// 4. Saturate `L/D` to `±LAD_NOMINAL`. GLIMITER (line 1247, `D > GMAX/2 →
-///    clip`) is deferred to MS-E6b.
-///
-/// Stage A simplification: F1 and F2 are approximated as zero — the
-/// dominant range-tracking term is the `Y · (THETAH − RTOGO)` correction.
-/// Including the analytic F1, F2 sensitivities needs the additional table
-/// columns (DRANGE/DA, DRANGE/DRDOT at AGC lines 1383, 1397) which we'll
-/// add when the VAGC fixture-match pass lands in MS-E6b.
+/// 4. Saturate `L/D` to `±LAD_NOMINAL`, then apply `glimiter_ld` to clip
+///    the command on excessive drag (AGC `GLIMITER`, line 1247).
 pub fn final_phase_step(state: &AgcState) -> LdUpdate {
     let v = velocity_mps(state);
+    let rdot = state.entry.r_dot_mps;
+    let d_g = state.entry.sensed_acceleration_g;
     let rtogo_nm = state.entry.target_range_km / NM_TO_KM;
 
     let p = lookup_reference(v);
 
-    // PREDANG (predicted range in nm) — F1 and F2 approximated as 0 for
-    // stage A; the RTOGO column itself anchors the prediction.
-    let predang_nm = p.range_to_go_nm;
+    // PREDANG = RTOGO + F1·(D - AREF) + F2·(RDOT - RDOTREF).
+    // `p.neg_aref_g` is the stored "-AREF" value (negative), so the AGC's
+    // `D - AREF = D + (-AREF_stored) = D_g + p.neg_aref_g`.
+    let d_minus_aref = d_g + p.neg_aref_g;
+    let rdot_minus_rdotref = rdot - p.rdot_ref_mps;
+    let predang_nm = p.range_to_go_nm
+        + p.drange_da_nm_per_g * d_minus_aref
+        + p.drange_drdot_nm_per_mps * rdot_minus_rdotref;
 
     // L/D = LOD + (THETAH − PREDANG) / Y. Y = DRANGE/D(L/D), already in nm.
     let theta_minus_predang = rtogo_nm - predang_nm;
@@ -794,7 +795,8 @@ pub fn final_phase_step(state: &AgcState) -> LdUpdate {
     } else {
         LOD_NOMINAL
     };
-    let ld_command = ld_command_raw.clamp(-LAD_NOMINAL, LAD_NOMINAL);
+    let ld_clamped = ld_command_raw.clamp(-LAD_NOMINAL, LAD_NOMINAL);
+    let ld_command = glimiter_ld(d_g, rdot, v, ld_clamped);
 
     LdUpdate {
         ld_command,
@@ -803,6 +805,61 @@ pub fn final_phase_step(state: &AgcState) -> LdUpdate {
         dlewd_new: 0.0,
         diffold_new_km: state.entry.diffold_km,
         factor_new: state.entry.factor,
+    }
+}
+
+/// GLIMITER deceleration limiter — REENTRY_CONTROL.agc:1247-1267.
+///
+/// Three-way clip on `ld_command` based on current drag:
+///
+/// 1. `D ≤ GMAX/2 (4 g)`: pass through unchanged.
+/// 2. `D > GMAX (8 g)`: force `L/D = LAD` (full lift-up to bleed energy).
+/// 3. `GMAX/2 < D ≤ GMAX`: compute the AGC's `XLIM` discriminant:
+///    ```text
+///    XLIM = sqrt(2·HS·(GMAX − D)·(LEQ/GMAX + LAD) + (2·HS·GMAX/V)²)
+///    ```
+///    If `RDOT + XLIM ≥ 0` (vehicle still has altitude margin), pass `L/D`
+///    through. Otherwise clip to `LAD`.
+///
+/// All variables are AGC-normalised internally (`D / FPSS_805`,
+/// `V / (2·VSAT)`) so the AGC's literal `2HS_AGC` / `2HSGMXSQ_AGC`
+/// constants apply directly. If the `XLIM` argument goes negative (a
+/// pathological mix of low V and modest LEQ), the helper conservatively
+/// clips to `LAD`.
+fn glimiter_ld(d_g: f64, rdot_mps: f64, v_mps: f64, ld_command: f64) -> f64 {
+    if d_g <= GMAX_HALF_G {
+        return ld_command;
+    }
+    if d_g > GMAX_G {
+        return LAD_NOMINAL;
+    }
+
+    // Normalise to AGC drag scaling. D / FPSS_805 ≡ D_g / 25.
+    let d_agc = d_g / 25.0;
+    let gmax_agc = GMAX_G / 25.0;
+    let gmax_minus_d = gmax_agc - d_agc;
+
+    let v_n = v_mps / (2.0 * VSAT_MPS);
+    let vsquare_agc = v_n * v_n * 4.0;
+    // AGC erasable: LEQ stored = (V_n² · 4 − 1) / 4. `1/GMAX` stored = 0.5
+    // (= 4/GMAX). The product `LEQ_stored · 1/GMAX_stored = LEQ_real/8`,
+    // which is what the AGC's `LEQ · 1/GMAX` evaluates to numerically.
+    let leq_stored = (vsquare_agc - 1.0) / 4.0;
+    let leq_over_gmax = leq_stored * 0.5;
+
+    let t1 = TWO_HS_AGC * gmax_minus_d * (leq_over_gmax + LAD_NOMINAL);
+    let t2 = TWO_HS_GMAX_SQ_AGC / vsquare_agc.max(1.0e-9);
+    let inner = t1 + t2;
+    if inner < 0.0 {
+        return LAD_NOMINAL;
+    }
+    let xlim_agc = libm::sqrt(inner);
+
+    let rdot_norm = rdot_mps / (2.0 * VSAT_MPS);
+    if rdot_norm + xlim_agc >= 0.0 {
+        ld_command
+    } else {
+        LAD_NOMINAL
     }
 }
 
@@ -1868,9 +1925,125 @@ mod tests {
         );
     }
 
-    /// TC-MSE6-FP-2: when `target_range_km` matches the table's RTOGO at
-    /// the current V, the L/D command equals LOD_NOMINAL — the nominal
-    /// "no correction needed" output.
+    /// TC-MSE6B-PREDANG-1: PREDANG = RTOGO + F1·(D-AREF) + F2·(RDOT-RDOTREF).
+    ///
+    /// Hand-computed reference at the V=7038 m/s table sample (i=10):
+    ///
+    /// ```text
+    /// RTOGO     = 0.186963 · 2700           ≈ 504.8 nm
+    /// AREF      = -p.neg_aref_g             ≈ 0.873 g
+    /// RDOTREF   = -0.017981·1963.4          ≈ -35.31 m/s
+    /// F1 (drda) = -0.602557 · 2700/25       ≈ -65.08 nm/g
+    /// F2 (drdrdot) = +4.151220 · 2700/15707 ≈ +0.7136 nm/(m/s)
+    ///
+    /// At D = 5 g, RDOT = -100 m/s:
+    ///   D - AREF              = 5 - 0.873   = 4.127 g
+    ///   RDOT - RDOTREF        = -100 + 35.3 = -64.69 m/s
+    ///   PREDANG = 504.8 + (-65.08)·4.127 + 0.7136·(-64.69)
+    ///           ≈ 504.8 - 268.6 - 46.2
+    ///           ≈ 190.0 nm
+    /// ```
+    ///
+    /// With `target_range_km = 190·NM_TO_KM`, `(THETAH-PREDANG)/Y ≈ 0` so
+    /// `L/D ≈ LOD_NOMINAL`. Demonstrates the F1/F2 corrections drive PREDANG
+    /// down from the bare RTOGO value (504.8 → 190 nm) under high drag and
+    /// faster descent than reference.
+    #[test]
+    fn tc_mse6b_predang_1_full_formula_at_sample10() {
+        use crate::guidance::entry_tables::REFERENCE_PROFILE;
+        let v = REFERENCE_PROFILE[10].velocity_mps;
+        let mut state = fixture(v);
+        state.entry.phase = EntryPhase::Final;
+        state.entry.sensed_acceleration_g = 5.0;
+        state.entry.r_dot_mps = -100.0;
+        state.entry.target_range_km = 190.0 * NM_TO_KM;
+        let upd = final_phase_step(&state);
+        // With PREDANG ≈ THETAH the L/D should be ≈ LOD_NOMINAL.
+        // Then GLIMITER kicks in (D = 5 g > GMAX_HALF_G = 4 g) — at these
+        // inputs `XLIM + RDOT_norm > 0`, so L/D passes through.
+        assert!(
+            (upd.ld_command - LOD_NOMINAL).abs() < 0.02,
+            "L/D expected ≈ LOD_NOMINAL = {LOD_NOMINAL} at PREDANG-THETAH ≈ 0, got {}",
+            upd.ld_command
+        );
+    }
+
+    /// TC-MSE6B-GLIMITER-1: drag below GMAX/2 leaves L/D unchanged.
+    ///
+    /// At D = 1 g (well below the 4 g GLIMITER threshold) the limiter is
+    /// inert and `final_phase_step` returns the PREDICT3 L/D verbatim.
+    #[test]
+    fn tc_mse6b_glimiter_1_below_threshold_pass_through() {
+        use crate::guidance::entry_tables::REFERENCE_PROFILE;
+        let v = REFERENCE_PROFILE[10].velocity_mps;
+        let mut state = fixture(v);
+        state.entry.phase = EntryPhase::Final;
+        state.entry.sensed_acceleration_g = 1.0;
+        state.entry.r_dot_mps = -100.0;
+        // Push PREDANG far short of THETAH so L/D wants to be near LAD.
+        state.entry.target_range_km = 5000.0;
+        let upd = final_phase_step(&state);
+        assert!(
+            (upd.ld_command - LAD_NOMINAL).abs() < 1e-9,
+            "L/D should saturate to LAD when target ≫ PREDANG, got {}",
+            upd.ld_command
+        );
+    }
+
+    /// TC-MSE6B-GLIMITER-2: drag above GMAX forces L/D = LAD regardless.
+    ///
+    /// At D = 9 g (above the 8 g hard limit) the limiter unconditionally
+    /// clips to maximum lift-up — sized to bleed kinetic energy as fast as
+    /// the vehicle aerodynamics allow.
+    #[test]
+    fn tc_mse6b_glimiter_2_above_gmax_forces_lad() {
+        use crate::guidance::entry_tables::REFERENCE_PROFILE;
+        let v = REFERENCE_PROFILE[10].velocity_mps;
+        let mut state = fixture(v);
+        state.entry.phase = EntryPhase::Final;
+        state.entry.sensed_acceleration_g = 9.0;
+        state.entry.r_dot_mps = -100.0;
+        // Even target a short range so PREDICT3 wants L/D ≈ LOD or below —
+        // GLIMITER still drives L/D to LAD.
+        state.entry.target_range_km = 1.0;
+        let upd = final_phase_step(&state);
+        assert!(
+            (upd.ld_command - LAD_NOMINAL).abs() < 1e-9,
+            "L/D must clip to LAD when D > GMAX, got {}",
+            upd.ld_command
+        );
+    }
+
+    /// TC-MSE6B-GLIMITER-3: in the `GMAX/2 < D ≤ GMAX` band, XLIM gates the
+    /// clip. With heavy descent (RDOT = −500 m/s) and D ≈ 5 g, the AGC's
+    /// `RDOT + XLIM < 0` branch fires and L/D snaps to LAD even if PREDICT3
+    /// wanted something modest.
+    #[test]
+    fn tc_mse6b_glimiter_3_xlim_clips_on_heavy_descent() {
+        use crate::guidance::entry_tables::REFERENCE_PROFILE;
+        let v = REFERENCE_PROFILE[10].velocity_mps;
+        let mut state = fixture(v);
+        state.entry.phase = EntryPhase::Final;
+        state.entry.sensed_acceleration_g = 5.0;
+        state.entry.r_dot_mps = -500.0;
+        // Set target = PREDANG_at_this_input so PREDICT3 wants L/D ≈ LOD.
+        // GLIMITER must override because RDOT is much more negative than XLIM.
+        let upd = final_phase_step(&state);
+        assert!(
+            (upd.ld_command - LAD_NOMINAL).abs() < 1e-9,
+            "GLIMITER must clip L/D to LAD at D=5g, RDOT=-500, got {}",
+            upd.ld_command
+        );
+    }
+
+    /// TC-MSE6-FP-2: when `target_range_km` matches PREDANG (the table's
+    /// RTOGO at the current V, plus the F1 and F2 corrections from any
+    /// drag / rdot offset), the L/D command equals LOD_NOMINAL — the
+    /// nominal "no correction needed" output.
+    ///
+    /// With the post-#34 full PREDANG formula, this requires setting
+    /// `D = AREF` *and* `RDOT = RDOTREF` so the sensitivity corrections
+    /// vanish, then targeting RTOGO exactly.
     #[test]
     fn tc_mse6_fp_2_nominal_ld_at_zero_correction() {
         use crate::guidance::entry_tables::lookup_reference;
@@ -1878,11 +2051,15 @@ mod tests {
         let mut state = fixture(v);
         state.entry.phase = EntryPhase::Final;
         let p = lookup_reference(v);
+        // Zero the F1 contribution: D_g = AREF_g = -p.neg_aref_g.
+        state.entry.sensed_acceleration_g = -p.neg_aref_g;
+        // Zero the F2 contribution: RDOT = RDOTREF.
+        state.entry.r_dot_mps = p.rdot_ref_mps;
         // Set target = RTOGO so (THETAH − PREDANG) = 0 → L/D = LOD.
         state.entry.target_range_km = p.range_to_go_nm * NM_TO_KM;
         let upd = final_phase_step(&state);
         assert!(
-            (upd.ld_command - LOD_NOMINAL).abs() < 1e-12,
+            (upd.ld_command - LOD_NOMINAL).abs() < 1e-9,
             "expected L/D = LOD = {LOD_NOMINAL}, got {}",
             upd.ld_command
         );
@@ -1891,6 +2068,9 @@ mod tests {
     /// TC-MSE6-FP-3: range error in the correctable direction moves L/D in
     /// the expected sense — long-range error pushes L/D up (lift to extend),
     /// short-range error pushes L/D down (push down to shorten).
+    ///
+    /// Like TC-MSE6-FP-2, we hold D and RDOT at their reference values so
+    /// only the range-error term drives the L/D update.
     #[test]
     fn tc_mse6_fp_3_ld_sense_from_range_error() {
         use crate::guidance::entry_tables::lookup_reference;
@@ -1898,6 +2078,8 @@ mod tests {
         let mut state = fixture(v);
         state.entry.phase = EntryPhase::Final;
         let p = lookup_reference(v);
+        state.entry.sensed_acceleration_g = -p.neg_aref_g;
+        state.entry.r_dot_mps = p.rdot_ref_mps;
         let nominal_km = p.range_to_go_nm * NM_TO_KM;
 
         // Long: actual target is farther than reference → need more lift.

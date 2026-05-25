@@ -131,6 +131,18 @@ pub const KA2_G: f64 = 0.2;
 /// AGC: `GMAX/2 = .16` scaled `2DEC` (REENTRY_CONTROL.agc:1505) — `8 g / 2`.
 pub const GMAX_HALF_G: f64 = 8.0 / 2.0;
 
+/// Hard upper deceleration limit (g) — `GMAX` in REENTRY_CONTROL.agc.
+/// Above this `GLIMITER` unconditionally clips the L/D command to LAD.
+pub const GMAX_G: f64 = 8.0;
+
+/// `2HSGMXSQ` constant — `(2·HS·GMAX)² / (2·VS)⁴` in AGC scaling.
+///
+/// AGC: `2HSGMXSQ = 2DEC .0000305717` (REENTRY_CONTROL.agc:1583) =
+/// `(2·28500·8·32.2 / (4·VS·VS))²`. Algebraically `(2HS_AGC · GMAX_AGC)²`:
+/// `(0.017_278_661_1 · 0.32)² ≈ 0.0000305717`. Used in the `2HSGMXSQ /
+/// VSQUARE_AGC` term of GLIMITER's `XLIM` (line 1262).
+pub const TWO_HS_GMAX_SQ_AGC: f64 = 0.000_030_571_7;
+
 /// Lateral-angle bias term (rad) — half-nautical-mile dead-band.
 ///
 /// AGC: `LATBIAS = .00003 (4 REV)` (REENTRY_CONTROL.agc:1561) ≈ `1.88e-4 rad`.
@@ -297,15 +309,22 @@ pub const KA4_AGC: f64 = 0.049_689_441;
 
 /// Pre-tabulated point along the entry reference profile (velocity sample).
 ///
-/// Source: REENTRY_CONTROL.agc lines 1412–1467 — four parallel columns
-/// stored in the AGC's `RDOTREF`, `RTOGO`, `-AREF`, and `DRANGE/D(L/D)` tables.
+/// Source: REENTRY_CONTROL.agc lines 1369–1467 — six parallel columns
+/// stored in the AGC's `VREFER`, `DRANGE/DA`, `DRANGE/DRDOT`, `RDOTREF`,
+/// `RTOGO`, `-AREF`, and `DRANGE/D(L/D)` tables.
 ///
 /// Units (after conversion):
 /// - `velocity_mps` — m/s (linearly spaced from `VFINAL_MPS` upward).
 /// - `rdot_ref_mps` — m/s (negative = descending).
 /// - `range_to_go_nm` — nautical miles.
-/// - `neg_aref_g` — g (always negative; deceleration).
-/// - `drange_dld_nm` — nautical miles per unit L/D (∂Range/∂(L/D)).
+/// - `neg_aref_g` — g (always negative; deceleration, stored as `−AREF`).
+/// - `drange_dld_nm` — nautical miles per unit L/D (`∂Range/∂(L/D)`).
+/// - `drange_da_nm_per_g` — nautical miles per g of drag (`∂Range/∂D`,
+///   the AGC `DRANGE/DA` column; values are negative since more drag
+///   shortens the trajectory).
+/// - `drange_drdot_nm_per_mps` — nautical miles per m/s of altitude rate
+///   (`∂Range/∂RDOT`, derived from the AGC `−DRANGE/DRDOT` column with
+///   sign flipped; values are positive since less descent extends range).
 #[derive(Clone, Copy, Debug)]
 pub struct ReferencePoint {
     /// Sample velocity (m/s).
@@ -318,6 +337,10 @@ pub struct ReferencePoint {
     pub neg_aref_g: f64,
     /// Sensitivity of range to L/D (nm per unit L/D).
     pub drange_dld_nm: f64,
+    /// Sensitivity of range to drag (nm per g of drag).
+    pub drange_da_nm_per_g: f64,
+    /// Sensitivity of range to altitude rate (nm per m/s of RDOT).
+    pub drange_drdot_nm_per_mps: f64,
 }
 
 /// Velocity scaling factor used by `VREFER` at REENTRY_CONTROL.agc:1369 —
@@ -336,13 +359,28 @@ const RANGE_SCALE_NM: f64 = 2700.0;
 /// `8 · RDOT / 2VS` → divide by 8, multiply by `2 · VSAT`.
 const RDOT_SCALE_MPS: f64 = 2.0 * VSAT_MPS / 8.0;
 
+/// Velocity column scaling for `DRANGE/DA` (line 1383): the AGC stores
+/// `DRDA / (2700/805)` — so multiplying the stored value by `2700/805` recovers
+/// the AGC `∂PREDANG_stored / ∂D_stored`, which is `∂Range_nm / ∂D_AGC_dimless`.
+/// To convert that to `∂Range_nm / ∂D_g`, divide by `25` (since `D_AGC = D_g/25`).
+/// Net: `stored × 2700/(805/32.2 × 25)` ≡ `stored × 2700/25` in nm per g.
+const DRDA_SCALE_NM_PER_G: f64 = RANGE_SCALE_NM / AREF_SCALE_G;
+
+/// Velocity column scaling for `−DRANGE/DRDOT` (line 1397): the AGC stores
+/// `−DR/DRDOT · (2VS/8) · 2700` with implicit B-3 (×2⁻³). Empirical conversion
+/// from stored to `∂Range_nm / ∂RDOT_mps`:
+/// `stored × −2700 / (2·VSAT_mps)`. Sign flip absorbs the `−DR/DRDOT`
+/// column-name negative, plus the B-3 (×8) factor cancels with the 8
+/// pre-shift applied to `RDOT` in the AGC's interpretive arithmetic
+/// (DDOUBL DDOUBL DDOUBL at REENTRY_CONTROL.agc:1196-1198).
+const DRDRDOT_SCALE_NM_PER_MPS: f64 = -RANGE_SCALE_NM / (2.0 * VSAT_MPS);
+
 /// AGC reference profile (REENTRY_CONTROL.agc:1369–1467).
 ///
-/// 13 sample points. The independent variable is `VREFER` at line 1369. The
-/// four columns we use are RDOTREF (line 1412), RTOGO (1426), -AREF (1440)
-/// and DRANGE/D(L/D) (1455). The AGC also stores DRANGE/DA and DRANGE/DRDOT
-/// columns (1383, 1397) which we don't currently consume — they are needed
-/// only when the analytic HUNTEST `PREDICT3` correction is enabled (MS-E6).
+/// 13 sample points. The independent variable is `VREFER` at line 1369. Six
+/// parallel columns: DRANGE/DA (1383), DRANGE/DRDOT (1397), RDOTREF (1412),
+/// RTOGO (1426), -AREF (1440), DRANGE/D(L/D) (1455). All converted to SI
+/// at table-construction time so PREDICT3 reads physical quantities.
 ///
 /// **Velocity ordering**: the table runs from slow (drogue-deploy regime,
 /// ~300 m/s at sample 0) up to lunar-return entry interface (~10 668 m/s at
@@ -356,6 +394,8 @@ pub const REFERENCE_PROFILE: [ReferencePoint; 13] = [
         range_to_go_nm: 0.000_806_7 * RANGE_SCALE_NM,
         neg_aref_g: -0.051_099 * AREF_SCALE_G,
         drange_dld_nm: 0.004_491 * RANGE_SCALE_NM,
+        drange_da_nm_per_g: -0.010_337 * DRDA_SCALE_NM_PER_G,
+        drange_drdot_nm_per_mps: -0.047_859_9 * DRDRDOT_SCALE_NM_PER_MPS,
     },
     ReferencePoint {
         // i = 1 — VREFER = .040809 → 2103 ft/s = 641 m/s.
@@ -364,6 +404,8 @@ pub const REFERENCE_PROFILE: [ReferencePoint; 13] = [
         range_to_go_nm: 0.003_296_3 * RANGE_SCALE_NM,
         neg_aref_g: -0.074_534 * AREF_SCALE_G,
         drange_dld_nm: 0.008_081 * RANGE_SCALE_NM,
+        drange_da_nm_per_g: -0.016_550 * DRDA_SCALE_NM_PER_G,
+        drange_drdot_nm_per_mps: -0.068_366_3 * DRDRDOT_SCALE_NM_PER_MPS,
     },
     ReferencePoint {
         // i = 2 — VREFER = .076107 → 3922 ft/s = 1195 m/s.
@@ -372,6 +414,8 @@ pub const REFERENCE_PROFILE: [ReferencePoint; 13] = [
         range_to_go_nm: 0.008_185_2 * RANGE_SCALE_NM,
         neg_aref_g: -0.101_242 * AREF_SCALE_G,
         drange_dld_nm: 0.016_030 * RANGE_SCALE_NM,
+        drange_da_nm_per_g: -0.026_935 * DRDA_SCALE_NM_PER_G,
+        drange_drdot_nm_per_mps: -0.134_346_8 * DRDRDOT_SCALE_NM_PER_MPS,
     },
     ReferencePoint {
         // i = 3 — VREFER = .122156 → 6295 ft/s = 1918 m/s.
@@ -380,6 +424,8 @@ pub const REFERENCE_PROFILE: [ReferencePoint; 13] = [
         range_to_go_nm: 0.017_148 * RANGE_SCALE_NM,
         neg_aref_g: -0.116_646 * AREF_SCALE_G,
         drange_dld_nm: 0.035_815 * RANGE_SCALE_NM,
+        drange_da_nm_per_g: -0.042_039 * DRDA_SCALE_NM_PER_G,
+        drange_drdot_nm_per_mps: -0.275_984_6 * DRDRDOT_SCALE_NM_PER_MPS,
     },
     ReferencePoint {
         // i = 4 — VREFER = .165546 → 8531 ft/s = 2600 m/s.
@@ -388,6 +434,8 @@ pub const REFERENCE_PROFILE: [ReferencePoint; 13] = [
         range_to_go_nm: 0.027_926 * RANGE_SCALE_NM,
         neg_aref_g: -0.122_360 * AREF_SCALE_G,
         drange_dld_nm: 0.069_422 * RANGE_SCALE_NM,
+        drange_da_nm_per_g: -0.058_974 * DRDA_SCALE_NM_PER_G,
+        drange_drdot_nm_per_mps: -0.473_143_7 * DRDRDOT_SCALE_NM_PER_MPS,
     },
     ReferencePoint {
         // i = 5 — VREFER = .196012 → 10101 ft/s = 3079 m/s.
@@ -396,6 +444,8 @@ pub const REFERENCE_PROFILE: [ReferencePoint; 13] = [
         range_to_go_nm: 0.037 * RANGE_SCALE_NM,
         neg_aref_g: -0.127_081 * AREF_SCALE_G,
         drange_dld_nm: 0.104_519 * RANGE_SCALE_NM,
+        drange_da_nm_per_g: -0.070_721 * DRDA_SCALE_NM_PER_G,
+        drange_drdot_nm_per_mps: -0.647_208_7 * DRDRDOT_SCALE_NM_PER_MPS,
     },
     ReferencePoint {
         // i = 6 — VREFER = .271945 → 14013 ft/s = 4271 m/s.
@@ -404,6 +454,8 @@ pub const REFERENCE_PROFILE: [ReferencePoint; 13] = [
         range_to_go_nm: 0.063_298 * RANGE_SCALE_NM,
         neg_aref_g: -0.147_453 * AREF_SCALE_G,
         drange_dld_nm: 0.122 * RANGE_SCALE_NM,
+        drange_da_nm_per_g: -0.098_538 * DRDA_SCALE_NM_PER_G,
+        drange_drdot_nm_per_mps: -1.171_693 * DRDRDOT_SCALE_NM_PER_MPS,
     },
     ReferencePoint {
         // i = 7 — VREFER = .309533 → 15951 ft/s = 4863 m/s.
@@ -412,6 +464,8 @@ pub const REFERENCE_PROFILE: [ReferencePoint; 13] = [
         range_to_go_nm: 0.077_889 * RANGE_SCALE_NM,
         neg_aref_g: -0.155_528 * AREF_SCALE_G,
         drange_dld_nm: 0.172_407 * RANGE_SCALE_NM,
+        drange_da_nm_per_g: -0.107_482 * DRDA_SCALE_NM_PER_G,
+        drange_drdot_nm_per_mps: -1.466_382 * DRDRDOT_SCALE_NM_PER_MPS,
     },
     ReferencePoint {
         // i = 8 — VREFER = .356222 → 18356 ft/s = 5595 m/s.
@@ -420,6 +474,8 @@ pub const REFERENCE_PROFILE: [ReferencePoint; 13] = [
         range_to_go_nm: 0.098_815 * RANGE_SCALE_NM,
         neg_aref_g: -0.149_565 * AREF_SCALE_G,
         drange_dld_nm: 0.252_852 * RANGE_SCALE_NM,
+        drange_da_nm_per_g: -0.147_762 * DRDA_SCALE_NM_PER_G,
+        drange_drdot_nm_per_mps: -1.905_171 * DRDRDOT_SCALE_NM_PER_MPS,
     },
     ReferencePoint {
         // i = 9 — VREFER = .404192 → 20828 ft/s = 6349 m/s.
@@ -428,6 +484,8 @@ pub const REFERENCE_PROFILE: [ReferencePoint; 13] = [
         range_to_go_nm: 0.127_519 * RANGE_SCALE_NM,
         neg_aref_g: -0.118_509 * AREF_SCALE_G,
         drange_dld_nm: 0.363_148 * RANGE_SCALE_NM,
+        drange_da_nm_per_g: -0.193_289 * DRDA_SCALE_NM_PER_G,
+        drange_drdot_nm_per_mps: -2.547_990 * DRDRDOT_SCALE_NM_PER_MPS,
     },
     ReferencePoint {
         // i = 10 — VREFER = .448067 → 23089 ft/s = 7038 m/s.
@@ -436,6 +494,8 @@ pub const REFERENCE_PROFILE: [ReferencePoint; 13] = [
         range_to_go_nm: 0.186_963 * RANGE_SCALE_NM,
         neg_aref_g: -0.034_907 * AREF_SCALE_G,
         drange_dld_nm: 0.512_963 * RANGE_SCALE_NM,
+        drange_da_nm_per_g: -0.602_557 * DRDA_SCALE_NM_PER_G,
+        drange_drdot_nm_per_mps: -4.151_220 * DRDRDOT_SCALE_NM_PER_MPS,
     },
     ReferencePoint {
         // i = 11 — VREFER = .456023 → 23500 ft/s = 7163 m/s.
@@ -444,6 +504,8 @@ pub const REFERENCE_PROFILE: [ReferencePoint; 13] = [
         range_to_go_nm: 0.238_148 * RANGE_SCALE_NM,
         neg_aref_g: -0.007_950 * AREF_SCALE_G,
         drange_dld_nm: 0.558_519 * RANGE_SCALE_NM,
+        drange_da_nm_per_g: -0.999_99 * DRDA_SCALE_NM_PER_G,
+        drange_drdot_nm_per_mps: -5.813_617 * DRDRDOT_SCALE_NM_PER_MPS,
     },
     ReferencePoint {
         // i = 12 — VREFER = .67918 → 34999 ft/s = 10 668 m/s.
@@ -453,6 +515,8 @@ pub const REFERENCE_PROFILE: [ReferencePoint; 13] = [
         range_to_go_nm: 0.294_185_185 * RANGE_SCALE_NM,
         neg_aref_g: -0.007_950 * AREF_SCALE_G,
         drange_dld_nm: 0.558_519 * RANGE_SCALE_NM,
+        drange_da_nm_per_g: -0.999_99 * DRDA_SCALE_NM_PER_G,
+        drange_drdot_nm_per_mps: -5.813_617 * DRDRDOT_SCALE_NM_PER_MPS,
     },
 ];
 
@@ -496,6 +560,10 @@ pub fn lookup_reference(velocity_mps: f64) -> ReferencePoint {
         range_to_go_nm: p0.range_to_go_nm + t * (p1.range_to_go_nm - p0.range_to_go_nm),
         neg_aref_g: p0.neg_aref_g + t * (p1.neg_aref_g - p0.neg_aref_g),
         drange_dld_nm: p0.drange_dld_nm + t * (p1.drange_dld_nm - p0.drange_dld_nm),
+        drange_da_nm_per_g: p0.drange_da_nm_per_g
+            + t * (p1.drange_da_nm_per_g - p0.drange_da_nm_per_g),
+        drange_drdot_nm_per_mps: p0.drange_drdot_nm_per_mps
+            + t * (p1.drange_drdot_nm_per_mps - p0.drange_drdot_nm_per_mps),
     }
 }
 

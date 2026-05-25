@@ -215,6 +215,9 @@ impl UsbConsole {
             Msg::RcsQuenchAll => {
                 write!(buf, "AGC> RCS_QUENCH_ALL\r\n")
             }
+            Msg::SecsDeployDrogue => {
+                write!(buf, "AGC> SECS_DEPLOY_DROGUE\r\n")
+            }
             Msg::TelemetryWord { word } => {
                 write!(buf, "AGC> TELEMETRY_WORD word=0x{:04X}\r\n", word)
             }

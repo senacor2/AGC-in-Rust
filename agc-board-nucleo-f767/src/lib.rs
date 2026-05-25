@@ -29,6 +29,7 @@ use remote::dsky::RemoteDsky;
 use remote::engine::RemoteEngine;
 use remote::optics::RemoteOptics;
 use remote::rcs::RemoteRcs;
+use remote::secs::RemoteSecs;
 use remote::telemetry::RemoteTelemetry;
 use remote::uplink::RemoteUplink;
 use state::BridgeState;
@@ -107,6 +108,7 @@ pub struct Board {
     pub optics: RemoteOptics,
     pub engine: RemoteEngine,
     pub rcs: RemoteRcs,
+    pub secs: RemoteSecs,
     pub uplink: RemoteUplink,
     pub telemetry: RemoteTelemetry,
     pub timers: LocalTimers,
@@ -126,6 +128,7 @@ impl Board {
             optics: RemoteOptics,
             engine: RemoteEngine,
             rcs: RemoteRcs,
+            secs: RemoteSecs,
             uplink: RemoteUplink,
             telemetry: RemoteTelemetry,
             timers: LocalTimers,
@@ -140,6 +143,7 @@ impl AgcHardware for Board {
     type Optics = RemoteOptics;
     type Engine = RemoteEngine;
     type Rcs = RemoteRcs;
+    type Secs = RemoteSecs;
     type Uplink = RemoteUplink;
     type Telemetry = RemoteTelemetry;
 
@@ -160,6 +164,9 @@ impl AgcHardware for Board {
     }
     fn rcs(&mut self) -> &mut Self::Rcs {
         &mut self.rcs
+    }
+    fn secs(&mut self) -> &mut Self::Secs {
+        &mut self.secs
     }
     fn uplink(&mut self) -> &mut Self::Uplink {
         &mut self.uplink

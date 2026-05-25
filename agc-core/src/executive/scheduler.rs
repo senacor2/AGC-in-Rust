@@ -3,6 +3,7 @@ use crate::hal::dsky::Dsky;
 use crate::hal::engine::Engine;
 use crate::hal::imu::Imu;
 use crate::hal::rcs::Rcs;
+use crate::hal::secs::Secs;
 use crate::hal::timers::Timers;
 use crate::hal::AgcHardware;
 
@@ -196,6 +197,7 @@ impl Executive {
             // ── Translate staging fields written by tasks/jobs to HAL calls ───
             process_rcs_staging(state, hw);
             process_engine_staging(state, hw);
+            process_secs_staging(state, hw);
 
             // ── Foreground PIPA accumulator ────────────────────────────────────
             // read_pipa is destructive: returns counts since the last call and
@@ -265,6 +267,19 @@ fn process_engine_staging<H: AgcHardware>(state: &mut crate::AgcState, hw: &mut 
         hw.engine().sps_gimbal(pitch, yaw);
     } else {
         hw.engine().sps_enable(false);
+    }
+}
+
+/// Apply the SECS drogue-deploy discrete staged by `p67_deploy_drogue`.
+///
+/// Edge-triggered: the staging flag is consumed (reset to `false`) once the
+/// HAL call has been made. The drogue pyro is one-shot, so subsequent calls
+/// are inert at the hardware level — but resetting the staging flag keeps
+/// the foreground loop from re-issuing redundant commands on every cycle.
+fn process_secs_staging<H: AgcHardware>(state: &mut crate::AgcState, hw: &mut H) {
+    if state.drogue_deploy_pending {
+        hw.secs().deploy_drogue();
+        state.drogue_deploy_pending = false;
     }
 }
 

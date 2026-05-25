@@ -155,6 +155,15 @@ pub struct AgcState {
     /// to decide whether to issue gimbal commands or quench all jets.
     pub engine_thrusting: bool,
 
+    /// SECS drogue-deploy pyro discrete staged by `p67_deploy_drogue` for
+    /// the foreground SECS-staging step.
+    ///
+    /// Set `true` once when P67 detects `V < VQUIT`; the scheduler's
+    /// `process_secs_staging` consumes the flag (sets it back to `false`)
+    /// after calling `hw.secs().deploy_drogue()`. The matching `EntryState`
+    /// flag `drogue_deployed` stays `true` for life-of-mission.
+    pub drogue_deploy_pending: bool,
+
     // ── Crew interface ───────────────────────────────────────────────────────
     pub dsky: DskyState,
 
@@ -300,6 +309,7 @@ impl AgcState {
             rcs_commanded_pulse_cs: 0,
             sps_gimbal_cmd: (0, 0),
             engine_thrusting: false,
+            drogue_deploy_pending: false,
             dsky: DskyState {
                 prog: 0,
                 verb: 0,

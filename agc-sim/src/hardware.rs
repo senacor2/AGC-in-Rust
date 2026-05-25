@@ -3,7 +3,7 @@
 use std::time::Instant;
 
 use agc_core::hal::{
-    dsky::Lamp, AgcHardware, Dsky, Engine, Imu, Optics, Rcs, Telemetry, Timers, Uplink,
+    dsky::Lamp, AgcHardware, Dsky, Engine, Imu, Optics, Rcs, Secs, Telemetry, Timers, Uplink,
 };
 use agc_core::types::CduAngle;
 
@@ -70,6 +70,16 @@ pub struct SimUplink {
 }
 pub struct SimTelemetry {
     pub log: Vec<u16>,
+}
+/// Simulated Sequential Events Control System pyro driver.
+///
+/// `deploy_drogue` sets `drogue_fired = true` and counts calls (idempotent
+/// at the hardware level — but counting lets tests verify the AGC didn't
+/// keep re-issuing the command on subsequent cycles).
+#[derive(Default)]
+pub struct SimSecs {
+    pub drogue_fired: bool,
+    pub drogue_fire_count: u32,
 }
 
 // ── Trait implementations ─────────────────────────────────────────────────────
@@ -177,6 +187,13 @@ impl Telemetry for SimTelemetry {
     }
 }
 
+impl Secs for SimSecs {
+    fn deploy_drogue(&mut self) {
+        self.drogue_fired = true;
+        self.drogue_fire_count = self.drogue_fire_count.saturating_add(1);
+    }
+}
+
 // ── Top-level SimHardware ─────────────────────────────────────────────────────
 
 pub struct SimHardware {
@@ -186,6 +203,7 @@ pub struct SimHardware {
     pub optics: SimOptics,
     pub engine: SimEngine,
     pub rcs: SimRcs,
+    pub secs: SimSecs,
     pub uplink: SimUplink,
     pub telemetry: SimTelemetry,
     /// Ground-truth spacecraft dynamics. Drives the IMU's PIPA pulse
@@ -225,6 +243,7 @@ impl SimHardware {
                 visual_sm_jets: 0,
                 visual_cm_jets: 0,
             },
+            secs: SimSecs::default(),
             uplink: SimUplink {
                 words: Default::default(),
             },
@@ -258,6 +277,7 @@ impl AgcHardware for SimHardware {
     type Optics = SimOptics;
     type Engine = SimEngine;
     type Rcs = SimRcs;
+    type Secs = SimSecs;
     type Uplink = SimUplink;
     type Telemetry = SimTelemetry;
 
@@ -272,6 +292,9 @@ impl AgcHardware for SimHardware {
     }
     fn optics(&mut self) -> &mut SimOptics {
         &mut self.optics
+    }
+    fn secs(&mut self) -> &mut SimSecs {
+        &mut self.secs
     }
     fn engine(&mut self) -> &mut SimEngine {
         &mut self.engine
@@ -298,7 +321,7 @@ impl AgcHardware for SimHardware {
 mod tests {
     use super::*;
     use agc_core::hal::dsky::Lamp;
-    use agc_core::hal::{Dsky, Engine, Imu, Optics, Rcs, Telemetry, Timers, Uplink};
+    use agc_core::hal::{Dsky, Engine, Imu, Optics, Rcs, Secs, Telemetry, Timers, Uplink};
     use agc_core::types::CduAngle;
 
     // ── Timers (TC-TIMERS-01 through TC-TIMERS-03) ──────────────────────────
@@ -461,6 +484,31 @@ mod tests {
         let mut hw = SimHardware::new();
         hw.rcs().fire_cm_jets(0b0000_1111_1111);
         hw.rcs().quench_all();
+    }
+
+    // ── SECS (TC-SECS-01 through TC-SECS-02) ────────────────────────────────
+
+    /// TC-SECS-01: `deploy_drogue` sets the fired flag and bumps the counter.
+    /// Repeated calls keep counting (idempotent at the hardware level but the
+    /// counter lets tests assert single-shot semantics from the AGC side).
+    #[test]
+    fn tc_secs_01_deploy_drogue_counts() {
+        let mut hw = SimHardware::new();
+        assert!(!hw.secs.drogue_fired);
+        assert_eq!(hw.secs.drogue_fire_count, 0);
+        hw.secs().deploy_drogue();
+        assert!(hw.secs.drogue_fired);
+        assert_eq!(hw.secs.drogue_fire_count, 1);
+        hw.secs().deploy_drogue();
+        assert_eq!(hw.secs.drogue_fire_count, 2);
+    }
+
+    /// TC-SECS-02: initial state is no-fire, count zero.
+    #[test]
+    fn tc_secs_02_initial_state() {
+        let hw = SimHardware::new();
+        assert!(!hw.secs.drogue_fired);
+        assert_eq!(hw.secs.drogue_fire_count, 0);
     }
 
     // ── Uplink (TC-UPLINK-01 through TC-UPLINK-03) ──────────────────────────

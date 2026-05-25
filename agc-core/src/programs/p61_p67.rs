@@ -461,13 +461,16 @@ pub fn init_p67(state: &mut crate::AgcState) -> JobPriority {
     PRIORITY
 }
 
-/// Latch the drogue-deployed flag.
+/// Latch the drogue-deployed flag and stage the SECS pyro discrete.
 ///
-/// The real AGC commands the SECS drogue-deployment pyro via a hardware
-/// discrete; the HAL interface for that does not yet exist, so this stub
-/// only sets the bookkeeping flag.
+/// The flight-software-side bookkeeping flag `entry.drogue_deployed` is
+/// set once (life-of-mission), and the one-shot `drogue_deploy_pending`
+/// flag is raised so the foreground loop's `process_secs_staging` step
+/// invokes `hw.secs().deploy_drogue()` on the next iteration. That call
+/// resets `drogue_deploy_pending` to keep the discrete edge-triggered.
 pub fn p67_deploy_drogue(state: &mut crate::AgcState) {
     state.entry.drogue_deployed = true;
+    state.drogue_deploy_pending = true;
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -977,8 +980,32 @@ mod tests {
             "drogue must deploy when V < VQUIT in Final phase"
         );
         assert!(
+            state.drogue_deploy_pending,
+            "SECS pyro discrete must be staged when drogue deploys (MS-E6b)"
+        );
+        assert!(
             state.servicer_exit.is_none(),
             "SERVICER hook must be cleared after drogue deploys"
+        );
+    }
+
+    /// TC-MSE6B-SECS-1: `p67_deploy_drogue` stages the SECS pyro discrete
+    /// for the scheduler to consume on its next foreground iteration.
+    #[test]
+    fn tc_mse6b_secs_1_stages_pyro_discrete() {
+        let mut state = AgcState::new();
+        assert!(!state.drogue_deploy_pending, "fixture");
+        assert!(!state.entry.drogue_deployed, "fixture");
+
+        p67_deploy_drogue(&mut state);
+
+        assert!(
+            state.entry.drogue_deployed,
+            "bookkeeping flag must latch (life-of-mission)"
+        );
+        assert!(
+            state.drogue_deploy_pending,
+            "SECS pyro discrete must be staged for the foreground loop"
         );
     }
 
