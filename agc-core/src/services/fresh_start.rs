@@ -32,6 +32,7 @@ use crate::AgcState;
 ///
 /// - `gha_epoch_rad` — Greenwich Hour Angle at the navigation epoch
 ///   (AGC erasable `GHABASE`).
+/// - `liftoff_time` — vehicle lift-off MET, uplinked via V70.
 ///
 /// When adding a new field to `AgcState` that must also survive FRESH START,
 /// extend the save/restore block below AND add it to this list. Anything not
@@ -42,6 +43,7 @@ use crate::AgcState;
 pub fn fresh_start(state: &mut AgcState) {
     // Step 1: snapshot the survives-FRESH-START fields.
     let saved_gha_epoch_rad = state.gha_epoch_rad;
+    let saved_liftoff_time = state.liftoff_time;
 
     // Step 2: replace the entire state with canonical zero defaults. This
     // guarantees no field is forgotten; new fields added to AgcState
@@ -51,6 +53,7 @@ pub fn fresh_start(state: &mut AgcState) {
 
     // Step 3: re-inject the saved fields.
     state.gha_epoch_rad = saved_gha_epoch_rad;
+    state.liftoff_time = saved_liftoff_time;
 }
 
 /// Restart group dispatch entry: a function pointer + default priority/delay.
@@ -317,12 +320,14 @@ mod tests {
         assert_eq!(state.last_drift_comp_time, Met(0));
     }
 
-    // TC-FS-7: fresh_start preserves the documented "survives" set.
+    // TC-FS-7 / TC-FS-8: fresh_start preserves the documented "survives" set.
     //
-    // The only field currently documented to survive FRESH START is
-    // `gha_epoch_rad` (Greenwich Hour Angle uplink — Mission Control sets
-    // it once before orbital insertion). If this list grows in the future,
-    // extend both `fresh_start()` and this test together.
+    // Two fields currently survive FRESH START — both are uplink values
+    // that ground would not re-send on a transient restart:
+    //   * `gha_epoch_rad` (Greenwich Hour Angle uplink before orbit insertion)
+    //   * `liftoff_time`  (V70 uplink, MET of lift-off)
+    // If this list grows, extend both `fresh_start()` and a matching test
+    // here.
     #[test]
     fn tc_fs_7_preserves_gha_epoch_rad() {
         let mut state = AgcState::new();
@@ -339,6 +344,25 @@ mod tests {
         );
         // Sanity: other state was scrubbed.
         assert_eq!(state.csm_state.position, [0.0; 3]);
+        assert_eq!(state.major_mode, 0);
+    }
+
+    // TC-FS-8: fresh_start preserves `liftoff_time` (V70 uplink value).
+    #[test]
+    fn tc_fs_8_preserves_liftoff_time() {
+        let mut state = AgcState::new();
+        state.liftoff_time = Met(54_321);
+        state.time = Met(99_999); // ordinary MET — must be scrubbed
+        state.major_mode = 11;
+
+        fresh_start(&mut state);
+
+        assert_eq!(
+            state.liftoff_time,
+            Met(54_321),
+            "liftoff_time (V70 uplink) must survive FRESH START"
+        );
+        assert_eq!(state.time, Met(0), "ordinary MET must be zeroed");
         assert_eq!(state.major_mode, 0);
     }
 

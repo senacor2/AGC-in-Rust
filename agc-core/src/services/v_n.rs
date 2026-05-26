@@ -120,6 +120,23 @@ pub enum VnPhase {
         digits: u8,
         buf: u32,
     },
+    /// V70 / V73 — three-register HMS time entry (hours / minutes /
+    /// seconds × 100). Each ENTR commits one register and advances
+    /// `reg_index`; on the third ENTR the assembled MET-style centisecond
+    /// total is delivered to the verb-specific handler (V70 →
+    /// `liftoff_time`, V73 → additive correction to `state.time`).
+    P27Time {
+        /// Initiating verb (70 or 73).
+        verb: u8,
+        /// Register currently being loaded (0 = hours, 1 = minutes,
+        /// 2 = seconds × 100).
+        reg_index: u8,
+        sign: i8,
+        digits: u8,
+        buf: u32,
+        /// Already-committed registers (signed, in input units).
+        committed: [i64; 3],
+    },
     /// Operator error — awaiting RSET.
     OprErr,
 }
@@ -304,6 +321,29 @@ fn sync_display(state: &mut crate::AgcState) {
             state.dsky.r[0] = (address + loaded) as f32;
             state.dsky.r[1] = 0.0;
             state.dsky.r[2] = (sign as i64 * buf as i64) as f32;
+        }
+        // V70 / V73 — three-register time entry. The verb stays in the
+        // display so the crew sees which time update is in progress;
+        // already-committed registers are pinned, the active register
+        // shows the running accumulator (signed for V73 deltas).
+        P27Time {
+            verb,
+            reg_index,
+            sign,
+            buf,
+            committed,
+            ..
+        } => {
+            state.dsky.verb = verb;
+            // Per the plan, V70/V73 do not pair with a noun. Show N00
+            // alongside the verb so the display tracks the entry without
+            // implying a verb-noun pairing.
+            state.dsky.noun = 0;
+            state.dsky.flashing = true;
+            for (i, &val) in committed.iter().take(reg_index as usize).enumerate() {
+                state.dsky.r[i] = val as f32;
+            }
+            state.dsky.r[reg_index as usize] = (sign as i64 * buf as i64) as f32;
         }
     }
 }
@@ -683,14 +723,91 @@ fn feed_key_inner(state: &mut crate::AgcState, key: Key) {
             }
             _ => raise_opr_err(state),
         },
+
+        P27Time {
+            verb,
+            reg_index,
+            sign,
+            digits,
+            buf,
+            committed,
+        } => match key {
+            Key::Digit(dg) => {
+                if digits >= 5 {
+                    raise_opr_err(state);
+                    return;
+                }
+                state.vn.phase = P27Time {
+                    verb,
+                    reg_index,
+                    sign,
+                    digits: digits + 1,
+                    buf: buf * 10 + dg as u32,
+                    committed,
+                };
+            }
+            Key::Plus => {
+                if digits != 0 {
+                    raise_opr_err(state);
+                    return;
+                }
+                state.vn.phase = P27Time {
+                    verb,
+                    reg_index,
+                    sign: 1,
+                    digits,
+                    buf,
+                    committed,
+                };
+            }
+            Key::Minus => {
+                if digits != 0 {
+                    raise_opr_err(state);
+                    return;
+                }
+                state.vn.phase = P27Time {
+                    verb,
+                    reg_index,
+                    sign: -1,
+                    digits,
+                    buf,
+                    committed,
+                };
+            }
+            Key::Entr => {
+                let value = sign as i64 * buf as i64;
+                let mut new_committed = committed;
+                new_committed[reg_index as usize] = value;
+                let next = reg_index + 1;
+                if next < 3 {
+                    state.vn.phase = P27Time {
+                        verb,
+                        reg_index: next,
+                        sign: 1,
+                        digits: 0,
+                        buf: 0,
+                        committed: new_committed,
+                    };
+                } else {
+                    // Final register — commit and dispatch to the verb handler.
+                    commit_p27_time(state, verb, new_committed);
+                    if state.vn.phase != OprErr {
+                        state.dsky.flashing = false;
+                        state.vn.phase = Idle;
+                    }
+                }
+            }
+            _ => raise_opr_err(state),
+        },
     }
 }
 
 // ── Dispatch ──────────────────────────────────────────────────────────────────
 
-/// Returns true for verbs that do not require a noun (V34, V35, V71, ...).
+/// Returns true for verbs that do not require a noun (V34, V35, V70, V71,
+/// V73, ...).
 fn verb_takes_no_noun(verb: u8) -> bool {
-    matches!(verb, 34 | 35 | 71)
+    matches!(verb, 34 | 35 | 70 | 71 | 73)
 }
 
 /// Dispatch a completed VERB+NOUN (or noun-less VERB) command.
@@ -710,7 +827,9 @@ fn dispatch_verb_noun(state: &mut crate::AgcState, verb: u8, noun: u8) {
         25 => start_load(state, verb, noun, 3, 0),
         34 => v34_terminate(state),
         35 => v35_lamp_test(state),
+        70 => v70_liftoff_time_update(state),
         71 => v71_p27_block_update(state),
+        73 => v73_agc_time_update(state),
         _ => raise_opr_err(state),
     }
 }
@@ -768,6 +887,13 @@ fn noun_display(state: &crate::AgcState, noun: u8) -> Option<(f32, f32, f32)> {
                 None => 0,
             };
             let (h, m, s) = time_to_hms(cs);
+            Some((h, m, s))
+        }
+
+        // N17 — Liftoff time uplinked via V70. R1 = hours, R2 = minutes, R3 = seconds×100.
+        // AGC source: Comanche055/PINBALL_NOUN_TABLES.agc, N17.
+        17 => {
+            let (h, m, s) = time_to_hms(state.liftoff_time.0);
             Some((h, m, s))
         }
 
@@ -1003,6 +1129,78 @@ fn p27_apply_word(state: &mut crate::AgcState, address: u8, value: i64) -> bool 
     }
     state.csm_state.frame = Frame::EarthInertial;
     true
+}
+
+// ── V70 / V73 — uplink time updates ──────────────────────────────────────────
+
+/// V70 — uplink liftoff time.
+///
+/// Enters [`VnPhase::P27Time`] to collect hours / minutes / seconds × 100
+/// in `R1` / `R2` / `R3`. The third ENTR commits the converted MET to
+/// `state.liftoff_time`, which survives FRESH START.
+///
+/// AGC source: Comanche055/PINBALL_NOUN_TABLES.agc V70 (uplink, no-noun
+/// dispatch through the P27 family).
+fn v70_liftoff_time_update(state: &mut crate::AgcState) {
+    state.dsky.prog = P27_MAJOR_MODE;
+    state.dsky.verb = 70;
+    state.dsky.noun = 0;
+    state.dsky.flashing = true;
+    state.dsky.r = [0.0; 3];
+    state.vn.phase = VnPhase::P27Time {
+        verb: 70,
+        reg_index: 0,
+        sign: 1,
+        digits: 0,
+        buf: 0,
+        committed: [0; 3],
+    };
+}
+
+/// V73 — uplink AGC time correction.
+///
+/// Enters [`VnPhase::P27Time`] to collect an HMS *delta* (signed; the
+/// uplink stream can prefix `+` or `-` on each register, though the
+/// commit only consults the integrated centisecond total). The third
+/// ENTR adds the delta to `state.time` — V73 advances or rewinds the
+/// AGC clock without re-anchoring liftoff. AGC source:
+/// `Comanche055/PINBALL_NOUN_TABLES.agc` V73.
+fn v73_agc_time_update(state: &mut crate::AgcState) {
+    state.dsky.prog = P27_MAJOR_MODE;
+    state.dsky.verb = 73;
+    state.dsky.noun = 0;
+    state.dsky.flashing = true;
+    state.dsky.r = [0.0; 3];
+    state.vn.phase = VnPhase::P27Time {
+        verb: 73,
+        reg_index: 0,
+        sign: 1,
+        digits: 0,
+        buf: 0,
+        committed: [0; 3],
+    };
+}
+
+/// Commit a completed three-register P27 time entry to the verb-specific
+/// destination.
+///
+/// `values[0]` = hours, `values[1]` = minutes, `values[2]` = seconds × 100
+/// (so 30.45 s arrives as 3045). The MET conversion mirrors the existing
+/// `hms_to_cs` helper but operates on signed inputs so V73 deltas work.
+fn commit_p27_time(state: &mut crate::AgcState, verb: u8, values: [i64; 3]) {
+    let total_cs = values[0] * 360_000 + values[1] * 6_000 + values[2];
+    match verb {
+        70 => {
+            // Liftoff time is an absolute MET — clamp non-negative.
+            let cs = if total_cs < 0 { 0 } else { total_cs as u32 };
+            state.liftoff_time = Met(cs);
+        }
+        73 => {
+            // V73 is an additive correction (drift compensation).
+            state.time = Met(state.time.0.wrapping_add(total_cs as u32));
+        }
+        _ => raise_opr_err(state),
+    }
 }
 
 // ── Noun scale table and commit handlers ─────────────────────────────────────
@@ -2438,5 +2636,160 @@ mod tests {
 
         assert_eq!(state.vn.phase, VnPhase::Idle);
         assert_eq!(state.vn.pending_tig, Some(Met(360_000)));
+    }
+
+    // ── V70 / V73 — uplink time updates (MS-U2) ─────────────────────────────
+
+    /// TC-VND-U2-1: V70 E +02 E +30 E +1500 E stores liftoff_time =
+    /// 2h 30m 15.00s = 901_500 cs.
+    #[test]
+    fn tc_vnd_u2_1_v70_stores_liftoff_time() {
+        let mut state = AgcState::new();
+
+        feed(&mut state, &[Key::Verb, d(7), d(0), Key::Entr]);
+        assert!(matches!(state.vn.phase, VnPhase::P27Time { verb: 70, reg_index: 0, .. }));
+        assert_eq!(state.dsky.prog, 27, "V70 must light the P27 major-mode");
+
+        feed_key(&mut state, Key::Plus);
+        feed_number(&mut state, 2);
+        feed_key(&mut state, Key::Entr);
+        feed_key(&mut state, Key::Plus);
+        feed_number(&mut state, 30);
+        feed_key(&mut state, Key::Entr);
+        feed_key(&mut state, Key::Plus);
+        feed_number(&mut state, 1500); // 15.00 s × 100
+        feed_key(&mut state, Key::Entr);
+
+        assert_eq!(state.vn.phase, VnPhase::Idle);
+        assert_eq!(
+            state.liftoff_time,
+            Met(2 * 360_000 + 30 * 6_000 + 1_500),
+            "liftoff_time must hold the accumulated HMS centisecond total"
+        );
+    }
+
+    /// TC-VND-U2-2: V73 advances `state.time` by the entered delta and
+    /// leaves `liftoff_time` untouched.
+    #[test]
+    fn tc_vnd_u2_2_v73_advances_state_time() {
+        let mut state = AgcState::new();
+        state.time = Met(500);
+        state.liftoff_time = Met(123_456);
+
+        feed(&mut state, &[Key::Verb, d(7), d(3), Key::Entr]);
+        assert!(matches!(state.vn.phase, VnPhase::P27Time { verb: 73, .. }));
+
+        // Δ = 0h 1m 30.00s = 9000 cs
+        feed_key(&mut state, Key::Plus);
+        feed_number(&mut state, 0);
+        feed_key(&mut state, Key::Entr);
+        feed_key(&mut state, Key::Plus);
+        feed_number(&mut state, 1);
+        feed_key(&mut state, Key::Entr);
+        feed_key(&mut state, Key::Plus);
+        feed_number(&mut state, 3000); // 30.00 s × 100
+        feed_key(&mut state, Key::Entr);
+
+        assert_eq!(state.vn.phase, VnPhase::Idle);
+        assert_eq!(state.time, Met(500 + 6_000 + 3_000));
+        assert_eq!(
+            state.liftoff_time,
+            Met(123_456),
+            "V73 must NOT touch liftoff_time"
+        );
+    }
+
+    /// TC-VND-U2-3: V06 N17 displays `liftoff_time` as HMS.
+    #[test]
+    fn tc_vnd_u2_3_v06_n17_displays_liftoff_time() {
+        let mut state = AgcState::new();
+        state.liftoff_time = Met(2 * 360_000 + 30 * 6_000 + 1_500); // 02:30:15.00
+
+        feed(
+            &mut state,
+            &[Key::Verb, d(0), d(6), Key::Noun, d(1), d(7), Key::Entr],
+        );
+
+        assert_eq!(state.dsky.verb, 6);
+        assert_eq!(state.dsky.noun, 17);
+        assert_eq!(state.dsky.r[0], 2.0);
+        assert_eq!(state.dsky.r[1], 30.0);
+        assert_eq!(state.dsky.r[2], 1500.0);
+    }
+
+    /// TC-VND-U2-4: V73 with a negative delta rewinds the clock.
+    #[test]
+    fn tc_vnd_u2_4_v73_negative_delta_rewinds() {
+        let mut state = AgcState::new();
+        state.time = Met(10_000);
+
+        feed(&mut state, &[Key::Verb, d(7), d(3), Key::Entr]);
+        feed_key(&mut state, Key::Plus);
+        feed_number(&mut state, 0);
+        feed_key(&mut state, Key::Entr);
+        feed_key(&mut state, Key::Plus);
+        feed_number(&mut state, 0);
+        feed_key(&mut state, Key::Entr);
+        feed_key(&mut state, Key::Minus);
+        feed_number(&mut state, 100); // -1.00 s × 100 = -100 cs
+        feed_key(&mut state, Key::Entr);
+
+        assert_eq!(state.vn.phase, VnPhase::Idle);
+        assert_eq!(state.time, Met(10_000 - 100));
+    }
+
+    /// TC-VND-U2-5: scripted V70 uplink (via poll_uplink) produces the
+    /// same `liftoff_time` as a direct `feed_key` sequence — the MS-U2
+    /// exit criterion equivalence check on the UPRUPT path.
+    #[test]
+    fn tc_vnd_u2_5_scripted_v70_matches_direct() {
+        use crate::services::uplink::poll_uplink;
+        use std::collections::VecDeque;
+
+        struct VecUplink(VecDeque<u16>);
+        impl crate::hal::Uplink for VecUplink {
+            fn read_word(&mut self) -> Option<u16> {
+                self.0.pop_front()
+            }
+        }
+
+        // Direct keys.
+        let mut state_ref = AgcState::new();
+        feed(
+            &mut state_ref,
+            &[
+                Key::Verb,
+                d(7),
+                d(0),
+                Key::Entr,
+                Key::Plus,
+                d(2),
+                Key::Entr,
+                Key::Plus,
+                d(3),
+                d(0),
+                Key::Entr,
+                Key::Plus,
+                d(1),
+                d(5),
+                d(0),
+                d(0),
+                Key::Entr,
+            ],
+        );
+
+        // Same sequence via uplink word codes.
+        let mut state_uplink = AgcState::new();
+        let words: Vec<u16> = vec![
+            17, 7, 16, 28, // V 7 0 E
+            26, 2, 28, // + 2 E
+            26, 3, 16, 28, // + 3 0 E
+            26, 1, 5, 16, 16, 28, // + 1 5 0 0 E
+        ];
+        let mut uplink = VecUplink(words.into_iter().collect());
+        poll_uplink(&mut state_uplink, &mut uplink);
+
+        assert_eq!(state_uplink.liftoff_time, state_ref.liftoff_time);
+        assert_eq!(state_uplink.vn.phase, VnPhase::Idle);
     }
 }
