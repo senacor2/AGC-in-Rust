@@ -1,0 +1,21 @@
+# Sample uplink script: V71 P27 block update.
+#
+# Reseeds the CSM state vector with a circular LEO position/velocity
+# starting at logical address 1 (position) and walking through to
+# address 6 (velocity). Six words total.
+#
+# Load this script from dsky_sim with the '@' key.
+# Syntax: one character per keypress.
+#   V=VERB  N=NOUN  E=ENTR  P=PRO  C=CLR  R=RSET  K=KEY REL
+#   0-9 digit, + / - sign, '#' line comment, whitespace ignored.
+
+V 7 1 E         # V71 → P27 block update prompt
+0 1 E           # starting address = 1 (csm_state.position[0])
+0 6 E           # word count = 6
+
++ 0 6 5 7 8 E   # position[0] = 6578 km
++ 0 0 0 0 0 E   # position[1] = 0
++ 0 0 0 0 0 E   # position[2] = 0
++ 0 0 0 0 0 E   # velocity[0] = 0 m/s
++ 0 7 7 8 4 E   # velocity[1] = 7784 m/s
++ 0 0 0 0 0 E   # velocity[2] = 0

@@ -3,11 +3,12 @@
 use std::time::Instant;
 
 use agc_core::hal::{
-    dsky::Lamp, AgcHardware, Dsky, Engine, Imu, Optics, Rcs, Secs, Telemetry, Timers, Uplink,
+    dsky::Lamp, AgcHardware, Dsky, Engine, Imu, Optics, Rcs, Secs, Telemetry, Timers,
 };
 use agc_core::types::CduAngle;
 
 use crate::physics::Spacecraft;
+use crate::uplink::ScriptedUplink;
 
 // ── Sub-system stubs ──────────────────────────────────────────────────────────
 
@@ -64,9 +65,6 @@ pub struct SimRcs {
     /// Sticky visual accumulator — ORs in every firing between render frames.
     pub visual_sm_jets: u16,
     pub visual_cm_jets: u16,
-}
-pub struct SimUplink {
-    pub words: std::collections::VecDeque<u16>,
 }
 pub struct SimTelemetry {
     pub log: Vec<u16>,
@@ -175,12 +173,6 @@ impl SimRcs {
     }
 }
 
-impl Uplink for SimUplink {
-    fn read_word(&mut self) -> Option<u16> {
-        self.words.pop_front()
-    }
-}
-
 impl Telemetry for SimTelemetry {
     fn send_word(&mut self, word: u16) {
         self.log.push(word);
@@ -204,7 +196,7 @@ pub struct SimHardware {
     pub engine: SimEngine,
     pub rcs: SimRcs,
     pub secs: SimSecs,
-    pub uplink: SimUplink,
+    pub uplink: ScriptedUplink,
     pub telemetry: SimTelemetry,
     /// Ground-truth spacecraft dynamics. Drives the IMU's PIPA pulse
     /// stream when the SPS is commanded on.
@@ -244,9 +236,7 @@ impl SimHardware {
                 visual_cm_jets: 0,
             },
             secs: SimSecs::default(),
-            uplink: SimUplink {
-                words: Default::default(),
-            },
+            uplink: ScriptedUplink::new(),
             telemetry: SimTelemetry { log: Vec::new() },
             spacecraft: Spacecraft::new(),
         }
@@ -278,7 +268,7 @@ impl AgcHardware for SimHardware {
     type Engine = SimEngine;
     type Rcs = SimRcs;
     type Secs = SimSecs;
-    type Uplink = SimUplink;
+    type Uplink = ScriptedUplink;
     type Telemetry = SimTelemetry;
 
     fn timers(&mut self) -> &mut SimTimers {
@@ -302,7 +292,7 @@ impl AgcHardware for SimHardware {
     fn rcs(&mut self) -> &mut SimRcs {
         &mut self.rcs
     }
-    fn uplink(&mut self) -> &mut SimUplink {
+    fn uplink(&mut self) -> &mut ScriptedUplink {
         &mut self.uplink
     }
     fn telemetry(&mut self) -> &mut SimTelemetry {
@@ -322,6 +312,9 @@ mod tests {
     use super::*;
     use agc_core::hal::dsky::Lamp;
     use agc_core::hal::{Dsky, Engine, Imu, Optics, Rcs, Secs, Telemetry, Timers, Uplink};
+    // NB: `ScriptedUplink` lives in `crate::uplink` and is re-exported at
+    // the crate root; the `Uplink` import above brings the trait into
+    // scope so `hw.uplink().read_word()` resolves.
     use agc_core::types::CduAngle;
 
     // ── Timers (TC-TIMERS-01 through TC-TIMERS-03) ──────────────────────────

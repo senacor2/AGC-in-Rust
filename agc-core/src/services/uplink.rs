@@ -1,0 +1,142 @@
+//! UPRUPT path: ground uplink → V/N processor.
+//!
+//! [`poll_uplink`] drains words from the HAL [`Uplink`] FIFO and feeds them
+//! into the V/N state machine via [`v_n::feed_key`]. Each uplink word carries
+//! a single post-validated 5-bit DSKY key code in its lower five bits; the
+//! Apollo redundancy / complement / "uplink too fast" protocol is the
+//! responsibility of the bare-metal driver (`agc-board-nucleo-f767`) and of
+//! the simulator HAL impl.
+//!
+//! AGC source: `Comanche055/KEYRUPT,_UPRUPT.agc` — the UPRUPT ISR routes the
+//! validated key code through the same INREAD / NSTRT path that KEYRUPT uses
+//! for crew keypresses, which is exactly what `feed_key` already implements.
+//!
+//! Called from the T4RUPT handler (see [`crate::services::t4rupt`]).
+
+use crate::hal::Uplink;
+use crate::services::v_n::{feed_key, Key};
+use crate::AgcState;
+
+/// Extract a DSKY [`Key`] from a raw uplink word.
+///
+/// Only the lower 5 bits are inspected. Returns `None` for the all-zero
+/// word (idle / no key) and for any code outside the Block 2 KEYTEMP1
+/// table.
+pub fn key_from_word(word: u16) -> Option<Key> {
+    let code = (word & 0x1F) as u8;
+    if code == 0 {
+        return None;
+    }
+    Key::from_code(code)
+}
+
+/// Drain all pending uplink words and feed them into the V/N state machine.
+///
+/// Each non-empty word becomes a single keypress. Unknown codes are
+/// silently dropped (matching the AGC's UPRUPT behaviour — bad codes
+/// never reach NSTRT). Zero words are also dropped (idle line).
+pub fn poll_uplink<U: Uplink>(state: &mut AgcState, uplink: &mut U) {
+    while let Some(word) = uplink.read_word() {
+        if let Some(key) = key_from_word(word) {
+            feed_key(state, key);
+        }
+    }
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::v_n::VnPhase;
+    use std::collections::VecDeque;
+
+    /// Test-only Uplink impl backed by a VecDeque.
+    struct VecUplink(VecDeque<u16>);
+
+    impl Uplink for VecUplink {
+        fn read_word(&mut self) -> Option<u16> {
+            self.0.pop_front()
+        }
+    }
+
+    fn uplink_of(words: &[u16]) -> VecUplink {
+        VecUplink(words.iter().copied().collect())
+    }
+
+    /// TC-UPL-1: valid key codes round-trip through `key_from_word`.
+    #[test]
+    fn tc_upl_1_key_from_word_valid() {
+        assert_eq!(key_from_word(17), Some(Key::Verb));
+        assert_eq!(key_from_word(28), Some(Key::Entr));
+        assert_eq!(key_from_word(16), Some(Key::Digit(0)));
+        assert_eq!(key_from_word(1), Some(Key::Digit(1)));
+        assert_eq!(key_from_word(9), Some(Key::Digit(9)));
+    }
+
+    /// TC-UPL-2: upper bits are ignored — only the low 5 bits matter.
+    #[test]
+    fn tc_upl_2_upper_bits_masked() {
+        // 0xFFE1 = upper 11 bits set + code 1 (Digit(1))
+        assert_eq!(key_from_word(0xFFE1), Some(Key::Digit(1)));
+        // 0x8011 = high bit + Verb code
+        assert_eq!(key_from_word(0x8011), Some(Key::Verb));
+    }
+
+    /// TC-UPL-3: the zero word and undefined 5-bit codes return None.
+    #[test]
+    fn tc_upl_3_unknown_and_zero() {
+        assert_eq!(key_from_word(0), None);
+        assert_eq!(key_from_word(0xFFE0), None); // low 5 bits = 0
+        // 0..31 codes not in KEYTEMP1: 10..15, 19..24, 29.
+        assert_eq!(key_from_word(10), None);
+        assert_eq!(key_from_word(15), None);
+        assert_eq!(key_from_word(29), None);
+    }
+
+    /// TC-UPL-4: `poll_uplink` drains a complete V71 ENTR keystroke
+    /// sequence and reproduces the same V/N phase a direct `feed_key`
+    /// drive would have produced.
+    #[test]
+    fn tc_upl_4_v71_sequence_drives_phase() {
+        let mut state = AgcState::new();
+        // V 7 1 ENTR — 17, 7, 1, 28
+        let mut uplink = uplink_of(&[17, 7, 1, 28]);
+
+        poll_uplink(&mut state, &mut uplink);
+
+        assert!(
+            matches!(state.vn.phase, VnPhase::P27Address { .. }),
+            "V71 ENTR must transition to P27Address; got {:?}",
+            state.vn.phase
+        );
+        // The HAL buffer is fully drained.
+        assert_eq!(uplink.read_word(), None);
+    }
+
+    /// TC-UPL-5: unknown codes embedded in a stream are skipped without
+    /// disturbing the surrounding keystrokes.
+    #[test]
+    fn tc_upl_5_unknown_codes_skipped() {
+        let mut state = AgcState::new();
+        // V (17), <noise=10>, 0 (16), <noise=15>, 6 (6), N (31), 4 (4),
+        // 0 (16), ENTR (28) — full V06 N40 ENTR sequence with noise between
+        // valid keystrokes.
+        let mut uplink = uplink_of(&[17, 10, 16, 15, 6, 31, 4, 16, 28]);
+        poll_uplink(&mut state, &mut uplink);
+        assert_eq!(state.dsky.verb, 6);
+        assert_eq!(state.dsky.noun, 40);
+        assert_eq!(state.vn.phase, VnPhase::Idle);
+        assert!(!state.dsky.opr_err, "noise codes must not raise OPR ERR");
+    }
+
+    /// TC-UPL-6: poll_uplink on an empty FIFO is a no-op.
+    #[test]
+    fn tc_upl_6_empty_fifo_noop() {
+        let mut state = AgcState::new();
+        let initial_phase = state.vn.phase;
+        let mut uplink = uplink_of(&[]);
+        poll_uplink(&mut state, &mut uplink);
+        assert_eq!(state.vn.phase, initial_phase);
+    }
+}

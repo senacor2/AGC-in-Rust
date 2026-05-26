@@ -5,6 +5,7 @@ pub mod display;
 pub mod fresh_start;
 pub mod pinball;
 pub mod t4rupt;
+pub mod uplink;
 pub mod v_n;
 
 pub use alarm::AlarmState;

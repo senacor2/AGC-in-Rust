@@ -22,7 +22,7 @@ use agc_core::AgcState;
 use agc_sim::dsky_ui::{key_from_code, render, PropulsionFrame};
 use agc_sim::hardware::SimHardware;
 use agc_sim::runtime::{
-    pump_engine_to_hw, pump_pipa_into_state, pump_rcs_to_hw, DapPump, WaitlistPump,
+    pump_engine_to_hw, pump_pipa_into_state, pump_rcs_to_hw, DapPump, T4Pump, WaitlistPump,
 };
 
 use crossterm::{
@@ -61,6 +61,12 @@ fn run<W: Write>(out: &mut W) -> io::Result<()> {
     let mut status = String::from("Ready");
     let mut waitlist_pump = WaitlistPump::new();
     let mut dap_pump = DapPump::new();
+    let mut t4_pump = T4Pump::new();
+
+    // While `prompt` is `Some(buf)`, keystrokes accumulate into `buf`
+    // instead of going to the V/N processor. ENTER loads the script file
+    // named by `buf` into the uplink FIFO; ESC cancels.
+    let mut prompt: Option<String> = None;
 
     loop {
         // Read MET from the HAL timer (single source of truth).
@@ -88,11 +94,44 @@ fn run<W: Write>(out: &mut W) -> io::Result<()> {
                 if kind != KeyEventKind::Press {
                     continue;
                 }
-                // Ctrl-C quits.
+                // Ctrl-C quits unconditionally.
                 if code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
                     return Ok(());
                 }
-                // Plain 'q' quits (but allow 'Q' → RSET? No — 'r' is RSET, 'q' is quit).
+
+                // ── @-prompt: load a script file into the uplink FIFO ───
+                if let Some(buf) = prompt.as_mut() {
+                    match code {
+                        KeyCode::Esc => {
+                            prompt = None;
+                            status = String::from("Script load cancelled");
+                        }
+                        KeyCode::Enter => {
+                            let path = buf.trim().to_string();
+                            prompt = None;
+                            status = load_script_into_uplink(&path, &mut hw);
+                        }
+                        KeyCode::Backspace => {
+                            buf.pop();
+                            status = format!("Script file: {}", buf);
+                        }
+                        KeyCode::Char(c) => {
+                            buf.push(c);
+                            status = format!("Script file: {}", buf);
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
+                // '@' opens the script-file prompt.
+                if matches!(code, KeyCode::Char('@')) {
+                    prompt = Some(String::new());
+                    status = String::from("Script file: ");
+                    continue;
+                }
+
+                // Plain 'q' quits.
                 if matches!(code, KeyCode::Char('q') | KeyCode::Char('Q')) {
                     return Ok(());
                 }
@@ -127,6 +166,7 @@ fn run<W: Write>(out: &mut W) -> io::Result<()> {
         last_physics = Instant::now();
         hw.tick(dt_physics);
         pump_pipa_into_state(&mut state, &mut hw);
+        t4_pump.tick(&mut state, &mut hw);
         dap_pump.tick(&mut state, &mut hw);
         waitlist_pump.tick(&mut state, &mut hw);
         pump_engine_to_hw(&state, &mut hw);
@@ -167,5 +207,26 @@ fn run<W: Write>(out: &mut W) -> io::Result<()> {
 
         // Brief sleep to avoid pegging a core.
         std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Load `path` as a DSKY script and queue every keystroke on the uplink
+/// FIFO. Returns a status-line message — success or a one-line failure
+/// reason — suitable for display on the DSKY status row.
+fn load_script_into_uplink(path: &str, hw: &mut SimHardware) -> String {
+    if path.is_empty() {
+        return String::from("Script load: no filename given");
+    }
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => return format!("Script load failed: {}", e),
+    };
+    match hw.uplink.load_script(&text) {
+        Ok(()) => format!(
+            "Script loaded: {} ({} words queued)",
+            path,
+            hw.uplink.words.len()
+        ),
+        Err(e) => format!("Script parse error: {}", e),
     }
 }
