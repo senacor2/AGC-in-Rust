@@ -547,7 +547,7 @@ mod tests {
 
         // No further work — advance past one full T4 period; nothing must
         // change because the FIFO is empty.
-        state.time = Met(T4RUPT_PERIOD_CS as u32);
+        state.time = Met(T4RUPT_PERIOD_CS);
         t4.tick(&mut state, &mut hw);
         assert!(matches!(state.vn.phase, VnPhase::P27Address { .. }));
     }

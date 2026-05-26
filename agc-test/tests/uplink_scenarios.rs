@@ -26,7 +26,7 @@ fn run_script(state: &mut AgcState, hw: &mut SimHardware, script: &str) {
     let ticks = hw.uplink.words.len() + 4;
     for _ in 0..ticks {
         t4.tick(state, hw);
-        state.time = Met(state.time.0.wrapping_add(T4RUPT_PERIOD_CS as u32));
+        state.time = Met(state.time.0.wrapping_add(T4RUPT_PERIOD_CS));
     }
 }
 
@@ -202,7 +202,7 @@ fn tc_ups_7_uplink_activity_lamp_tracks_traffic() {
     // Burst — load the FIFO, then advance one T4 period so the next
     // tick crosses the countdown threshold and the pump fires.
     hw.uplink.load_script("V 0 6 N 1 7 E").unwrap();
-    state.time = Met(state.time.0 + T4RUPT_PERIOD_CS as u32);
+    state.time = Met(state.time.0 + T4RUPT_PERIOD_CS);
     t4.tick(&mut state, &mut hw);
     assert!(
         state.dsky.uplink_activity,
@@ -210,7 +210,7 @@ fn tc_ups_7_uplink_activity_lamp_tracks_traffic() {
     );
 
     // Subsequent quiet T4 cycle — lamp clears.
-    state.time = Met(state.time.0 + T4RUPT_PERIOD_CS as u32);
+    state.time = Met(state.time.0 + T4RUPT_PERIOD_CS);
     t4.tick(&mut state, &mut hw);
     assert!(
         !state.dsky.uplink_activity,
