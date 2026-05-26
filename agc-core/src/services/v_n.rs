@@ -1061,9 +1061,14 @@ fn v37_program_select(state: &mut crate::AgcState, noun: u8) {
 
 // ── V71 / P27 block-address state-vector update ──────────────────────────────
 
-/// Maximum P27 logical address. Six slots cover the full inertial
-/// position (1..=3) and velocity (4..=6) triple.
-const P27_MAX_ADDRESS: u8 = 6;
+/// Maximum P27 logical address.
+///
+/// Spans the full uplink-reachable address space documented in
+/// `specs/uplink-plan.md` §5: CSM state (1–6), target state (7–12),
+/// `gha_epoch_rad` (13), REFSMMAT 3×3 row-major (14–22), gyro
+/// compensation (23–25), PIPA calibration (26–29), and an additive
+/// MET correction slot (30).
+const P27_MAX_ADDRESS: u8 = 30;
 
 /// Major mode number for P27 (Update Liaison). The real CMC entered
 /// P27 implicitly when V70/V71/V72/V73 fired; we mirror that behaviour
@@ -1099,35 +1104,86 @@ fn v71_p27_block_update(state: &mut crate::AgcState) {
     state.vn.phase = VnPhase::P27Address { digits: 0, buf: 0 };
 }
 
-/// Map a P27 logical address to a state-vector mutation.
+/// Map a P27 logical address to a state mutation.
 ///
-/// Address space (six logical slots):
+/// Address space (`specs/uplink-plan.md` §5):
 ///
-/// | Address | Field                 | Crew units |
-/// |---------|-----------------------|------------|
-/// | 1       | csm_state.position[0] | km         |
-/// | 2       | csm_state.position[1] | km         |
-/// | 3       | csm_state.position[2] | km         |
-/// | 4       | csm_state.velocity[0] | m/s        |
-/// | 5       | csm_state.velocity[1] | m/s        |
-/// | 6       | csm_state.velocity[2] | m/s        |
+/// | Address | Field                        | Crew units                    | AGC erasable     |
+/// |---------|------------------------------|-------------------------------|------------------|
+/// | 1–3     | `csm_state.position[0..3]`   | km                            | RN               |
+/// | 4–6     | `csm_state.velocity[0..3]`   | m/s                           | VN               |
+/// | 7–9     | `target_state.position[0..3]`| km                            | RN (other veh.)  |
+/// | 10–12   | `target_state.velocity[0..3]`| m/s                           | VN (other veh.)  |
+/// | 13      | `gha_epoch_rad`              | radians × 1e5                 | GHABASE          |
+/// | 14–22   | `refsmmat[3×3]` row-major    | revolutions × 1e5 (signed)    | REFSMMAT         |
+/// | 23–25   | `gyro_comp.{nbdx,nbdy,nbdz}` | meru × 1e3                    | NBDX/NBDY/NBDZ   |
+/// | 26      | `pipa_cal.scale`             | ppm Δ from nominal            | PIPASCF          |
+/// | 27–29   | `pipa_cal.bias[0..3]`        | cm/s² (converted to counts)   | PIPABIAS         |
+/// | 30      | `state.time` offset          | centiseconds (added)          | (V73 commit path)|
+///
+/// REFSMMAT conversion: the AGC's REFSMMAT was stored in B-1 (half-rev)
+/// units; we accept revolutions × 1e5 from the crew/uplink so a full
+/// ±0.5 rev fits in five signed decimal digits, then multiply by 2π / 1e5
+/// to land radians directly in the matrix element.
+///
+/// PIPA bias conversion: 1 cm/s² over a 2-second SERVICER interval =
+/// 0.02 m/s, divided by the current scale factor to get integer counts.
+/// The result is clamped to `i16`.
 ///
 /// Returns `false` for out-of-range addresses (caller raises OPR ERR).
-/// Always forces `frame = EarthInertial` so a stale Moon-frame state
-/// vector cannot survive a partial position-only update.
+/// State-vector writes (1–12) force `frame = EarthInertial` so a stale
+/// Moon-frame vector cannot survive a partial position-only update.
 fn p27_apply_word(state: &mut crate::AgcState, address: u8, value: i64) -> bool {
     use crate::navigation::state_vector::Frame;
+    use crate::services::average_g::PipaCalibration;
+
     let v = value as f64;
     match address {
-        1 => state.csm_state.position[0] = v * 1000.0,
-        2 => state.csm_state.position[1] = v * 1000.0,
-        3 => state.csm_state.position[2] = v * 1000.0,
-        4 => state.csm_state.velocity[0] = v,
-        5 => state.csm_state.velocity[1] = v,
-        6 => state.csm_state.velocity[2] = v,
+        // CSM state vector.
+        1..=3 => {
+            state.csm_state.position[(address - 1) as usize] = v * 1000.0;
+            state.csm_state.frame = Frame::EarthInertial;
+        }
+        4..=6 => {
+            state.csm_state.velocity[(address - 4) as usize] = v;
+            state.csm_state.frame = Frame::EarthInertial;
+        }
+        // Target (other vehicle) state vector.
+        7..=9 => {
+            state.target_state.position[(address - 7) as usize] = v * 1000.0;
+            state.target_state.frame = Frame::EarthInertial;
+        }
+        10..=12 => {
+            state.target_state.velocity[(address - 10) as usize] = v;
+            state.target_state.frame = Frame::EarthInertial;
+        }
+        // GHA_epoch (radians × 1e5).
+        13 => state.gha_epoch_rad = v / 1e5,
+        // REFSMMAT — 9 row-major elements, revs × 1e5 → radians.
+        14..=22 => {
+            let idx = (address - 14) as usize;
+            let row = idx / 3;
+            let col = idx % 3;
+            state.refsmmat[row][col] = v * core::f64::consts::TAU / 1e5;
+        }
+        // Gyro NBD bias (meru × 1e3).
+        23 => state.gyro_comp.nbdx = v / 1e3,
+        24 => state.gyro_comp.nbdy = v / 1e3,
+        25 => state.gyro_comp.nbdz = v / 1e3,
+        // PIPA scale factor — ppm delta from nominal.
+        26 => state.pipa_cal.scale = PipaCalibration::NOMINAL.scale * (1.0 + v * 1e-6),
+        // PIPA bias — convert cm/s² to counts per 2-s SERVICER interval.
+        27..=29 => {
+            let idx = (address - 27) as usize;
+            let counts = libm::round(v * 0.02 / state.pipa_cal.scale);
+            state.pipa_cal.bias[idx] = counts.clamp(i16::MIN as f64, i16::MAX as f64) as i16;
+        }
+        // Additive MET correction (centiseconds).
+        30 => {
+            state.time = Met(state.time.0.wrapping_add(value as u32));
+        }
         _ => return false,
     }
-    state.csm_state.frame = Frame::EarthInertial;
     true
 }
 
@@ -1876,12 +1932,13 @@ mod tests {
         assert_eq!(state.vn.phase, VnPhase::OprErr);
     }
 
-    /// TC-V71-5: Address > P27_MAX_ADDRESS is rejected.
+    /// TC-V71-5: Address > P27_MAX_ADDRESS is rejected. (MS-U3 raised
+    /// the limit from 6 to 30; this test rejects the new boundary + 1.)
     #[test]
     fn tc_v71_5_address_out_of_range() {
         let mut state = AgcState::new();
         feed(&mut state, &[Key::Verb, d(7), d(1), Key::Entr]);
-        feed_number(&mut state, 7); // P27_MAX_ADDRESS = 6
+        feed_number(&mut state, 31); // P27_MAX_ADDRESS = 30
         feed_key(&mut state, Key::Entr);
 
         assert!(state.dsky.opr_err);
@@ -1893,9 +1950,9 @@ mod tests {
     fn tc_v71_6_address_count_overflow() {
         let mut state = AgcState::new();
         feed(&mut state, &[Key::Verb, d(7), d(1), Key::Entr]);
-        feed_number(&mut state, 5); // start at velocity[1]
+        feed_number(&mut state, 29); // start near the top of the space
         feed_key(&mut state, Key::Entr);
-        feed_number(&mut state, 3); // would reach addr 7 → out of range
+        feed_number(&mut state, 3); // 29 + 3 = 32 > 31 → reject
         feed_key(&mut state, Key::Entr);
 
         assert!(state.dsky.opr_err);
@@ -2736,6 +2793,136 @@ mod tests {
 
         assert_eq!(state.vn.phase, VnPhase::Idle);
         assert_eq!(state.time, Met(10_000 - 100));
+    }
+
+    // ── MS-U3 — extended P27 address space ──────────────────────────────────
+
+    /// Convenience: drive V71 to load `count` words starting at `address`,
+    /// where each word is signed (sign, magnitude).
+    fn run_v71_block(state: &mut AgcState, address: u8, words: &[i64]) {
+        // V71 ENTR.
+        feed(state, &[Key::Verb, d(7), d(1), Key::Entr]);
+        // Address ENTR.
+        feed_number(state, address as u32);
+        feed_key(state, Key::Entr);
+        // Count ENTR.
+        feed_number(state, words.len() as u32);
+        feed_key(state, Key::Entr);
+        // Each signed word.
+        for &w in words {
+            if w < 0 {
+                feed_key(state, Key::Minus);
+                feed_number(state, (-w) as u32);
+            } else {
+                feed_key(state, Key::Plus);
+                feed_number(state, w as u32);
+            }
+            feed_key(state, Key::Entr);
+        }
+    }
+
+    /// TC-VND-U3-1: target_state position (addresses 7–9) and velocity
+    /// (10–12) accept a 6-word block.
+    #[test]
+    fn tc_vnd_u3_1_target_state_block() {
+        let mut state = AgcState::new();
+        run_v71_block(
+            &mut state,
+            7,
+            &[7000, 0, 0, 0, 7500, 0], // pos km, vel m/s
+        );
+        assert_eq!(state.vn.phase, VnPhase::Idle);
+        assert!((state.target_state.position[0] - 7_000_000.0).abs() < 1.0);
+        assert_eq!(state.target_state.velocity[1], 7500.0);
+    }
+
+    /// TC-VND-U3-2: GHA_epoch (address 13) — radians × 1e5.
+    ///
+    /// AGC P27 data words cap at five digits per accumulator, so the
+    /// uplink resolution is limited to 0.00001 rad = ~2 arcsec.
+    #[test]
+    fn tc_vnd_u3_2_gha_epoch_uplink() {
+        let mut state = AgcState::new();
+        // 0.12345 rad → 12_345 (fits in the five-digit P27 word).
+        run_v71_block(&mut state, 13, &[12_345]);
+        assert!((state.gha_epoch_rad - 0.123_45).abs() < 1e-9);
+    }
+
+    /// TC-VND-U3-3: REFSMMAT (addresses 14–22) — 9 words, identity
+    /// matrix expressed as ¼ revolution diagonal entries.
+    #[test]
+    fn tc_vnd_u3_3_refsmmat_uplink() {
+        let mut state = AgcState::new();
+        // A REFSMMAT row-major rotation of +1/4 turn about Z (cos=0, sin=1).
+        // In revs × 1e5: 90° = 0.25 rev = 25_000. cos(90°) = 0, sin(90°) = 25_000
+        // means rows: [0, -25000, 0; 25000, 0, 0; 0, 0, 25000] in revs×1e5.
+        // After conversion (× 2π / 1e5): [0, -π/2, 0; π/2, 0, 0; 0, 0, π/2].
+        run_v71_block(
+            &mut state,
+            14,
+            &[
+                0, -25_000, 0, // row 0
+                25_000, 0, 0, // row 1
+                0, 0, 25_000, // row 2 (should be 50_000 for full rot; this is just a probe)
+            ],
+        );
+        let pi_2 = core::f64::consts::FRAC_PI_2;
+        assert!((state.refsmmat[0][1] + pi_2).abs() < 1e-9);
+        assert!((state.refsmmat[1][0] - pi_2).abs() < 1e-9);
+        assert!((state.refsmmat[2][2] - pi_2).abs() < 1e-9);
+        assert!(state.refsmmat[0][0].abs() < 1e-12);
+    }
+
+    /// TC-VND-U3-4: gyro_comp (addresses 23–25) — meru × 1e3.
+    #[test]
+    fn tc_vnd_u3_4_gyro_comp_uplink() {
+        let mut state = AgcState::new();
+        // 0.123 meru on X axis = 123 in the uplink word.
+        run_v71_block(&mut state, 23, &[123, -456, 789]);
+        assert!((state.gyro_comp.nbdx - 0.123).abs() < 1e-9);
+        assert!((state.gyro_comp.nbdy + 0.456).abs() < 1e-9);
+        assert!((state.gyro_comp.nbdz - 0.789).abs() < 1e-9);
+    }
+
+    /// TC-VND-U3-5: pipa_cal scale + bias (addresses 26–29).
+    #[test]
+    fn tc_vnd_u3_5_pipa_cal_uplink() {
+        use crate::services::average_g::PipaCalibration;
+
+        let mut state = AgcState::new();
+        // +100 ppm scale delta; bias = +/- a few cm/s² per axis.
+        run_v71_block(&mut state, 26, &[100, 30, -30, 0]);
+
+        let expected = PipaCalibration::NOMINAL.scale * (1.0 + 100e-6);
+        assert!(
+            (state.pipa_cal.scale - expected).abs() < 1e-12,
+            "scale ppm delta not applied"
+        );
+        // 30 cm/s² × 0.02 / 0.0585 ≈ 10.26 → round 10.
+        assert_eq!(state.pipa_cal.bias[0], 10);
+        assert_eq!(state.pipa_cal.bias[1], -10);
+        assert_eq!(state.pipa_cal.bias[2], 0);
+    }
+
+    /// TC-VND-U3-6: MET offset slot (address 30) advances `state.time`.
+    #[test]
+    fn tc_vnd_u3_6_met_offset_uplink() {
+        let mut state = AgcState::new();
+        state.time = Met(500);
+        run_v71_block(&mut state, 30, &[-200]);
+        assert_eq!(state.time, Met(500u32.wrapping_add(-200i64 as u32)));
+    }
+
+    /// TC-VND-U3-7: addresses above P27_MAX_ADDRESS raise OPR ERR.
+    #[test]
+    fn tc_vnd_u3_7_address_out_of_range_opr_err() {
+        let mut state = AgcState::new();
+        // V71 ENTR 31 ENTR — address 31 > P27_MAX_ADDRESS.
+        feed(&mut state, &[Key::Verb, d(7), d(1), Key::Entr]);
+        feed_number(&mut state, 31);
+        feed_key(&mut state, Key::Entr);
+        assert!(state.dsky.opr_err);
+        assert_eq!(state.vn.phase, VnPhase::OprErr);
     }
 
     /// TC-VND-U2-5: scripted V70 uplink (via poll_uplink) produces the
