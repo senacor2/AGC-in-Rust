@@ -120,6 +120,18 @@ pub enum VnPhase {
         digits: u8,
         buf: u32,
     },
+    /// V72 — single-address update: accumulating the target address.
+    /// Mirrors [`VnPhase::P27Address`] but transitions to
+    /// [`VnPhase::P27SingleData`] (one signed word, no count).
+    P27SingleAddress { digits: u8, buf: u32 },
+    /// V72 — single-address update: accumulating the data word.
+    P27SingleData {
+        /// Target logical address (already validated against P27_MAX_ADDRESS).
+        address: u8,
+        sign: i8,
+        digits: u8,
+        buf: u32,
+    },
     /// V70 / V73 — three-register HMS time entry (hours / minutes /
     /// seconds × 100). Each ENTR commits one register and advances
     /// `reg_index`; on the third ENTR the assembled MET-style centisecond
@@ -319,6 +331,28 @@ fn sync_display(state: &mut crate::AgcState) {
             state.dsky.flashing = true;
             // R1 shows the address of the word currently being edited.
             state.dsky.r[0] = (address + loaded) as f32;
+            state.dsky.r[1] = 0.0;
+            state.dsky.r[2] = (sign as i64 * buf as i64) as f32;
+        }
+        // V72 single-address update — R1 = address, R3 = data word.
+        P27SingleAddress { digits, buf } => {
+            state.dsky.verb = 72;
+            state.dsky.noun = 0;
+            state.dsky.flashing = true;
+            state.dsky.r[0] = if digits > 0 { buf as f32 } else { 0.0 };
+            state.dsky.r[1] = 0.0;
+            state.dsky.r[2] = 0.0;
+        }
+        P27SingleData {
+            address,
+            sign,
+            buf,
+            ..
+        } => {
+            state.dsky.verb = 72;
+            state.dsky.noun = 0;
+            state.dsky.flashing = true;
+            state.dsky.r[0] = address as f32;
             state.dsky.r[1] = 0.0;
             state.dsky.r[2] = (sign as i64 * buf as i64) as f32;
         }
@@ -724,6 +758,86 @@ fn feed_key_inner(state: &mut crate::AgcState, key: Key) {
             _ => raise_opr_err(state),
         },
 
+        P27SingleAddress { digits, buf } => match key {
+            Key::Digit(dg) => {
+                if digits >= 2 {
+                    raise_opr_err(state);
+                    return;
+                }
+                state.vn.phase = P27SingleAddress {
+                    digits: digits + 1,
+                    buf: buf * 10 + dg as u32,
+                };
+            }
+            Key::Entr => {
+                if digits == 0 || buf == 0 || buf > P27_MAX_ADDRESS as u32 {
+                    raise_opr_err(state);
+                    return;
+                }
+                state.vn.phase = P27SingleData {
+                    address: buf as u8,
+                    sign: 1,
+                    digits: 0,
+                    buf: 0,
+                };
+            }
+            _ => raise_opr_err(state),
+        },
+
+        P27SingleData {
+            address,
+            sign,
+            digits,
+            buf,
+        } => match key {
+            Key::Digit(dg) => {
+                if digits >= 5 {
+                    raise_opr_err(state);
+                    return;
+                }
+                state.vn.phase = P27SingleData {
+                    address,
+                    sign,
+                    digits: digits + 1,
+                    buf: buf * 10 + dg as u32,
+                };
+            }
+            Key::Plus => {
+                if digits != 0 {
+                    raise_opr_err(state);
+                    return;
+                }
+                state.vn.phase = P27SingleData {
+                    address,
+                    sign: 1,
+                    digits,
+                    buf,
+                };
+            }
+            Key::Minus => {
+                if digits != 0 {
+                    raise_opr_err(state);
+                    return;
+                }
+                state.vn.phase = P27SingleData {
+                    address,
+                    sign: -1,
+                    digits,
+                    buf,
+                };
+            }
+            Key::Entr => {
+                let value = sign as i64 * buf as i64;
+                if !p27_apply_word(state, address, value) {
+                    raise_opr_err(state);
+                    return;
+                }
+                state.dsky.flashing = false;
+                state.vn.phase = Idle;
+            }
+            _ => raise_opr_err(state),
+        },
+
         P27Time {
             verb,
             reg_index,
@@ -805,9 +919,9 @@ fn feed_key_inner(state: &mut crate::AgcState, key: Key) {
 // ── Dispatch ──────────────────────────────────────────────────────────────────
 
 /// Returns true for verbs that do not require a noun (V34, V35, V70, V71,
-/// V73, ...).
+/// V72, V73, ...).
 fn verb_takes_no_noun(verb: u8) -> bool {
-    matches!(verb, 34 | 35 | 70 | 71 | 73)
+    matches!(verb, 34 | 35 | 70 | 71 | 72 | 73)
 }
 
 /// Dispatch a completed VERB+NOUN (or noun-less VERB) command.
@@ -829,6 +943,7 @@ fn dispatch_verb_noun(state: &mut crate::AgcState, verb: u8, noun: u8) {
         35 => v35_lamp_test(state),
         70 => v70_liftoff_time_update(state),
         71 => v71_p27_block_update(state),
+        72 => v72_single_address_update(state),
         73 => v73_agc_time_update(state),
         _ => raise_opr_err(state),
     }
@@ -1185,6 +1300,31 @@ fn p27_apply_word(state: &mut crate::AgcState, address: u8, value: i64) -> bool 
         _ => return false,
     }
     true
+}
+
+// ── V72 — single-address uplink update ───────────────────────────────────────
+
+/// V72 — uplink single-address update.
+///
+/// Two-step keystroke flow:
+///
+/// ```text
+/// V72 ENTR             → P27SingleAddress  (waiting for target address)
+/// <addr> ENTR          → P27SingleData     (waiting for signed data word)
+/// <±value> ENTR        → commit via p27_apply_word, return to Idle
+/// ```
+///
+/// The address space is the §5 table shared with V71 (see
+/// [`p27_apply_word`]). Out-of-range addresses raise OPR ERR. Unlike V71
+/// the load is single-shot — no count — so a single mistyped slot does
+/// not stomp on neighbours.
+fn v72_single_address_update(state: &mut crate::AgcState) {
+    state.dsky.prog = P27_MAJOR_MODE;
+    state.dsky.verb = 72;
+    state.dsky.noun = 0;
+    state.dsky.flashing = true;
+    state.dsky.r = [0.0; 3];
+    state.vn.phase = VnPhase::P27SingleAddress { digits: 0, buf: 0 };
 }
 
 // ── V70 / V73 — uplink time updates ──────────────────────────────────────────
@@ -2923,6 +3063,96 @@ mod tests {
         feed_key(&mut state, Key::Entr);
         assert!(state.dsky.opr_err);
         assert_eq!(state.vn.phase, VnPhase::OprErr);
+    }
+
+    // ── MS-U4 — V72 single-address update ──────────────────────────────────
+
+    /// TC-VND-U4-1: V72 ENTR <addr> ENTR <±value> ENTR updates one slot
+    /// and returns to Idle.
+    #[test]
+    fn tc_vnd_u4_1_v72_single_slot_update() {
+        let mut state = AgcState::new();
+        // Pre-load all axes so the test can prove only one was touched.
+        state.gyro_comp.nbdx = 0.111;
+        state.gyro_comp.nbdy = 0.222;
+        state.gyro_comp.nbdz = 0.333;
+
+        // V72 ENTR 23 ENTR -456 ENTR  (gyro_comp.nbdx ← -0.456 meru)
+        feed(&mut state, &[Key::Verb, d(7), d(2), Key::Entr]);
+        assert!(matches!(state.vn.phase, VnPhase::P27SingleAddress { .. }));
+
+        feed_number(&mut state, 23);
+        feed_key(&mut state, Key::Entr);
+        assert!(matches!(state.vn.phase, VnPhase::P27SingleData { address: 23, .. }));
+
+        feed_key(&mut state, Key::Minus);
+        feed_number(&mut state, 456);
+        feed_key(&mut state, Key::Entr);
+
+        assert_eq!(state.vn.phase, VnPhase::Idle);
+        assert!((state.gyro_comp.nbdx + 0.456).abs() < 1e-9);
+        // Neighbours untouched.
+        assert!((state.gyro_comp.nbdy - 0.222).abs() < 1e-9);
+        assert!((state.gyro_comp.nbdz - 0.333).abs() < 1e-9);
+    }
+
+    /// TC-VND-U4-2: V72 on a bad address raises OPR ERR.
+    #[test]
+    fn tc_vnd_u4_2_v72_bad_address_opr_err() {
+        let mut state = AgcState::new();
+        feed(&mut state, &[Key::Verb, d(7), d(2), Key::Entr]);
+        feed_number(&mut state, 31); // > P27_MAX_ADDRESS
+        feed_key(&mut state, Key::Entr);
+        assert!(state.dsky.opr_err);
+        assert_eq!(state.vn.phase, VnPhase::OprErr);
+    }
+
+    /// TC-VND-U4-3: V72 with no preceding sign defaults to positive.
+    #[test]
+    fn tc_vnd_u4_3_v72_default_sign_positive() {
+        let mut state = AgcState::new();
+        feed(&mut state, &[Key::Verb, d(7), d(2), Key::Entr]);
+        feed_number(&mut state, 1);
+        feed_key(&mut state, Key::Entr);
+        feed_number(&mut state, 1234); // no sign keystroke
+        feed_key(&mut state, Key::Entr);
+        assert_eq!(state.csm_state.position[0], 1_234_000.0);
+    }
+
+    /// TC-VND-U4-4: scripted V72 update matches a direct feed_key drive.
+    #[test]
+    fn tc_vnd_u4_4_scripted_v72_matches_direct() {
+        use crate::services::uplink::poll_uplink;
+        use std::collections::VecDeque;
+
+        struct VecUplink(VecDeque<u16>);
+        impl crate::hal::Uplink for VecUplink {
+            fn read_word(&mut self) -> Option<u16> {
+                self.0.pop_front()
+            }
+        }
+
+        // Direct drive.
+        let mut state_ref = AgcState::new();
+        feed(&mut state_ref, &[Key::Verb, d(7), d(2), Key::Entr]);
+        feed_number(&mut state_ref, 13);
+        feed_key(&mut state_ref, Key::Entr);
+        feed_key(&mut state_ref, Key::Plus);
+        feed_number(&mut state_ref, 12_345);
+        feed_key(&mut state_ref, Key::Entr);
+
+        // Scripted via uplink word codes.
+        let mut state_uplink = AgcState::new();
+        let words: Vec<u16> = vec![
+            17, 7, 2, 28, // V 7 2 E
+            1, 3, 28, // 1 3 E
+            26, 1, 2, 3, 4, 5, 28, // + 1 2 3 4 5 E
+        ];
+        let mut uplink = VecUplink(words.into_iter().collect());
+        poll_uplink(&mut state_uplink, &mut uplink);
+
+        assert_eq!(state_uplink.gha_epoch_rad, state_ref.gha_epoch_rad);
+        assert_eq!(state_uplink.vn.phase, VnPhase::Idle);
     }
 
     /// TC-VND-U2-5: scripted V70 uplink (via poll_uplink) produces the
