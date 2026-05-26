@@ -170,9 +170,9 @@ mod tests {
         let v = libm::sqrt(MU_EARTH / r);
         state.csm_state.position = [r, 0.0, 0.0];
         state.csm_state.velocity = [0.0, v, 0.0];
-        state.csm_state.epoch = Met(1_000_00); // 1000 s in centiseconds
+        state.csm_state.epoch = Met(100_000); // 1000 s in centiseconds
         state.gha_epoch_rad = 0.0;
-        state.time = Met(1_000_00);
+        state.time = Met(100_000);
     }
 
     /// TC-P29-INIT-1: `p29_init` sets the major mode, the DSKY display
