@@ -222,6 +222,14 @@ pub struct AgcState {
     /// NOT reset by FRESH START (uplink value survives restarts).
     pub gha_epoch_rad: f64,
 
+    /// Time of vehicle lift-off, in MET centiseconds.
+    ///
+    /// Loaded by ground via V70 (liftoff time update). Persists across
+    /// FRESH START so the value survives transient restarts the same way
+    /// `gha_epoch_rad` does. Displayed via V06 N17.
+    /// AGC source: Comanche055/PINBALL_NOUN_TABLES.agc (V70 dispatch).
+    pub liftoff_time: Met,
+
     // ── Entry guidance ───────────────────────────────────────────────────────
     /// Atmospheric entry state machine and stub guidance fields.
     ///
@@ -363,6 +371,7 @@ impl AgcState {
                 tracking_active: false,
             },
             gha_epoch_rad: 0.0,
+            liftoff_time: Met(0),
             entry: EntryState::new(),
             vn: VnState::new(),
             tpi_arrival_epoch: None,

@@ -263,6 +263,65 @@ impl DapPump {
     }
 }
 
+// ── T4Pump (T4RUPT, ~120 ms cadence) ─────────────────────────────────────────
+
+/// Pumps the T4RUPT handler at its 120 ms cadence (mirrors the
+/// bare-metal `T4_PENDING` branch of `executive::scheduler::Executive::run`).
+///
+/// Today the handler drains the uplink FIFO into the V/N processor; later
+/// milestones will fold in the DSKY frame emit and downlink list output.
+/// On the real hardware TIM3 fires every `T4RUPT_PERIOD_CS` centiseconds;
+/// in the sim there are no interrupts, so this pump tracks an internal
+/// countdown in mission-time centiseconds and invokes
+/// [`agc_core::services::t4rupt::t4rupt_step`] whenever it expires.
+///
+/// **Usage:** call [`T4Pump::tick`] every render-loop iteration. The pump
+/// is safe to call before the waitlist pump because `t4rupt_step` only
+/// touches HAL FIFOs and V/N state, neither of which interferes with
+/// scheduled tasks.
+pub struct T4Pump {
+    last_tick_met: Option<Met>,
+    /// Centiseconds until the next `t4rupt_step` invocation.
+    remaining_cs: i32,
+}
+
+impl Default for T4Pump {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl T4Pump {
+    pub const fn new() -> Self {
+        Self {
+            last_tick_met: None,
+            remaining_cs: 0,
+        }
+    }
+
+    /// Advance the pump by one render-loop iteration.
+    pub fn tick(&mut self, state: &mut AgcState, hw: &mut SimHardware) {
+        use agc_core::control::imu_control::T4RUPT_PERIOD_CS;
+        use agc_core::services::t4rupt::t4rupt_step;
+
+        let now = state.time;
+        let prev = self.last_tick_met.unwrap_or(now);
+        let elapsed_cs = now.0.wrapping_sub(prev.0) as i32;
+        self.last_tick_met = Some(now);
+
+        self.remaining_cs = self.remaining_cs.saturating_sub(elapsed_cs);
+
+        // Catch up across slow frames, preserving any overshoot so the
+        // average cadence stays honest.
+        while self.remaining_cs <= 0 {
+            t4rupt_step(state, hw);
+            self.remaining_cs = self
+                .remaining_cs
+                .saturating_add(T4RUPT_PERIOD_CS as i32);
+        }
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -457,6 +516,40 @@ mod tests {
             "TIG ignition must promote DAP to Tvc mode"
         );
         assert!(!state.burn.armed, "TIG ignition must clear burn.armed");
+    }
+
+    /// TC-T4-PUMP-1: T4Pump fires t4rupt_step at the T4RUPT cadence and
+    /// the resulting uplink drain reaches the V/N state machine.
+    #[test]
+    fn tc_t4_pump_1_uplink_drained_at_cadence() {
+        use agc_core::control::imu_control::T4RUPT_PERIOD_CS;
+        use agc_core::services::v_n::{Key, VnPhase};
+
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        let mut t4 = T4Pump::new();
+
+        state.time = Met(0);
+        // Queue VERB-71-ENTR on the uplink FIFO via the canonical key codes.
+        hw.uplink.push_key(Key::Verb);
+        hw.uplink.push_key(Key::Digit(7));
+        hw.uplink.push_key(Key::Digit(1));
+        hw.uplink.push_key(Key::Entr);
+
+        // First tick at MET=0 fires the initial t4rupt_step (remaining = 0).
+        t4.tick(&mut state, &mut hw);
+
+        assert!(
+            matches!(state.vn.phase, VnPhase::P27Address { .. }),
+            "T4Pump must drain uplink → V/N; phase = {:?}",
+            state.vn.phase
+        );
+
+        // No further work — advance past one full T4 period; nothing must
+        // change because the FIFO is empty.
+        state.time = Met(T4RUPT_PERIOD_CS as u32);
+        t4.tick(&mut state, &mut hw);
+        assert!(matches!(state.vn.phase, VnPhase::P27Address { .. }));
     }
 
     /// TC-DAP-PUMP-2: pump is a no-op while mode == Off and does not

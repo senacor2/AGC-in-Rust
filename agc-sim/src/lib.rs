@@ -9,5 +9,7 @@ pub mod hardware;
 pub mod physics;
 pub mod runtime;
 pub mod scenario;
+pub mod uplink;
 
 pub use hardware::SimHardware;
+pub use uplink::ScriptedUplink;

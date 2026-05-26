@@ -21,3 +21,8 @@ pub const OPTICS_MARK_REJECTED: u16 = 0o220;
 pub const NAV_NO_CONVERGE: u16 = 0o401;
 /// Invalid orbit (sub-parabolic or degenerate conic).
 pub const INVALID_ORBIT: u16 = 0o404;
+/// Uplink too fast — ground sent another keystroke while the V/N
+/// processor was still in `OprErr` (or, on hardware, the UPRUPT FIFO
+/// overran). Mission Control is expected to send RSET before retrying.
+/// AGC convention: octal 1106.
+pub const UPLINK_TOO_FAST: u16 = 0o1106;
