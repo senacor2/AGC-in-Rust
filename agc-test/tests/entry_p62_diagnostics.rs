@@ -207,6 +207,23 @@ struct ParkedSnapshot {
     loadstat: Option<ReadVal>,
     /// `FAILREG ERASE +2` — 3 consecutive words at FAILREG..FAILREG+2.
     failreg: Vec<Option<ReadVal>>,
+    /// Phase-table cells (`PHASE1`..`PHASE6`).
+    phases: Vec<Option<ReadVal>>,
+    /// Complement-of-phase cells (`-PHASE1`..`-PHASE6`).
+    neg_phases: Vec<Option<ReadVal>>,
+    /// Per-phase-pair `PHASE XOR -PHASE` result, formatted as octal.
+    /// AGC restart-check at `FRESH_START_AND_RESTART.agc:419-429`
+    /// requires this to be `0o77777` (all-ones, ones-complement -0).
+    /// Anything else triggers alarm `0o01107` (PHASE TABLE FAILURE)
+    /// and a fresh start.
+    phase_xor: Vec<String>,
+    /// Other scheduler cells worth eyeballing.
+    newjob: Option<ReadVal>,
+    extvbact: Option<ReadVal>,
+    flagwrd4: Option<ReadVal>,
+    flagwrd5: Option<ReadVal>,
+    flagwrd6: Option<ReadVal>,
+    flagwrd7: Option<ReadVal>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -287,6 +304,10 @@ struct HypothesisOutcome {
     /// (`0o01107`). Documents a SEPARATE preload-validity bug surfaced
     /// during the experiment.
     failreg_holds_01107: bool,
+    /// `true` if all six phase pairs satisfy the complement invariant
+    /// (`-PHASEi XOR PHASEi == 0o77777`). Required for the restart
+    /// check at `FRESH_START_AND_RESTART.agc:419-429` to pass.
+    a_phase_table_complement_ok: bool,
 }
 
 // ── Stderr capture thread ───────────────────────────────────────────────────
@@ -421,6 +442,27 @@ fn build_snapshot(
         .as_ref()
         .map(|r| decode_dotinc(r.decimal).to_string())
         .unwrap_or_else(|| "n/a".to_string());
+
+    // Phase table: 6 pairs of (-PHASEn, PHASEn) at consecutive
+    // addresses. -PHASEn XOR PHASEn must equal 0o77777 (-0) for the
+    // restart-check at FRESH_START_AND_RESTART.agc:419-429 to pass.
+    let mut phases = Vec::with_capacity(6);
+    let mut neg_phases = Vec::with_capacity(6);
+    let mut phase_xor = Vec::with_capacity(6);
+    for i in 1..=6u8 {
+        let pname = format!("PHASE{}", i);
+        let nname = format!("-PHASE{}", i);
+        let p = ReadVal::read(core, symtab, &pname);
+        let n = ReadVal::read(core, symtab, &nname);
+        let x = match (p.as_ref(), n.as_ref()) {
+            (Some(pv), Some(nv)) => format!("0o{:05o}", pv.decimal ^ nv.decimal),
+            _ => "n/a".to_string(),
+        };
+        phases.push(p);
+        neg_phases.push(n);
+        phase_xor.push(x);
+    }
+
     ParkedSnapshot {
         dumps_seen,
         settle_wait_ms,
@@ -435,6 +477,15 @@ fn build_snapshot(
         reqret: ReadVal::read(core, symtab, "REQRET"),
         loadstat: ReadVal::read(core, symtab, "LOADSTAT"),
         failreg,
+        phases,
+        neg_phases,
+        phase_xor,
+        newjob: ReadVal::read(core, symtab, "NEWJOB"),
+        extvbact: ReadVal::read(core, symtab, "EXTVBACT"),
+        flagwrd4: ReadVal::read(core, symtab, "FLAGWRD4"),
+        flagwrd5: ReadVal::read(core, symtab, "FLAGWRD5"),
+        flagwrd6: ReadVal::read(core, symtab, "FLAGWRD6"),
+        flagwrd7: ReadVal::read(core, symtab, "FLAGWRD7"),
     }
 }
 
@@ -677,6 +728,12 @@ fn tc_e7i_a_parked_state_snapshot() {
         .chain(snapshot_b.failreg.iter())
         .flatten()
         .any(|r| r.decimal == 0o01107);
+    // Phase-table invariant: every pair must XOR to 0o77777.
+    let a_phase_table_complement_ok = !snapshot_a.phase_xor.is_empty()
+        && snapshot_a
+            .phase_xor
+            .iter()
+            .all(|s| s == "0o77777");
 
     let record = ExperimentARecord {
         schema_version: 1,
@@ -703,6 +760,7 @@ fn tc_e7i_a_parked_state_snapshot() {
             v33_did_not_advance,
             stderr_01501_seen,
             failreg_holds_01107,
+            a_phase_table_complement_ok,
         },
     };
 
@@ -752,12 +810,18 @@ fn tc_e7i_a_parked_state_snapshot() {
     );
     eprintln!(
         "[ms-e7i-a] snapshot B post-V33: MODREG={} VERBREG={} \
-         v33_did_not_advance={} stderr_01501={} failreg_holds_01107={}",
+         v33_did_not_advance={} stderr_01501={} failreg_holds_01107={} \
+         phase_table_ok={}",
         record.hypothesis.b_modreg_octal,
         record.hypothesis.b_verbreg_octal,
         record.hypothesis.v33_did_not_advance,
         record.hypothesis.stderr_01501_seen,
         record.hypothesis.failreg_holds_01107,
+        record.hypothesis.a_phase_table_complement_ok,
+    );
+    eprintln!(
+        "[ms-e7i-a] phase_xor (must all be 0o77777): {:?}",
+        record.snapshot_a_pre_v33.phase_xor
     );
     if let Some(d) = &record.snapshot_a_pre_v33.dotinc_entret {
         eprintln!(
