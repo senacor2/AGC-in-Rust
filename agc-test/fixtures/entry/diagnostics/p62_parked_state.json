@@ -1,0 +1,192 @@
+{
+  "schema_version": 1,
+  "description": "MS-E7i Experiment A — snapshot of AGC erasable state after V37 ENTR 62 ENTR and again after V33 ENTR. Captured against VirtualAGC at /Users/Juergen.Schiewe/virtualagc.",
+  "snapshot_a_pre_v33": {
+    "dumps_seen": 2,
+    "settle_wait_ms": 786,
+    "settled_in_p62": true,
+    "modreg": {
+      "bank": 2,
+      "offset": 9,
+      "octal": "0o00076",
+      "decimal": 62
+    },
+    "verbreg": {
+      "bank": 2,
+      "offset": 1,
+      "octal": "0o00045",
+      "decimal": 37
+    },
+    "nounreg": {
+      "bank": 2,
+      "offset": 2,
+      "octal": "0o00000",
+      "decimal": 0
+    },
+    "mmnumber": {
+      "bank": 1,
+      "offset": 253,
+      "octal": "0o00076",
+      "decimal": 62
+    },
+    "dotinc_entret": {
+      "bank": 0,
+      "offset": 94,
+      "octal": "0o04216",
+      "decimal": 2190
+    },
+    "dotinc_decoded": "TC NVSUBEND (POODOO path — DSPALARM falls to TC POODOO; OCT 01501)",
+    "cadrstor": {
+      "bank": 2,
+      "offset": 34,
+      "octal": "0o21523",
+      "decimal": 9043
+    },
+    "reqret": {
+      "bank": 2,
+      "offset": 11,
+      "octal": "0o74346",
+      "decimal": 30950
+    },
+    "loadstat": {
+      "bank": 2,
+      "offset": 12,
+      "octal": "0o00000",
+      "decimal": 0
+    },
+    "failreg": [
+      {
+        "bank": 0,
+        "offset": 253,
+        "octal": "0o01107",
+        "decimal": 583
+      },
+      {
+        "bank": 0,
+        "offset": 254,
+        "octal": "0o01204",
+        "decimal": 644
+      },
+      {
+        "bank": 0,
+        "offset": 255,
+        "octal": "0o00000",
+        "decimal": 0
+      }
+    ]
+  },
+  "snapshot_b_post_v33": {
+    "dumps_seen": 3,
+    "settle_wait_ms": null,
+    "settled_in_p62": true,
+    "modreg": {
+      "bank": 2,
+      "offset": 9,
+      "octal": "0o00076",
+      "decimal": 62
+    },
+    "verbreg": {
+      "bank": 2,
+      "offset": 1,
+      "octal": "0o00045",
+      "decimal": 37
+    },
+    "nounreg": {
+      "bank": 2,
+      "offset": 2,
+      "octal": "0o00000",
+      "decimal": 0
+    },
+    "mmnumber": {
+      "bank": 1,
+      "offset": 253,
+      "octal": "0o00076",
+      "decimal": 62
+    },
+    "dotinc_entret": {
+      "bank": 0,
+      "offset": 94,
+      "octal": "0o04216",
+      "decimal": 2190
+    },
+    "dotinc_decoded": "TC NVSUBEND (POODOO path — DSPALARM falls to TC POODOO; OCT 01501)",
+    "cadrstor": {
+      "bank": 2,
+      "offset": 34,
+      "octal": "0o21523",
+      "decimal": 9043
+    },
+    "reqret": {
+      "bank": 2,
+      "offset": 11,
+      "octal": "0o74346",
+      "decimal": 30950
+    },
+    "loadstat": {
+      "bank": 2,
+      "offset": 12,
+      "octal": "0o00000",
+      "decimal": 0
+    },
+    "failreg": [
+      {
+        "bank": 0,
+        "offset": 253,
+        "octal": "0o01107",
+        "decimal": 583
+      },
+      {
+        "bank": 0,
+        "offset": 254,
+        "octal": "0o01204",
+        "decimal": 644
+      },
+      {
+        "bank": 0,
+        "offset": 255,
+        "octal": "0o00000",
+        "decimal": 0
+      }
+    ]
+  },
+  "stderr_full": {
+    "total_lines": 0,
+    "matched_01501": [],
+    "matched_poodoo": [],
+    "matched_alarm": [],
+    "matched_restart": []
+  },
+  "channels": {
+    "chan_010": 100,
+    "chan_011": 47,
+    "chan_013": 164,
+    "last_chan_011_octal": "0o00040",
+    "last_chan_013_octal": "0o00100"
+  },
+  "addr_endofjob": {
+    "bank": 2,
+    "offset": 655,
+    "listing": "02,1217"
+  },
+  "addr_nvsubend": {
+    "bank": 2,
+    "offset": 142,
+    "listing": "02,0216"
+  },
+  "addr_poodoo": {
+    "bank": 2,
+    "offset": 977,
+    "listing": "02,1721"
+  },
+  "hypothesis": {
+    "a_modreg_p62": true,
+    "a_cadrstor_nonzero": true,
+    "a_nounreg_zero": true,
+    "a_entret_is_tc_nvsubend": true,
+    "b_modreg_octal": "0o00076",
+    "b_verbreg_octal": "0o00045",
+    "v33_did_not_advance": true,
+    "stderr_01501_seen": false,
+    "failreg_holds_01107": true
+  }
+}
