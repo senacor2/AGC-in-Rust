@@ -54,12 +54,12 @@ fn main() {
         work_dir: work.clone(),
         mode: RunMode::WallClockDump {
             dump_every_s: 1,
-            wall_seconds: 1.5,
+            wall_seconds: 3.0,
         },
         timeout: Duration::from_secs(15),
     };
 
-    eprintln!("Cold-booting yaAGC for 1.5 s …");
+    eprintln!("Cold-booting yaAGC for 3.0 s …");
     let result = run
         .execute()
         .unwrap_or_else(|e| die(&format!("yaAGC cold-boot failed: {e}")));
