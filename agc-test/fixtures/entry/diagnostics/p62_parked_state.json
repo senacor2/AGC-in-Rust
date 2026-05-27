@@ -3,7 +3,7 @@
   "description": "MS-E7i Experiment A — snapshot of AGC erasable state after V37 ENTR 62 ENTR and again after V33 ENTR. Captured against VirtualAGC at /Users/Juergen.Schiewe/virtualagc.",
   "snapshot_a_pre_v33": {
     "dumps_seen": 2,
-    "settle_wait_ms": 786,
+    "settle_wait_ms": 613,
     "settled_in_p62": true,
     "modreg": {
       "bank": 2,
@@ -73,7 +73,127 @@
         "octal": "0o00000",
         "decimal": 0
       }
-    ]
+    ],
+    "phases": [
+      {
+        "bank": 1,
+        "offset": 235,
+        "octal": "0o00000",
+        "decimal": 0
+      },
+      {
+        "bank": 1,
+        "offset": 237,
+        "octal": "0o00000",
+        "decimal": 0
+      },
+      {
+        "bank": 1,
+        "offset": 239,
+        "octal": "0o00000",
+        "decimal": 0
+      },
+      {
+        "bank": 1,
+        "offset": 241,
+        "octal": "0o00001",
+        "decimal": 1
+      },
+      {
+        "bank": 1,
+        "offset": 243,
+        "octal": "0o00000",
+        "decimal": 0
+      },
+      {
+        "bank": 1,
+        "offset": 245,
+        "octal": "0o00000",
+        "decimal": 0
+      }
+    ],
+    "neg_phases": [
+      {
+        "bank": 1,
+        "offset": 234,
+        "octal": "0o77777",
+        "decimal": 32767
+      },
+      {
+        "bank": 1,
+        "offset": 236,
+        "octal": "0o77777",
+        "decimal": 32767
+      },
+      {
+        "bank": 1,
+        "offset": 238,
+        "octal": "0o77777",
+        "decimal": 32767
+      },
+      {
+        "bank": 1,
+        "offset": 240,
+        "octal": "0o77776",
+        "decimal": 32766
+      },
+      {
+        "bank": 1,
+        "offset": 242,
+        "octal": "0o77777",
+        "decimal": 32767
+      },
+      {
+        "bank": 1,
+        "offset": 244,
+        "octal": "0o77777",
+        "decimal": 32767
+      }
+    ],
+    "phase_xor": [
+      "0o77777",
+      "0o77777",
+      "0o77777",
+      "0o77777",
+      "0o77777",
+      "0o77777"
+    ],
+    "newjob": {
+      "bank": 0,
+      "offset": 55,
+      "octal": "0o77777",
+      "decimal": 32767
+    },
+    "extvbact": {
+      "bank": 2,
+      "offset": 36,
+      "octal": "0o00000",
+      "decimal": 0
+    },
+    "flagwrd4": {
+      "bank": 0,
+      "offset": 64,
+      "octal": "0o10000",
+      "decimal": 4096
+    },
+    "flagwrd5": {
+      "bank": 0,
+      "offset": 65,
+      "octal": "0o40200",
+      "decimal": 16512
+    },
+    "flagwrd6": {
+      "bank": 0,
+      "offset": 66,
+      "octal": "0o00000",
+      "decimal": 0
+    },
+    "flagwrd7": {
+      "bank": 0,
+      "offset": 67,
+      "octal": "0o00000",
+      "decimal": 0
+    }
   },
   "snapshot_b_post_v33": {
     "dumps_seen": 3,
@@ -147,7 +267,127 @@
         "octal": "0o00000",
         "decimal": 0
       }
-    ]
+    ],
+    "phases": [
+      {
+        "bank": 1,
+        "offset": 235,
+        "octal": "0o00000",
+        "decimal": 0
+      },
+      {
+        "bank": 1,
+        "offset": 237,
+        "octal": "0o00000",
+        "decimal": 0
+      },
+      {
+        "bank": 1,
+        "offset": 239,
+        "octal": "0o00000",
+        "decimal": 0
+      },
+      {
+        "bank": 1,
+        "offset": 241,
+        "octal": "0o00001",
+        "decimal": 1
+      },
+      {
+        "bank": 1,
+        "offset": 243,
+        "octal": "0o00000",
+        "decimal": 0
+      },
+      {
+        "bank": 1,
+        "offset": 245,
+        "octal": "0o00000",
+        "decimal": 0
+      }
+    ],
+    "neg_phases": [
+      {
+        "bank": 1,
+        "offset": 234,
+        "octal": "0o77777",
+        "decimal": 32767
+      },
+      {
+        "bank": 1,
+        "offset": 236,
+        "octal": "0o77777",
+        "decimal": 32767
+      },
+      {
+        "bank": 1,
+        "offset": 238,
+        "octal": "0o77777",
+        "decimal": 32767
+      },
+      {
+        "bank": 1,
+        "offset": 240,
+        "octal": "0o77776",
+        "decimal": 32766
+      },
+      {
+        "bank": 1,
+        "offset": 242,
+        "octal": "0o77777",
+        "decimal": 32767
+      },
+      {
+        "bank": 1,
+        "offset": 244,
+        "octal": "0o77777",
+        "decimal": 32767
+      }
+    ],
+    "phase_xor": [
+      "0o77777",
+      "0o77777",
+      "0o77777",
+      "0o77777",
+      "0o77777",
+      "0o77777"
+    ],
+    "newjob": {
+      "bank": 0,
+      "offset": 55,
+      "octal": "0o77777",
+      "decimal": 32767
+    },
+    "extvbact": {
+      "bank": 2,
+      "offset": 36,
+      "octal": "0o00000",
+      "decimal": 0
+    },
+    "flagwrd4": {
+      "bank": 0,
+      "offset": 64,
+      "octal": "0o10000",
+      "decimal": 4096
+    },
+    "flagwrd5": {
+      "bank": 0,
+      "offset": 65,
+      "octal": "0o40200",
+      "decimal": 16512
+    },
+    "flagwrd6": {
+      "bank": 0,
+      "offset": 66,
+      "octal": "0o00000",
+      "decimal": 0
+    },
+    "flagwrd7": {
+      "bank": 0,
+      "offset": 67,
+      "octal": "0o00000",
+      "decimal": 0
+    }
   },
   "stderr_full": {
     "total_lines": 0,
@@ -157,9 +397,9 @@
     "matched_restart": []
   },
   "channels": {
-    "chan_010": 100,
+    "chan_010": 92,
     "chan_011": 47,
-    "chan_013": 164,
+    "chan_013": 149,
     "last_chan_011_octal": "0o00040",
     "last_chan_013_octal": "0o00100"
   },
@@ -187,6 +427,7 @@
     "b_verbreg_octal": "0o00045",
     "v33_did_not_advance": true,
     "stderr_01501_seen": false,
-    "failreg_holds_01107": true
+    "failreg_holds_01107": true,
+    "a_phase_table_complement_ok": true
   }
 }
