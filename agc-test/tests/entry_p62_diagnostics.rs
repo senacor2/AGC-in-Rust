@@ -224,6 +224,39 @@ struct ParkedSnapshot {
     flagwrd5: Option<ReadVal>,
     flagwrd6: Option<ReadVal>,
     flagwrd7: Option<ReadVal>,
+
+    // POODOO-related cells. ALMCADR is a 2-word CADR holding the
+    // calling location of the most recent ALARM/POODOO; the listing
+    // line at that address pinpoints the failing call. Captured along
+    // with neighbours for context.
+    /// `ALMCADR` low word — call-site CADR. Saved at the top of POODOO
+    /// (`ALARM_AND_ABORT.agc:171-172`).
+    almcadr_lo: Option<ReadVal>,
+    /// `ALMCADR +1` — high word of the alarm CADR (rarely used).
+    almcadr_hi: Option<ReadVal>,
+    /// `ERCOUNT` — count of errors recorded since the last fresh start.
+    ercount: Option<ReadVal>,
+    /// `REDOCTR` — count of restarts seen by GOPROG.
+    redoctr: Option<ReadVal>,
+
+    // Timing / waitlist cells. A non-positive `DT` argument to WAITLIST
+    // trips POODOO 01204 (`WAITLIST.agc:156-157`). Watching these tells
+    // us whether the cold-boot template starts in a state where some
+    // P62 sub-routine would compute a bad DT.
+    time1: Option<ReadVal>,
+    time3: Option<ReadVal>,
+    time4: Option<ReadVal>,
+    tbase1: Option<ReadVal>,
+    s61dt: Option<ReadVal>,
+    posexit: Option<ReadVal>,
+
+    /// `FLAGWRD0` so we can decode `AVEGFLAG` (= flag-bit 29 decimal,
+    /// which lives in `FLAGWRD1` per the comment block at
+    /// `ERASABLE_ASSIGNMENTS.agc:488`).
+    flagwrd0: Option<ReadVal>,
+    flagwrd1: Option<ReadVal>,
+    flagwrd2: Option<ReadVal>,
+    flagwrd3: Option<ReadVal>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -486,7 +519,43 @@ fn build_snapshot(
         flagwrd5: ReadVal::read(core, symtab, "FLAGWRD5"),
         flagwrd6: ReadVal::read(core, symtab, "FLAGWRD6"),
         flagwrd7: ReadVal::read(core, symtab, "FLAGWRD7"),
+
+        almcadr_lo: ReadVal::read(core, symtab, "ALMCADR"),
+        almcadr_hi: read_offset(core, symtab, "ALMCADR", 1),
+        ercount: ReadVal::read(core, symtab, "ERCOUNT"),
+        redoctr: ReadVal::read(core, symtab, "REDOCTR"),
+
+        time1: ReadVal::read(core, symtab, "TIME1"),
+        time3: ReadVal::read(core, symtab, "TIME3"),
+        time4: ReadVal::read(core, symtab, "TIME4"),
+        tbase1: ReadVal::read(core, symtab, "TBASE1"),
+        s61dt: ReadVal::read(core, symtab, "S61DT"),
+        posexit: ReadVal::read(core, symtab, "POSEXIT"),
+
+        flagwrd0: ReadVal::read(core, symtab, "FLAGWRD0"),
+        flagwrd1: ReadVal::read(core, symtab, "FLAGWRD1"),
+        flagwrd2: ReadVal::read(core, symtab, "FLAGWRD2"),
+        flagwrd3: ReadVal::read(core, symtab, "FLAGWRD3"),
     }
+}
+
+/// Read the erasable word at `symbol + offset` words.
+fn read_offset(core: &CoreImage, symtab: &Symtab, symbol: &str, offset: u16) -> Option<ReadVal> {
+    let base = symtab.get(symbol)?;
+    let AgcAddress::Erasable { bank, offset: base_off } = base else {
+        return None;
+    };
+    let addr = AgcAddress::Erasable {
+        bank,
+        offset: base_off + offset,
+    };
+    let raw = core.read_sp(addr)?;
+    Some(ReadVal {
+        bank,
+        offset: base_off + offset,
+        octal: format!("0o{:05o}", raw),
+        decimal: raw,
+    })
 }
 
 /// Poll the dump file every 200 ms for up to `max_ms`, reloading on
@@ -829,4 +898,291 @@ fn tc_e7i_a_parked_state_snapshot() {
             d.octal, record.snapshot_a_pre_v33.dotinc_decoded
         );
     }
+}
+
+/// TC-E7I-B: control experiment for #45 — drive only `V37 ENTR 62 ENTR`,
+/// then wait several seconds with **no V33 keystroke at all**. Captures
+/// the AGC's parked-state FAILREG so we can tell whether the
+/// `0o01204` waitlist alarm seen in the V33 experiment is V33-triggered
+/// or background.
+///
+/// This is a transient experiment — kept only long enough to answer
+/// the question. Once the source of `01204` is pinned, it can be
+/// removed.
+#[test]
+fn tc_e7i_b_parked_state_no_v33() {
+    let template_path = template_core_path();
+    if !template_path.exists() {
+        eprintln!(
+            "skipping: no template core at {} \
+             (run `cargo run --features vagc-capture --bin capture_entry_template`)",
+            template_path.display()
+        );
+        return;
+    }
+    let root = vagc_root();
+    let yaagc = root.join("yaAGC/yaAGC");
+    let rope = root.join("Comanche055/MAIN.agc.bin");
+    let listing = root.join("Comanche055/MAIN.agc.lst");
+    if !yaagc.exists() || !rope.exists() || !listing.exists() {
+        eprintln!(
+            "skipping: VirtualAGC build incomplete at {}",
+            root.display()
+        );
+        return;
+    }
+
+    let mut core = CoreImage::load(&template_path)
+        .unwrap_or_else(|e| panic!("load template {}: {e}", template_path.display()));
+    let symtab = Symtab::load(&listing)
+        .unwrap_or_else(|e| panic!("load symtab {}: {e}", listing.display()));
+    let rust_state = setup_state_direct_leo();
+    let init = EntryInitialState {
+        position_m: rust_state.csm_state.position,
+        velocity_mps: rust_state.csm_state.velocity,
+        time_s: 0.0,
+        target_lat_rad: rust_state.entry.target_lat_rad,
+        target_lon_rad: rust_state.entry.target_lon_rad,
+        emsalt_m: 122_000.0,
+        alfa_pad_deg: -20.0,
+        lift_up: true,
+        refsmmat: EntryInitialState::identity_refsmmat(),
+        cmdapmod: -1,
+    };
+    patch_into(&mut core, &symtab, &init).expect("patch_into ok");
+
+    let work = std::env::temp_dir().join(format!("vagc_e7i_b_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).unwrap();
+    let core_in = work.join("core_in");
+    core.save(&core_in).unwrap();
+
+    let port = pick_port();
+    let mut child = std::process::Command::new(&yaagc)
+        .current_dir(&work)
+        .arg("--quiet")
+        .arg("--nodebug")
+        .arg("--inhibit-alarms")
+        .arg("--dump-time=1")
+        .arg(format!("--port={port}"))
+        .arg(&rope)
+        .arg(&core_in)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("yaAGC spawn");
+
+    let stderr = child.stderr.take().expect("piped stderr");
+    let _stderr_buf = spawn_stderr_capture(stderr);
+    std::thread::sleep(Duration::from_millis(300));
+
+    let mut dsky = DskyScript::new(connect_with_retry(port));
+    let mut listener = connect_with_retry(port + 1);
+    let mut obs = ChannelObs::default();
+    drain_channels(&mut listener, Duration::from_millis(500), &mut obs);
+
+    let dump_path = work.join("core");
+    let mtime_pre = current_mtime(&dump_path);
+    dsky.verb_major_mode(62).expect("V37 ENTR 62 ENTR");
+
+    // Wait for parked state, then sit for an extra 3 seconds (no V33)
+    // so background scheduler/T*RUPT activity has plenty of room to
+    // raise any waitlist alarms it's going to raise.
+    let (_core_parked, _dumps, settle_ms, settled) =
+        wait_for_p62_parked(&dump_path, &symtab, mtime_pre, 6_000);
+    drain_channels(&mut listener, Duration::from_millis(3_000), &mut obs);
+
+    let mtime_post = current_mtime(&dump_path);
+    let _ = wait_for_new_dump(
+        &dump_path,
+        mtime_post,
+        Instant::now() + Duration::from_secs(3),
+    );
+    let final_core = try_load_core(&dump_path);
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let snap = if let Some(c) = final_core {
+        build_snapshot(&c, &symtab, 0, Some(settle_ms), settled)
+    } else {
+        build_snapshot(&CoreImage::empty(), &symtab, 0, Some(settle_ms), settled)
+    };
+
+    let _ = std::fs::remove_dir_all(&work);
+
+    let failreg_01204 = snap
+        .failreg
+        .iter()
+        .flatten()
+        .any(|r| r.decimal == 0o01204);
+    let failreg_01107 = snap
+        .failreg
+        .iter()
+        .flatten()
+        .any(|r| r.decimal == 0o01107);
+    let failreg_str: Vec<String> = snap
+        .failreg
+        .iter()
+        .map(|opt| opt.as_ref().map(|r| r.octal.clone()).unwrap_or_default())
+        .collect();
+
+    eprintln!(
+        "[ms-e7i-b] no-V33 control: settled={} FAILREG={:?} \
+         holds_01204={} holds_01107={} ALMCADR_lo={:?}",
+        settled,
+        failreg_str,
+        failreg_01204,
+        failreg_01107,
+        snap.almcadr_lo.as_ref().map(|r| r.octal.clone()),
+    );
+}
+
+/// TC-E7I-C: warm-template control — boot yaAGC from the **unpatched**
+/// cold rope (no `core-in`, no `patch_into`), drive `V37 ENTR 01 ENTR`
+/// (PRELAUNCH OR SERVICE), wait for P01 idle, then `V37 ENTR 62 ENTR`,
+/// then `V33 ENTR`. Inspect the post-V33 state.
+///
+/// This is the empirical version of the analyst's "Option 2" (warm
+/// template). If `FAILREG[1] != 0o01204` and `MODREG` advances past
+/// `0o076` after V33, then driving through PRELAUNCH gives us the
+/// scheduler/timing state we need. That would shape the fix as a
+/// `capture_entry_template` change, not a `patch_into` change.
+#[test]
+fn tc_e7i_c_warm_template_no_preload() {
+    let root = vagc_root();
+    let yaagc = root.join("yaAGC/yaAGC");
+    let rope = root.join("Comanche055/MAIN.agc.bin");
+    let listing = root.join("Comanche055/MAIN.agc.lst");
+    if !yaagc.exists() || !rope.exists() || !listing.exists() {
+        eprintln!(
+            "skipping: VirtualAGC build incomplete at {}",
+            root.display()
+        );
+        return;
+    }
+    let symtab = Symtab::load(&listing)
+        .unwrap_or_else(|e| panic!("load symtab {}: {e}", listing.display()));
+
+    let work = std::env::temp_dir().join(format!("vagc_e7i_c_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).unwrap();
+
+    let port = pick_port();
+    let mut child = std::process::Command::new(&yaagc)
+        .current_dir(&work)
+        .arg("--quiet")
+        .arg("--nodebug")
+        .arg("--inhibit-alarms")
+        .arg("--dump-time=1")
+        .arg("--no-resume")
+        .arg(format!("--port={port}"))
+        .arg(&rope)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("yaAGC spawn");
+
+    let stderr = child.stderr.take().expect("piped stderr");
+    let _stderr_buf = spawn_stderr_capture(stderr);
+    std::thread::sleep(Duration::from_millis(500));
+
+    let mut dsky = DskyScript::new(connect_with_retry(port));
+    let mut listener = connect_with_retry(port + 1);
+    let mut obs = ChannelObs::default();
+    drain_channels(&mut listener, Duration::from_millis(800), &mut obs);
+
+    let dump_path = work.join("core");
+
+    // V37 ENTR 01 ENTR — PRELAUNCH OR SERVICE.
+    dsky.verb_major_mode(1).expect("V37 ENTR 01 ENTR");
+    drain_channels(&mut listener, Duration::from_millis(2_000), &mut obs);
+
+    // Sample MODREG to see if we landed in P01.
+    let mid_core = try_load_core(&dump_path);
+    let modreg_after_p01 = mid_core
+        .as_ref()
+        .and_then(|c| ReadVal::read(c, &symtab, "MODREG"))
+        .map(|r| r.octal.clone())
+        .unwrap_or_else(|| "n/a".to_string());
+
+    // V37 ENTR 62 ENTR — into P62.
+    dsky.verb_major_mode(62).expect("V37 ENTR 62 ENTR");
+    drain_channels(&mut listener, Duration::from_millis(2_000), &mut obs);
+
+    let mtime_after_v62 = current_mtime(&dump_path);
+    let (_core_parked, _dumps, settle_ms, settled) =
+        wait_for_p62_parked(&dump_path, &symtab, mtime_after_v62, 6_000);
+
+    let parked_snap = try_load_core(&dump_path)
+        .map(|c| build_snapshot(&c, &symtab, 0, Some(settle_ms), settled));
+
+    // V33 ENTR — the wake we care about.
+    let mtime_before_v33 = current_mtime(&dump_path);
+    dsky.proceed().expect("V33 ENTR send");
+    drain_channels(&mut listener, Duration::from_millis(2_000), &mut obs);
+    let _ = wait_for_new_dump(
+        &dump_path,
+        mtime_before_v33,
+        Instant::now() + Duration::from_secs(3),
+    );
+
+    let post_snap = try_load_core(&dump_path)
+        .map(|c| build_snapshot(&c, &symtab, 0, None, true));
+
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&work);
+
+    let post_failreg: Vec<String> = post_snap
+        .as_ref()
+        .map(|s| {
+            s.failreg
+                .iter()
+                .map(|opt| opt.as_ref().map(|r| r.octal.clone()).unwrap_or_default())
+                .collect()
+        })
+        .unwrap_or_default();
+    let post_modreg = post_snap
+        .as_ref()
+        .and_then(|s| s.modreg.as_ref())
+        .map(|r| r.octal.clone())
+        .unwrap_or_else(|| "n/a".to_string());
+    let post_verbreg = post_snap
+        .as_ref()
+        .and_then(|s| s.verbreg.as_ref())
+        .map(|r| r.octal.clone())
+        .unwrap_or_else(|| "n/a".to_string());
+    let post_almcadr_lo = post_snap
+        .as_ref()
+        .and_then(|s| s.almcadr_lo.as_ref())
+        .map(|r| r.octal.clone())
+        .unwrap_or_else(|| "n/a".to_string());
+
+    let parked_modreg = parked_snap
+        .as_ref()
+        .and_then(|s| s.modreg.as_ref())
+        .map(|r| r.octal.clone())
+        .unwrap_or_else(|| "n/a".to_string());
+    let parked_failreg: Vec<String> = parked_snap
+        .as_ref()
+        .map(|s| {
+            s.failreg
+                .iter()
+                .map(|opt| opt.as_ref().map(|r| r.octal.clone()).unwrap_or_default())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    eprintln!(
+        "[ms-e7i-c] post-P01 MODREG={} | parked-after-V62 MODREG={} FAILREG={:?} \
+         | post-V33 MODREG={} VERBREG={} FAILREG={:?} ALMCADR_lo={}",
+        modreg_after_p01,
+        parked_modreg,
+        parked_failreg,
+        post_modreg,
+        post_verbreg,
+        post_failreg,
+        post_almcadr_lo,
+    );
 }
