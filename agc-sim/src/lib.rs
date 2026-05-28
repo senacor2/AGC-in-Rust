@@ -12,4 +12,8 @@ pub mod scenario;
 pub mod uplink;
 
 pub use hardware::SimHardware;
+pub use scenario::{
+    run_scenario, DskyExpect, Event, LandmarkTable, Scenario, ScenarioBuilder, SeedStateSpec,
+    SimDuration,
+};
 pub use uplink::ScriptedUplink;

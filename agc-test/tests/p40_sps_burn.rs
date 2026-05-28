@@ -16,13 +16,12 @@
 //! pulses land in `SimImu::pipa` so the AGC's standard `read_pipa()`
 //! call returns them naturally — no test-side state patching.
 
-use agc_core::services::v_n::{feed_key, Key};
+use agc_core::services::v_n::Key;
 use agc_core::types::Met;
 use agc_core::AgcState;
-use agc_sim::runtime::{
-    pump_engine_to_hw, pump_pipa_into_state, pump_rcs_to_hw, DapPump, WaitlistPump,
-};
+use agc_sim::runtime::{pump_engine_to_hw, pump_pipa_into_state, DapPump, WaitlistPump};
 use agc_sim::SimHardware;
+use agc_sim::{run_scenario, DskyExpect, ScenarioBuilder};
 
 // ── Burn profile constants ────────────────────────────────────────────────────
 
@@ -49,77 +48,6 @@ const SEED_VELOCITY_Y_M_S: u32 = 7669;
 const TIG_HOURS: u32 = 0;
 const TIG_MINUTES: u32 = 5;
 const TIG_SECONDS_X100: u32 = 0;
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-fn d(n: u8) -> Key {
-    Key::Digit(n)
-}
-
-fn feed_keys(state: &mut AgcState, keys: &[Key]) {
-    for &k in keys {
-        feed_key(state, k);
-    }
-}
-
-/// Feed a non-negative integer as MSB-first decimal digit keypresses.
-fn feed_number(state: &mut AgcState, mut n: u32) {
-    if n == 0 {
-        feed_key(state, d(0));
-        return;
-    }
-    let mut digits = [0u8; 6];
-    let mut count = 0;
-    while n > 0 {
-        digits[count] = (n % 10) as u8;
-        n /= 10;
-        count += 1;
-    }
-    for i in (0..count).rev() {
-        feed_key(state, d(digits[i]));
-    }
-}
-
-/// Drive a `V25 Nxx + E + E + E` triple-register load with sign-prefixed
-/// integer values. Mirrors what a human types on the DSKY for any of
-/// the three-component load nouns (N81, ...).
-fn v25_load_three(state: &mut AgcState, noun_tens: u8, noun_units: u8, values: [u32; 3]) {
-    feed_keys(
-        state,
-        &[
-            Key::Verb,
-            d(2),
-            d(5),
-            Key::Noun,
-            d(noun_tens),
-            d(noun_units),
-            Key::Entr,
-        ],
-    );
-    for v in values {
-        feed_key(state, Key::Plus);
-        feed_number(state, v);
-        feed_key(state, Key::Entr);
-    }
-}
-
-/// Drive a `V71` P27 block-address state-vector update.
-///
-/// Sends the full Apollo-style sequence: V71 ENTR, address, count,
-/// then `count` signed data words. Each signed value is given as
-/// `(sign, magnitude)`; pass `+1` or `-1` for sign.
-fn v71_p27_block_update(state: &mut AgcState, address: u8, words: &[(i8, u32)]) {
-    feed_keys(state, &[Key::Verb, d(7), d(1), Key::Entr]);
-    feed_number(state, address as u32);
-    feed_key(state, Key::Entr);
-    feed_number(state, words.len() as u32);
-    feed_key(state, Key::Entr);
-    for &(sign, mag) in words {
-        feed_key(state, if sign < 0 { Key::Minus } else { Key::Plus });
-        feed_number(state, mag);
-        feed_key(state, Key::Entr);
-    }
-}
 
 // ── Test ─────────────────────────────────────────────────────────────────────
 
@@ -149,151 +77,181 @@ fn v71_p27_block_update(state: &mut AgcState, address: u8, words: &[(i8, u32)]) 
 fn it_v37_p40_fires_sps_for_about_15s() {
     let mut state = AgcState::new();
     let mut hw = SimHardware::new();
-    let mut waitlist_pump = WaitlistPump::new();
-    let mut dap_pump = DapPump::new();
 
-    // Mission clock at zero. The default `state.refsmmat` is identity, so
-    // platform = inertial — no REFSMMAT load needed for this demo.
-    state.time = Met(0);
+    // Precompute the TIG centiseconds used in assertions throughout the test.
+    let tig_cs = TIG_HOURS * 360_000 + TIG_MINUTES * 6_000 + TIG_SECONDS_X100;
 
-    // ── 1. V71 P27 block update — seed CSM state vector ──────────────────
-    // The real Apollo CMC received its state vector from Mission Control
-    // through the digital uplink, which is itself just a stream of V/N
-    // keystrokes processed by PINBALL — same code path the crew DSKY
-    // hits. V71 ("Start AGC update; block address" — Comanche055) opens
-    // a P27 multi-keystroke load that walks through a starting logical
-    // address, a word count, and `count` signed data words. The
-    // simulator-specific address table (see `p27_apply_word` in
-    // agc-core) maps:
+    // ── Phase 1a: seed state vector + select P30 + enter TIG ─────────────────
     //
-    //   address 1..3 → state.csm_state.position[0..3] (km on entry)
-    //   address 4..6 → state.csm_state.velocity[0..3] (m/s)
-    //
-    // Loading address 1, count 6, walks the whole state vector in one go.
-    v71_p27_block_update(
-        &mut state,
-        1,
-        &[
-            (1, SEED_POSITION_X_KM),  // pos[0] +6778 km
-            (1, 0),                   // pos[1]  +0
-            (1, 0),                   // pos[2]  +0
-            (1, 0),                   // vel[0]  +0
-            (1, SEED_VELOCITY_Y_M_S), // vel[1] +7669 m/s
-            (1, 0),                   // vel[2]  +0
-        ],
-    );
+    // Split before V25 N81 so we can assert `pending_tig` is Some
+    // before noun_81_commit_dv_lvlh consumes it via `.take()`.
+    let phase1a = ScenarioBuilder::new("p40_sps_burn/phase1a")
+        .comment("seed CSM state, select P30, enter TIG")
+        // ── 1. V71 P27 block update — seed CSM state vector ──────────────────
+        // address 1, count 6: pos[0..2] then vel[0..2]
+        .v71_p27_block_update(
+            1,
+            &[
+                (1, SEED_POSITION_X_KM),  // pos[0] +6778 km
+                (1, 0),                   // pos[1]  +0
+                (1, 0),                   // pos[2]  +0
+                (1, 0),                   // vel[0]  +0
+                (1, SEED_VELOCITY_Y_M_S), // vel[1] +7669 m/s
+                (1, 0),                   // vel[2]  +0
+            ],
+        )
+        // ── 2. V37 ENTR 30 ENTR — select P30 ────────────────────────────────
+        .keys(&[
+            Key::Verb,
+            Key::Digit(3),
+            Key::Digit(7),
+            Key::Entr,
+            Key::Digit(3),
+            Key::Digit(0),
+            Key::Entr,
+        ])
+        .expect_major_mode(30)
+        // ── 3. V25 N33 — load TIG = 0h 5m 0.00s ─────────────────────────────
+        // Bare digits (no sign prefix) for HMS: V25 handler initialises sign
+        // to +1 so a digit is accepted directly, matching the original test.
+        .keys(&[
+            Key::Verb,
+            Key::Digit(2),
+            Key::Digit(5),
+            Key::Noun,
+            Key::Digit(3),
+            Key::Digit(3),
+            Key::Entr,
+        ])
+        .digits(TIG_HOURS)
+        .enter()
+        .digits(TIG_MINUTES)
+        .enter()
+        .digits(TIG_SECONDS_X100)
+        .enter()
+        .build();
+
+    run_scenario(&phase1a, &mut state, &mut hw);
+
+    // Assertions that must happen before V25 N81 consumes pending_tig.
     assert_eq!(state.csm_state.position, [6_778_000.0, 0.0, 0.0]);
     assert_eq!(state.csm_state.velocity, [0.0, 7669.0, 0.0]);
-
-    // ── 2. V37 ENTR 30 ENTR — select P30 (verb-then-MM, not verb-noun) ──
-    feed_keys(
-        &mut state,
-        &[Key::Verb, d(3), d(7), Key::Entr, d(3), d(0), Key::Entr],
-    );
-    assert_eq!(state.major_mode, 30, "V37 ENTR 30 ENTR must select P30");
-
-    // ── 3. V25 N33 — load TIG = 0h 5m 0.00s (Met(30 000) cs) ─────────────
-    // Five minutes ahead of MET 0 leaves a wide margin for the operator's
-    // typing pace — the test code runs in microseconds so the margin is
-    // overkill here, but the keystroke sequence is identical to what the
-    // human-driven dsky_sim demonstration uses.
-    feed_keys(
-        &mut state,
-        &[Key::Verb, d(2), d(5), Key::Noun, d(3), d(3), Key::Entr],
-    );
-    feed_number(&mut state, TIG_HOURS);
-    feed_key(&mut state, Key::Entr);
-    feed_number(&mut state, TIG_MINUTES);
-    feed_key(&mut state, Key::Entr);
-    feed_number(&mut state, TIG_SECONDS_X100);
-    feed_key(&mut state, Key::Entr);
-    let tig_cs = TIG_HOURS * 360_000 + TIG_MINUTES * 6_000 + TIG_SECONDS_X100;
     assert_eq!(state.vn.pending_tig, Some(Met(tig_cs)));
 
-    // ── 4. V25 N81 — load LVLH ΔV [+21, 0, 0] (m/s) ───────────────────────
-    v25_load_three(&mut state, 8, 1, [TARGET_DV_MS, 0, 0]);
+    // ── Phase 1b: load ΔV ─────────────────────────────────────────────────────
+    //
+    // V25 N81 consumes pending_tig and stores pending_maneuver.
+    // Split again so we can check pending_maneuver.tig before P40 takes it.
+    let phase1b = ScenarioBuilder::new("p40_sps_burn/phase1b")
+        .comment("load LVLH delta-V via V25 N81")
+        // ── 4. V25 N81 — load LVLH ΔV [+21, 0, 0] (m/s) ────────────────────
+        .v25_load_three(81, [TARGET_DV_MS as i32, 0, 0])
+        .build();
 
+    run_scenario(&phase1b, &mut state, &mut hw);
+
+    // Verify TIG round-trips through P30 into the pending maneuver.
     let pending = state
         .pending_maneuver
         .expect("V25 N81 must produce a pending_maneuver");
     assert_eq!(pending.tig, Met(tig_cs), "TIG must round-trip through P30");
 
-    // ── 5. V37 ENTR 40 ENTR — select P40 ─────────────────────────────────
-    feed_keys(
-        &mut state,
-        &[Key::Verb, d(3), d(7), Key::Entr, d(4), d(0), Key::Entr],
-    );
-    assert_eq!(state.major_mode, 40, "V37 ENTR 40 ENTR must select P40");
+    // ── Phase 1c: select P40 and arm the burn via PRO ─────────────────────────
+    //
+    // P40 init consumes pending_maneuver (moves TIG + ΔV into BurnState)
+    // and requests V50 N99. PRO fires the V50 callback and sets burn.armed.
+    let phase1c = ScenarioBuilder::new("p40_sps_burn/phase1c")
+        .comment("select P40, acknowledge V50 N99 PRO to arm burn")
+        // ── 5. V37 ENTR 40 ENTR — select P40 ────────────────────────────────
+        .keys(&[
+            Key::Verb,
+            Key::Digit(3),
+            Key::Digit(7),
+            Key::Entr,
+            Key::Digit(4),
+            Key::Digit(0),
+            Key::Entr,
+        ])
+        .expect_major_mode(40)
+        .expect_dsky(DskyExpect {
+            verb: Some(50),
+            noun: Some(99),
+            flashing: Some(true),
+            r0: None,
+            r1: None,
+            r2: None,
+            tol_pct: 0.0,
+        })
+        // ── 6. PRO — arm SPS for ignition at TIG ─────────────────────────────
+        .pro()
+        .build();
+
+    run_scenario(&phase1c, &mut state, &mut hw);
+
+    // Verify post-PRO state before the burn loop.
     assert!(
         state.burn.burn_active,
         "P40 must transfer pending_maneuver into BurnState"
     );
     assert!(state.servicer_exit.is_some(), "P40 must install burn hook");
-    assert_eq!(state.dsky.verb, 50, "P40 must request V50 N99");
-    assert_eq!(state.dsky.noun, 99);
-    assert!(state.dsky.flashing);
     assert!(
         !state.engine_thrusting,
         "engine must remain cold until crew presses PRO"
     );
     assert!(
-        !state.burn.armed,
-        "burn must not be armed yet (V50 N99 still awaiting PRO)"
-    );
-
-    // Arm the soft-executive pumps. After ADR-022 the DAP runs on a
-    // dedicated T5RUPT path (mirrored in the sim by DapPump); the
-    // Waitlist still carries servicer_task.
-    dap_pump.tick(&mut state, &mut hw);
-    waitlist_pump.tick(&mut state, &mut hw);
-    pump_engine_to_hw(&state, &mut hw);
-    assert!(!hw.engine.thrusting, "SimHardware SPS must be cold pre-PRO");
-
-    // ── 6. PRO — arm SPS for ignition at TIG ──────────────────────────────
-    feed_key(&mut state, Key::Pro);
-    assert!(
         state.burn.armed,
         "PRO must arm the burn for TIG-gated ignition"
     );
     assert!(
-        !state.engine_thrusting,
-        "engine must NOT fire on PRO — must wait for state.time >= burn.tig"
+        !hw.engine.thrusting,
+        "SimHardware SPS must be cold after PRO, before TIG"
     );
 
-    // ── Soft-executive burn loop ──────────────────────────────────────────
-    // Drive the AGC the same way `dsky_sim`'s render loop does: tick the
-    // simulated physics, drain PIPA pulses, dispatch waitlist tasks,
-    // mirror engine + RCS staging fields back to the hardware. Tick
-    // the simulation in 10 cs (100 ms) slices — fine enough that the
-    // ignition gate, which checks `state.time >= burn.tig` on every
-    // dap_step, fires within one DAP cycle of crossing TIG.
-    const TICK_CS: u32 = 10;
-    const TICK_S: f64 = TICK_CS as f64 / 100.0;
-    let max_iters = 6_000; // 60 s of mission time — plenty for TIG=5m? No: see below.
+    // ── Phase 2: jump to TIG-1s, then run the burn loop to completion ────────
+    //
+    // 5-minute TIG = 30_000 cs; walking at 10 cs/tick would take 3_000 ticks.
+    // Skip the wait by jumping mission time to TIG-1s in a single shot — the
+    // pumps catch up by dispatching every backlogged SERVICER cycle in one
+    // tick (dap_step is a no-op while engine is off and DAP is in Maneuver
+    // mode, so the catch-up is cheap and correct).
+    //
+    // Synchronise csm_state.epoch to state.time so the SERVICER's epoch-
+    // based catch-up (state.time = new_sv.epoch after each servicer_task
+    // call) lands near TIG at the end, not near MET=0.  The scenario
+    // runner ticks time forward with each KeyPress; the state vector epoch
+    // is not updated until the SERVICER actually runs, leaving it at its
+    // initial value and causing a large epoch mismatch if not corrected here.
+    state.csm_state.epoch = state.time;
 
-    // 5-minute TIG with a 10 cs tick = 30_000 iterations to reach TIG.
-    // The Apollo-faithful demo TIG is convenient for human typing on
-    // dsky_sim but expensive to walk through on a 10 cs tick. Skip the
-    // wait by jumping mission time to TIG-1s in a single shot — the
-    // pump catches up by dispatching every backlogged dap_step in one
-    // tick (dap_step is a no-op while engine is off and DAP is in
-    // Maneuver mode, so the catch-up is cheap and correct).
+    let mut waitlist_pump = WaitlistPump::new();
+    let mut dap_pump = DapPump::new();
+
+    // Jump to TIG-1s. Pass the current state.time to the pumps first so
+    // they know their reference point, then the second pair of calls after
+    // the jump computes the large elapsed gap and drives SERVICER catchup.
+    dap_pump.tick(&mut state, &mut hw);
+    waitlist_pump.tick(&mut state, &mut hw);
+
     state.time = Met(tig_cs.saturating_sub(100));
     hw.timers.set_time(state.time.0);
     dap_pump.tick(&mut state, &mut hw);
     waitlist_pump.tick(&mut state, &mut hw);
 
-    // We are now within 1 s of TIG. Confirm the engine is still cold
-    // (ignition gate must not fire while time < tig).
+    // Engine must still be cold — TIG not yet reached.
     assert!(
         !state.engine_thrusting,
         "ignition gate must hold engine off while state.time < burn.tig"
     );
     assert!(state.burn.armed, "armed must persist until TIG");
 
-    // Walk the remaining 1 s (and the burn) at 100 ms granularity.
+    // Walk the remaining 1 s (and the full burn) at 100 ms granularity.
+    const TICK_CS: u32 = 10;
+    const TICK_S: f64 = TICK_CS as f64 / 100.0;
+    let max_iters = 6_000; // 60 s of mission time
+
     let mut iters = 0u32;
     let mut ignition_iter: Option<u32> = None;
+
     while state.burn.burn_active && iters < max_iters {
         state.time = Met(state.time.0 + TICK_CS);
         hw.timers.set_time(state.time.0);
@@ -302,7 +260,7 @@ fn it_v37_p40_fires_sps_for_about_15s() {
         dap_pump.tick(&mut state, &mut hw);
         waitlist_pump.tick(&mut state, &mut hw);
         pump_engine_to_hw(&state, &mut hw);
-        pump_rcs_to_hw(&mut state, &mut hw);
+        agc_sim::runtime::pump_rcs_to_hw(&mut state, &mut hw);
 
         if state.engine_thrusting && ignition_iter.is_none() {
             ignition_iter = Some(iters);
@@ -310,20 +268,16 @@ fn it_v37_p40_fires_sps_for_about_15s() {
         iters += 1;
     }
 
-    // ── Assertions on ignition timing ─────────────────────────────────────
+    // ── Assertions on ignition timing ─────────────────────────────────────────
     let ignition_iter = ignition_iter.expect("engine must ignite at some point during the loop");
-    // Ignition must occur within a couple of dap_step cycles of TIG. We
-    // jumped to TIG-1 s above and walk at 10 cs, so ignition lands
-    // within ≈ 100 iterations.
+    // Ignition must occur within a couple of dap_step cycles of TIG. We jumped
+    // to TIG-1 s above and walk at 10 cs, so ignition lands within ≈ 100 iters.
     assert!(
         ignition_iter <= 110,
         "ignition must fire within a few DAP cycles of TIG; fired at iter {ignition_iter}"
     );
 
-    // ── Assertions on burn duration ───────────────────────────────────────
-    // Total iterations after TIG = (iters - ignition_iter). Each iter is
-    // 100 ms, so multiply by TICK_S. Burn time should be ~14 s (7 SERVICER
-    // cycles × 2 s) within tolerance.
+    // ── Assertions on burn duration ───────────────────────────────────────────
     let post_ignition_iters = iters - ignition_iter;
     let burn_duration_s = post_ignition_iters as f64 * TICK_S;
     assert!(
@@ -331,7 +285,13 @@ fn it_v37_p40_fires_sps_for_about_15s() {
         "engine should fire for about 15 s, got {burn_duration_s} s"
     );
 
-    // ── Final state ────────────────────────────────────────────────────────
+    // ── Final state via scenario assertion + direct checks ────────────────────
+    let final_check = ScenarioBuilder::new("p40_sps_burn/final")
+        .comment("verify post-cutoff state")
+        .expect_major_mode(40)
+        .build();
+    run_scenario(&final_check, &mut state, &mut hw);
+
     assert!(!state.burn.burn_active, "burn must have completed");
     assert!(
         !state.engine_thrusting,
