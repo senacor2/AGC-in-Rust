@@ -50,16 +50,22 @@
 //! consumed by the very next SERVICER cycle — no stale-cache issue exists in the
 //! current implementation.**
 
+use agc_core::math::linalg::{mxv, transpose};
+use agc_core::navigation::star_catalog::STAR_CATALOG;
 use agc_core::navigation::StateVector;
+use agc_core::programs::p20::LosComponent;
+use agc_core::programs::p22::{landmark_inertial_pos, LandmarkMark, LANDMARK_TABLE};
+use agc_core::programs::p51_p52::p52_mark_align;
 use agc_core::services::average_g::start_servicer;
 use agc_core::services::v_n::{feed_key, Key};
-use agc_core::types::{Mat3x3, Met};
+use agc_core::types::{Mat3x3, Met, Vec3};
 use agc_core::AgcState;
 
 use crate::physics::{advance_ground_truth, GravityBody, Spacecraft};
 use crate::runtime::{
     pump_engine_to_hw, pump_pipa_into_state, pump_rcs_to_hw, DapPump, T4Pump, WaitlistPump,
 };
+use crate::sensors::{landmark_los_in_platform, star_los_in_platform};
 use crate::SimHardware;
 
 // ── SimDuration ───────────────────────────────────────────────────────────────
@@ -227,6 +233,22 @@ pub enum Event {
 
     /// Assert `state.alarm.code == code`.
     ExpectAlarm(u16),
+
+    /// Seed the simulator truth REFSMMAT used by sensor simulation.
+    ///
+    /// Required before any [`Event::OpticsSighting`] or
+    /// [`Event::LandmarkSighting`] event.  The matrix is stored in the
+    /// `RunContext` and is never written to `AgcState::refsmmat` — it
+    /// represents the simulator's ground truth, which the AGC's P51/P52
+    /// alignment programs are trying to estimate.
+    SeedTruthRefsmmat(Mat3x3),
+
+    /// Set the spacecraft's commanded attitude (inertial → body, scalar-first `[w, x, y, z]`).
+    ///
+    /// Writes directly to `Spacecraft::attitude.commanded_q`.  The proper
+    /// DAP → quaternion bridge is tracked in GH #55; this is a direct setter
+    /// for scenario injection until that bridge exists.
+    CommandAttitude { q: [f64; 4] },
 
     /// Emit a one-line progress message; no state change.
     Comment(&'static str),
@@ -579,6 +601,23 @@ impl ScenarioBuilder {
         self
     }
 
+    /// Seed the simulator truth REFSMMAT used by sensor simulation.
+    ///
+    /// Pushes a [`Event::SeedTruthRefsmmat`] event.  Must appear before
+    /// any `optics_sighting` or `landmark_sighting` calls in the scenario.
+    pub fn seed_truth_refsmmat(mut self, m: Mat3x3) -> Self {
+        self.events.push(Event::SeedTruthRefsmmat(m));
+        self
+    }
+
+    /// Set the spacecraft's commanded attitude quaternion (scalar-first `[w, x, y, z]`).
+    ///
+    /// Pushes a [`Event::CommandAttitude`] event.
+    pub fn command_attitude(mut self, q: [f64; 4]) -> Self {
+        self.events.push(Event::CommandAttitude { q });
+        self
+    }
+
     /// Emit a progress comment.
     pub fn comment(mut self, msg: &'static str) -> Self {
         self.events.push(Event::Comment(msg));
@@ -664,6 +703,17 @@ fn dsky_r_matches(got: f32, want: f32, tol_pct: f32) -> Result<(), String> {
 
 // ── RunContext ────────────────────────────────────────────────────────────────
 
+/// Buffered first star sighting, waiting for the second to form a pair.
+///
+/// Contains `(star_id, star_direction_inertial, star_los_platform)` for the
+/// first sighting.  When the second sighting arrives, both are dispatched to
+/// `p52_mark_align` (or `p51_mark_align` depending on major mode).
+struct FirstSighting {
+    star_id: u8,
+    inertial: Vec3,
+    platform: Vec3,
+}
+
 /// Private per-run context holding mutable executor state.
 struct RunContext {
     /// Executor-held ground-truth state vector, initialised by
@@ -671,6 +721,11 @@ struct RunContext {
     ground_truth: Option<StateVector>,
     /// Spacecraft model used for ground-truth conic propagation.
     spacecraft: Spacecraft,
+    /// Simulator truth REFSMMAT, seeded by [`Event::SeedTruthRefsmmat`].
+    /// Distinct from `AgcState::refsmmat` (the AGC's estimated REFSMMAT).
+    truth_refsmmat: Option<Mat3x3>,
+    /// Buffered first star sighting, waiting for a second to complete a pair.
+    first_sighting: Option<FirstSighting>,
 }
 
 // ── run_scenario ──────────────────────────────────────────────────────────────
@@ -705,6 +760,8 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
     let mut ctx = RunContext {
         ground_truth: None,
         spacecraft: Spacecraft::new(),
+        truth_refsmmat: None,
+        first_sighting: None,
     };
 
     let tick_cs = scenario.tick_cs;
@@ -860,22 +917,134 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
                 do_tick(state, hw, tick_cs, &mut waitlist, &mut dap, &mut t4);
             }
 
-            // ── OpticsSighting ────────────────────────────────────────────────
-            Event::OpticsSighting { star_id } => {
+            // ── SeedTruthRefsmmat ─────────────────────────────────────────────
+            Event::SeedTruthRefsmmat(m) => {
+                log_event(name, "seeding truth REFSMMAT for sensor simulation");
+                ctx.truth_refsmmat = Some(m);
+            }
+
+            // ── CommandAttitude ───────────────────────────────────────────────
+            Event::CommandAttitude { q } => {
                 log_event(
                     name,
-                    &format!("stub: OpticsSighting(star_id={star_id}) not yet implemented"),
+                    &format!(
+                        "commanding attitude q=[{:.4},{:.4},{:.4},{:.4}]",
+                        q[0], q[1], q[2], q[3]
+                    ),
                 );
+                ctx.spacecraft.attitude.commanded_q = q;
+            }
+
+            // ── OpticsSighting ────────────────────────────────────────────────
+            Event::OpticsSighting { star_id } => {
+                let refsmmat = ctx.truth_refsmmat.expect(
+                    "OpticsSighting requires SeedTruthRefsmmat earlier in the scenario",
+                );
+                let star_inertial = STAR_CATALOG[(star_id - 1) as usize].direction;
+                let star_platform =
+                    star_los_in_platform(star_id, &ctx.spacecraft.attitude, &refsmmat);
+                log_event(
+                    name,
+                    &format!("OpticsSighting: star_id={star_id}, buffering sighting"),
+                );
+
+                match ctx.first_sighting.take() {
+                    None => {
+                        // Buffer the first sighting.
+                        ctx.first_sighting = Some(FirstSighting {
+                            star_id,
+                            inertial: star_inertial,
+                            platform: star_platform,
+                        });
+                    }
+                    Some(first) => {
+                        // Second sighting arrived — dispatch to P52 (or P51 if
+                        // still in initial orientation determination).
+                        log_event(
+                            name,
+                            &format!(
+                                "OpticsSighting: pairing star {} with star {} → p52_mark_align",
+                                first.star_id, star_id
+                            ),
+                        );
+                        // Use p52_mark_align (the realignment path).  P51 vs
+                        // P52 selection based on major_mode can be added when
+                        // the interactive flow is wired in a later milestone.
+                        p52_mark_align(
+                            state,
+                            first.inertial,
+                            star_inertial,
+                            first.platform,
+                            star_platform,
+                        );
+                    }
+                }
             }
 
             // ── LandmarkSighting ──────────────────────────────────────────────
             Event::LandmarkSighting { table, index } => {
+                let refsmmat = ctx.truth_refsmmat.expect(
+                    "LandmarkSighting requires SeedTruthRefsmmat earlier in the scenario",
+                );
+                let csm_pos = state.csm_state.position;
+                let los_platform = landmark_los_in_platform(
+                    table,
+                    index,
+                    csm_pos,
+                    &ctx.spacecraft.attitude,
+                    &refsmmat,
+                    state.gha_epoch_rad,
+                );
+                // Rotate los_platform back to inertial: REFSMMAT^T · los_platform
+                let los_inertial = mxv(transpose(refsmmat), los_platform);
+
+                // Compute landmark inertial position for the mark struct.
+                let lm_inertial: Vec3 = match table {
+                    LandmarkTable::Earth => {
+                        let entry = &LANDMARK_TABLE[index as usize];
+                        landmark_inertial_pos(entry, 0.0, state.gha_epoch_rad)
+                    }
+                    LandmarkTable::Moon => {
+                        let entry =
+                            &agc_core::navigation::landmarks::LUNAR_LANDMARK_TABLE[index as usize];
+                        let r = agc_core::navigation::landmarks::R_MOON_M + entry.alt_m;
+                        let cos_lat = entry.lat_rad.cos();
+                        let sin_lat = entry.lat_rad.sin();
+                        let cos_lon = entry.lon_rad.cos();
+                        let sin_lon = entry.lon_rad.sin();
+                        [r * cos_lat * cos_lon, r * cos_lat * sin_lon, r * sin_lat]
+                    }
+                };
+
+                // Select observation component: axis with smallest |los_inertial| component.
+                let component = {
+                    let ax = los_inertial[0].abs();
+                    let ay = los_inertial[1].abs();
+                    let az = los_inertial[2].abs();
+                    if ax <= ay && ax <= az {
+                        LosComponent::X
+                    } else if ay <= az {
+                        LosComponent::Y
+                    } else {
+                        LosComponent::Z
+                    }
+                };
+
+                let mark = LandmarkMark {
+                    time: state.time.to_seconds(),
+                    landmark_index: index,
+                    landmark_inertial: lm_inertial,
+                    los_inertial,
+                    component,
+                };
+
                 log_event(
                     name,
                     &format!(
-                        "stub: LandmarkSighting(table={table:?}, index={index}) not yet implemented"
+                        "LandmarkSighting: table={table:?}, index={index} → p22_incorporate_landmark_mark"
                     ),
                 );
+                agc_core::programs::p22::p22_incorporate_landmark_mark(state, mark);
             }
 
             // ── ExpectMajorMode ───────────────────────────────────────────────
@@ -1614,11 +1783,19 @@ mod tests {
 
     /// tc_scn_run_optics_sighting_does_not_panic
     ///
-    /// OpticsSighting is a stub that logs and continues — must not panic.
+    /// Two consecutive `OpticsSighting` events with a seeded truth REFSMMAT must
+    /// dispatch to `p52_mark_align` without panicking.  The identity REFSMMAT
+    /// means platform = inertial; any two non-collinear AGC catalogue stars
+    /// (1 = Alpheratz, 16 = Pollux) form a valid TRIAD pair.
     #[test]
     fn tc_scn_run_optics_sighting_does_not_panic() {
+        let identity: Mat3x3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
         let scenario = ScenarioBuilder::new("optics-stub")
-            .optics_sighting(42)
+            .seed_truth_refsmmat(identity)
+            // First sighting buffers star 1 (Alpheratz).
+            .optics_sighting(1)
+            // Second sighting pairs with star 16 (Pollux) and dispatches p52_mark_align.
+            .optics_sighting(16)
             .build();
         let mut state = AgcState::new();
         let mut hw = SimHardware::new();
@@ -1627,20 +1804,57 @@ mod tests {
 
     /// tc_scn_run_landmark_sighting_does_not_panic
     ///
-    /// LandmarkSighting is a stub — must not panic regardless of table variant.
+    /// `LandmarkSighting` events with a seeded truth REFSMMAT and valid CSM state
+    /// must dispatch to `p22_incorporate_landmark_mark` without panicking.
+    /// P22 tracking must be active for the mark to be processed.
     #[test]
     fn tc_scn_run_landmark_sighting_does_not_panic() {
+        use agc_core::navigation::state_vector::{Frame, StateVector};
+        use agc_core::types::Met;
+
+        let identity: Mat3x3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        // CSM at 7000 km on +X axis in ECI frame (orbital altitude).
+        let csm_sv = StateVector {
+            position: [7_000_000.0, 0.0, 0.0],
+            velocity: [0.0, 7500.0, 0.0],
+            epoch: Met::from_seconds(1000.0),
+            frame: Frame::EarthInertial,
+        };
+
         let scenario_earth = ScenarioBuilder::new("landmark-earth")
+            .seed_state()
+            .from_state_vector(csm_sv)
+            .met(Met::from_seconds(1000.0))
+            .refsmmat_identity()
+            .done()
+            .seed_truth_refsmmat(identity)
             .landmark_sighting(LandmarkTable::Earth, 3)
             .build();
+
+        // For Moon landmark sighting, use a MCI-frame CSM position above the Moon.
+        let csm_mci = StateVector {
+            position: [1_837_400.0, 0.0, 0.0], // 100 km LLO
+            velocity: [0.0, 1633.0, 0.0],
+            epoch: Met::from_seconds(1000.0),
+            frame: Frame::MoonInertial,
+        };
         let scenario_moon = ScenarioBuilder::new("landmark-moon")
+            .seed_state()
+            .from_state_vector(csm_mci)
+            .met(Met::from_seconds(1000.0))
+            .refsmmat_identity()
+            .done()
+            .seed_truth_refsmmat(identity)
             .landmark_sighting(LandmarkTable::Moon, 7)
             .build();
 
         let mut state = AgcState::new();
         let mut hw = SimHardware::new();
         run_scenario(&scenario_earth, &mut state, &mut hw);
-        run_scenario(&scenario_moon, &mut state, &mut hw);
+
+        let mut state2 = AgcState::new();
+        let mut hw2 = SimHardware::new();
+        run_scenario(&scenario_moon, &mut state2, &mut hw2);
     }
 
     // ── H. Guard: tick_cs > DAP_PERIOD_CS ────────────────────────────────────

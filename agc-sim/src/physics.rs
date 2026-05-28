@@ -3,19 +3,128 @@
 //! Integrates Δv from the SPS engine each simulator tick and emits PIPA
 //! pulses for the IMU stub. The model is intentionally minimal: linear
 //! motion only, no gravity (PIPAs measure non-gravitational acceleration
-//! anyway), no attitude — `thrust_dir_platform` is taken as fixed during
-//! the burn, on the assumption that the DAP slewed the vehicle to the
-//! commanded attitude before crew PRO. That assumption fits the
-//! `agc-sim` IMU stub, whose CDU angles are pinned to zero.
+//! anyway).  Attitude dynamics are now tracked via the [`Attitude`] struct
+//! and [`Spacecraft::advance_attitude`], though thrust integration still
+//! uses the fixed `thrust_dir_platform` field (the DAP is assumed to have
+//! slewed the vehicle before crew PRO — this avoids coupling thrust with
+//! attitude in MS-T3 and keeps existing P40 tests stable).
+//!
+//! # Quaternion convention — ADR
+//!
+//! All quaternions in this module use the **scalar-first `[w, x, y, z]`**
+//! layout.  Rationale: this is the dominant aerospace / robotics convention
+//! (used by NASA, SPICE, most flight-dynamics libraries), avoids the
+//! sign-flip confusion in the scalar-last (JPL) convention for
+//! `slerp`, and matches the `nalgebra` / `quaternion` crate layouts the
+//! simulator is likely to depend on in later milestones.  Changing this
+//! later would only affect `agc-sim` (simulator truth), never `agc-core`
+//! (which works in rotation-matrix / REFSMMAT space throughout).
 //!
 //! Coupled with [`crate::SimHardware`] via `SimHardware::tick`.
 
 use agc_core::navigation::gravity::{MU_EARTH, MU_MOON};
+use agc_core::types::Mat3x3;
 use agc_core::navigation::integration::{propagate_coast, soi_check};
 use agc_core::navigation::planetary::moon_position;
 use agc_core::navigation::state_vector::Frame;
 use agc_core::navigation::StateVector;
 use agc_core::types::Met;
+
+// ── Attitude and quaternion helpers ──────────────────────────────────────────
+
+/// Normalise a scalar-first quaternion `[w, x, y, z]` to unit length.
+///
+/// Panics if the quaternion is the zero quaternion (indicates a programming
+/// error — a zero quaternion has no rotation interpretation).
+pub fn quat_normalise(q: [f64; 4]) -> [f64; 4] {
+    let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+    assert!(n > 0.0, "quat_normalise: zero quaternion");
+    [q[0] / n, q[1] / n, q[2] / n, q[3] / n]
+}
+
+/// Convert a scalar-first unit quaternion to a 3×3 rotation matrix.
+///
+/// The returned matrix `M` satisfies `v_body = M · v_inertial`, consistent
+/// with the REFSMMAT convention used throughout `agc-core`.
+pub fn quat_to_mat3x3(q: [f64; 4]) -> Mat3x3 {
+    let [w, x, y, z] = q;
+    let x2 = x * x;
+    let y2 = y * y;
+    let z2 = z * z;
+    let wx = w * x;
+    let wy = w * y;
+    let wz = w * z;
+    let xy = x * y;
+    let xz = x * z;
+    let yz = y * z;
+    [
+        [1.0 - 2.0 * (y2 + z2), 2.0 * (xy - wz), 2.0 * (xz + wy)],
+        [2.0 * (xy + wz), 1.0 - 2.0 * (x2 + z2), 2.0 * (yz - wx)],
+        [2.0 * (xz - wy), 2.0 * (yz + wx), 1.0 - 2.0 * (x2 + y2)],
+    ]
+}
+
+/// Spherical-linear interpolation between two unit quaternions.
+///
+/// `alpha = 0.0` returns `q0`; `alpha = 1.0` returns `q1`.
+/// Uses the shortest-arc convention (negates `q1` if `dot(q0, q1) < 0`).
+pub fn quat_slerp(q0: [f64; 4], q1: [f64; 4], alpha: f64) -> [f64; 4] {
+    let dot = q0[0] * q1[0] + q0[1] * q1[1] + q0[2] * q1[2] + q0[3] * q1[3];
+    // Choose the shorter arc.
+    let (q1, dot) = if dot < 0.0 {
+        ([-q1[0], -q1[1], -q1[2], -q1[3]], -dot)
+    } else {
+        (q1, dot)
+    };
+    // Clamp to avoid acos domain errors from floating-point rounding.
+    let dot = dot.min(1.0);
+    let theta = dot.acos();
+    if theta.abs() < 1e-10 {
+        // Quaternions are nearly identical; linear interpolation is numerically safe.
+        let w = 1.0 - alpha;
+        return quat_normalise([
+            w * q0[0] + alpha * q1[0],
+            w * q0[1] + alpha * q1[1],
+            w * q0[2] + alpha * q1[2],
+            w * q0[3] + alpha * q1[3],
+        ]);
+    }
+    let sin_theta = theta.sin();
+    let s0 = ((1.0 - alpha) * theta).sin() / sin_theta;
+    let s1 = (alpha * theta).sin() / sin_theta;
+    [
+        s0 * q0[0] + s1 * q1[0],
+        s0 * q0[1] + s1 * q1[1],
+        s0 * q0[2] + s1 * q1[2],
+        s0 * q0[3] + s1 * q1[3],
+    ]
+}
+
+/// Simulator truth attitude state for a spacecraft.
+///
+/// Tracks the current inertial-to-body attitude as a scalar-first unit
+/// quaternion and supports exponential-decay slewing toward a commanded
+/// attitude.  This struct lives in `agc-sim` only; `agc-core` works purely
+/// with the REFSMMAT rotation matrix derived from IMU alignment.
+#[derive(Clone, Copy, Debug)]
+pub struct Attitude {
+    /// Current attitude quaternion: inertial → body, scalar-first `[w, x, y, z]`.
+    pub q: [f64; 4],
+    /// Commanded attitude quaternion (same convention as `q`).
+    pub commanded_q: [f64; 4],
+    /// Slew time constant (s).  Default `5.0`.  Set to `0.0` to snap instantly.
+    pub slew_tau_s: f64,
+}
+
+impl Default for Attitude {
+    fn default() -> Self {
+        Self {
+            q: [1.0, 0.0, 0.0, 0.0],          // identity
+            commanded_q: [1.0, 0.0, 0.0, 0.0], // identity
+            slew_tau_s: 5.0,
+        }
+    }
+}
 
 /// PIPA hardware quantum: m/s per integer pulse.
 ///
@@ -110,6 +219,12 @@ pub struct Spacecraft {
     ///
     /// Defaults to `false`. Currently has no effect; reserved for future use.
     pub atmosphere_enabled: bool,
+
+    /// Simulator truth attitude state.
+    ///
+    /// Tracks the current inertial-to-body attitude and commanded slew target.
+    /// Updated by [`Spacecraft::advance_attitude`] on each tick.
+    pub attitude: Attitude,
 }
 
 impl Default for Spacecraft {
@@ -130,6 +245,7 @@ impl Spacecraft {
             gravity_enabled: false,
             current_body: GravityBody::Earth,
             atmosphere_enabled: false,
+            attitude: Attitude::default(),
         }
     }
 
@@ -139,14 +255,36 @@ impl Spacecraft {
         self.sps_thrust_n / self.mass_kg
     }
 
+    /// Advance the attitude by `dt` seconds toward `commanded_q` using
+    /// exponential-decay slerp.
+    ///
+    /// The blending coefficient is `alpha = 1 - exp(-dt / slew_tau_s)`.
+    /// When `slew_tau_s == 0.0` the attitude snaps instantly to `commanded_q`.
+    /// The result is always re-normalised to guard against floating-point drift.
+    pub(crate) fn advance_attitude(&mut self, dt: f64) {
+        if self.attitude.slew_tau_s == 0.0 {
+            self.attitude.q = self.attitude.commanded_q;
+            return;
+        }
+        let alpha = 1.0 - (-dt / self.attitude.slew_tau_s).exp();
+        self.attitude.q = quat_slerp(self.attitude.q, self.attitude.commanded_q, alpha);
+        self.attitude.q = quat_normalise(self.attitude.q);
+    }
+
     /// Advance the dynamics by `dt_seconds`.
     ///
-    /// When `engine_on` is true, integrates `acceleration × dt_seconds`
-    /// onto the per-axis Δv residue. With the engine off this is a
-    /// no-op — PIPAs measure non-gravitational acceleration only, so
-    /// coast phases do not generate pulses.
+    /// 1. Advances attitude via `advance_attitude` (before thrust so that
+    ///    attitude is current when callers inspect it post-tick).
+    /// 2. When `engine_on` is true, integrates `acceleration × dt_seconds`
+    ///    onto the per-axis Δv residue. With the engine off the thrust step is
+    ///    a no-op — PIPAs measure non-gravitational acceleration only, so
+    ///    coast phases do not generate pulses.
     pub fn tick(&mut self, dt_seconds: f64, engine_on: bool) {
-        if !engine_on || dt_seconds <= 0.0 {
+        if dt_seconds <= 0.0 {
+            return;
+        }
+        self.advance_attitude(dt_seconds);
+        if !engine_on {
             return;
         }
         let accel = self.sps_acceleration_m_s2();
