@@ -219,11 +219,16 @@ failure model.
 ### 5.1 Data model
 
 ```text
-Scenario { name, events, tick_cs }       // tick_cs defaults to 10 (100 ms)
+Scenario {
+    name, events,
+    tick_cs,          // default 10 (100 ms) — SERVICER / DAP tick
+    coast_step_cs,    // default 6_000 (60 s) — coast outer step, MS-T2
+}
 Event {
     SeedState(SeedStateSpec)              // csm + met + refsmmat
+    SeedGroundTruth(StateVector)          // executor-held ground truth (MS-T2)
     AdvanceMet(SimDuration)               // walk the executive forward
-    AdvanceCoast(SimDuration)             // gravity-driven ground truth — STUB until MS-T2
+    AdvanceCoast(SimDuration)             // gravity-driven ground truth (MS-T2)
     KeyPress(Key)                         // crew keystroke (one tick after)
     UplinkWord(u16)                       // ScriptedUplink push (one tick after)
     OpticsSighting { star_id }            // STUB until MS-T3
@@ -231,6 +236,7 @@ Event {
     ExpectMajorMode(u8)
     ExpectDsky(DskyExpect)                // verb / noun / r0/r1/r2 / flashing — all optional
     ExpectCsmStateClose { ground_truth, pos_tol_m, vel_tol_m_s }
+    ExpectAgcMatchesGroundTruth { pos_tol_m, vel_tol_m_s }  // (MS-T2)
     ExpectAlarm(u16)
     Comment(&'static str)                 // documentation in test traces
 }
@@ -258,10 +264,13 @@ sequences:
 | `.v25_load_three(noun, [i32; 3])` | Full V25 Nxx ENTR +v ENTR +v ENTR +v ENTR sequence with signed values |
 | `.v71_p27_block_update(addr, &[(sign, mag)])` | Full V71 ENTR addr ENTR count ENTR ±v ENTR-each sequence |
 | `.advance(SimDuration)` / `.advance_coast(SimDuration)` | Pumps for the requested duration |
+| `.seed_ground_truth(StateVector)` | Initialise the executor's ground-truth state (MS-T2) |
 | `.uplink_word(u16)` / `.optics_sighting(u8)` / `.landmark_sighting(...)` | One-shot inputs |
 | `.comment(&'static str)` | Trace marker |
 | `.expect_major_mode(u8)` / `.expect_dsky(DskyExpect)` / `.expect_csm_state_close(...)` / `.expect_alarm(u16)` | Assertions evaluated at the event's position |
+| `.expect_agc_matches_ground_truth(pos_tol_m, vel_tol_m_s)` | Compare AGC `csm_state` against the executor's ground truth (MS-T2) |
 | `.tick_cs(u32)` | Override the default 10 cs (must not exceed `DAP_PERIOD_CS`) |
+| `.coast_step_cs(u32)` | Override the default 60 s coast outer step (MS-T2) |
 | `.build()` | Produce the `Scenario` |
 
 The `seed_state()` sub-builder returns a `SeedStateBuilder` that
@@ -299,6 +308,23 @@ engine and RCS mirror last so the HAL reflects the final staging.
 `run_scenario` asserts `tick_cs <= DAP_PERIOD_CS` at entry to catch
 configurations that would skip DAP cycles.
 
+**For `AdvanceCoast(dur)`** (MS-T2 — coast, no thrust), the executor
+runs a two-tier loop. Per outer step (`coast_step_cs`, default 60 s):
+
+1. Advance the executor-held ground truth via
+   `physics::advance_ground_truth(spacecraft, &mut gt, coast_step_s)`
+   (RK4 Cowell, Earth J2 + Moon third-body — see §5.7).
+2. Run one SERVICER cycle's worth of inner ticks (200 cs at the
+   default `tick_cs = 10`) using a coast-mode pump sequence that
+   **skips** `hw.tick(dt_s)`, `dap_pump`, `pump_engine_to_hw`, and
+   `pump_rcs_to_hw`. PIPA + Waitlist + T4 still run so SERVICER
+   processes its gravity integration with PIPA = 0 (no thrust).
+3. The remaining time in the outer step advances `state.time` and
+   the Waitlist countdown in a single bump.
+
+Per-event log line: `[scenario {name}] coast +{dur} → MET {s}s,
+ground_truth {present|absent}`.
+
 ### 5.4 Failure model
 
 `Expect*` failures **panic** with a uniform message:
@@ -316,14 +342,42 @@ comparison.
 
 ### 5.5 Deferred variants
 
-`AdvanceCoast`, `OpticsSighting`, and `LandmarkSighting` are
-**no-op stubs** with a one-line stderr warning until their MS-Tx
-infrastructure lands (MS-T2 for coast, MS-T3 for sensors). This is
-deliberate: phase-test authors can stage full Apollo-8 scenarios
-against the API today and have them progress as the downstream
-milestones land, without panic-on-compose.
+`OpticsSighting` and `LandmarkSighting` are **no-op stubs** with a
+one-line stderr warning until MS-T3 (#26) wires the sensor sims.
+Phase-test authors can stage full Apollo-8 scenarios against the
+API today and have them progress as MS-T3 lands, without
+panic-on-compose.
 
-### 5.6 Worked example — `p40_sps_burn.rs`
+`AdvanceCoast` is **no longer a stub** as of MS-T2 (PR #53,
+amendments in this PR). It runs the two-tier loop documented in
+§5.3 against an executor-held ground truth (seeded by
+`SeedGroundTruth`).
+
+### 5.6 Ground-truth oracle (MS-T2)
+
+`physics::advance_ground_truth` uses
+`agc_core::navigation::integration::propagate_coast` (RK4 Cowell,
+4th-order, with J2 + Moon third-body) as the ground-truth oracle —
+**not** `kepler_step` (pure two-body, originally specified in #25).
+The choice was made during MS-T2 implementation so the AGC-vs-ground-
+truth comparison isolates integrator order (the SERVICER's
+trapezoidal `average_g_step` vs RK4 Cowell) under a shared physics
+model.
+
+Three tests pin the three layers of validation:
+
+| Test | Location | What it pins |
+|---|---|---|
+| `tc_phys_advance_ground_truth_subdivision_self_consistency` | `agc-sim/src/physics.rs::tests` | 90 × 60s `advance_ground_truth` matches single `propagate_coast(5400s)` within 1 km — sub-step accumulation accuracy. |
+| `tc_phys_coast_24h_leo_vs_kepler_two_body` | `agc-sim/src/physics.rs::tests` | 24h `advance_ground_truth` vs hourly `kepler_step` stays within 2.5 Mm / 2.5 km/s — pins the J2-secular drift physics-model gap. Regression catch for ground-truth integrator changes. |
+| `tc_ms_t2_coast_24h_agc_tracks_ground_truth` | `agc-test/tests/p70_coast_24h_leo.rs` | AGC `csm_state` from SERVICER stays within 5 km / 5 m/s of `advance_ground_truth` over 24h. The MS-T2 exit criterion (amended from #25's original "1 km vs `kepler_step`" wording — see PR for the physics derivation). |
+
+#25 was amended to reflect the implementation choice. The original
+"1 km vs `kepler_step`" wording was unphysical for any propagator
+including J2 (~1.9 Mm/day phase divergence from the 0.144 %
+J2-corrected mean motion in LEO).
+
+### 5.7 Worked example — `p40_sps_burn.rs`
 
 The MS-T1 proof point is `agc-test/tests/p40_sps_burn.rs`. It
 composes three sub-scenarios that share an `(AgcState, SimHardware)`
@@ -343,7 +397,7 @@ test asserts within a single DAP cycle of TIG — finer-grained than
 the event level. `ScenarioBuilder` is for declarative event
 sequences; intra-cycle assertions stay direct.
 
-### 5.7 Adding a new mission-phase test
+### 5.8 Adding a new mission-phase test
 
 1. Pick a `phase_<name>.rs` file under `agc-test/tests/` matching the
    layout in `specs/end-to-end-mission-testing-plan.md` §7.

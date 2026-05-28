@@ -1659,4 +1659,228 @@ mod tests {
         let mut hw = SimHardware::new();
         run_scenario(&scenario, &mut state, &mut hw);
     }
+
+    // ── I. MS-T2 additions: Builder methods ──────────────────────────────────
+
+    /// tc_scn_builder_coast_step_cs_overrides_default
+    ///
+    /// `.coast_step_cs(12_000)` must produce a Scenario whose `coast_step_cs`
+    /// field equals 12_000, overriding the default of 6_000.
+    #[test]
+    fn tc_scn_builder_coast_step_cs_overrides_default() {
+        let scenario = ScenarioBuilder::new("coast-step-override")
+            .coast_step_cs(12_000)
+            .build();
+        assert_eq!(
+            scenario.coast_step_cs, 12_000,
+            "coast_step_cs should be overridden to 12_000"
+        );
+    }
+
+    /// tc_scn_builder_seed_ground_truth_emits_event
+    ///
+    /// `.seed_ground_truth(sv)` pushes exactly one `Event::SeedGroundTruth(sv)`
+    /// with the same state vector fields.
+    #[test]
+    fn tc_scn_builder_seed_ground_truth_emits_event() {
+        let sv = StateVector {
+            position: [6_778_000.0, 1.0, 2.0],
+            velocity: [0.0, 7_669.0, 3.0],
+            epoch: Met(0),
+            frame: Frame::EarthInertial,
+        };
+        let scenario = ScenarioBuilder::new("seed-gt-event")
+            .seed_ground_truth(sv)
+            .build();
+
+        assert_eq!(scenario.events.len(), 1, "exactly one event expected");
+        match scenario.events[0] {
+            Event::SeedGroundTruth(stored_sv) => {
+                assert_eq!(stored_sv.position[0], sv.position[0]);
+                assert_eq!(stored_sv.position[1], sv.position[1]);
+                assert_eq!(stored_sv.position[2], sv.position[2]);
+                assert_eq!(stored_sv.velocity[0], sv.velocity[0]);
+                assert_eq!(stored_sv.velocity[1], sv.velocity[1]);
+                assert_eq!(stored_sv.velocity[2], sv.velocity[2]);
+            }
+            _ => panic!("expected Event::SeedGroundTruth"),
+        }
+    }
+
+    /// tc_scn_builder_expect_agc_matches_ground_truth_emits_event
+    ///
+    /// `.expect_agc_matches_ground_truth(1.0, 0.1)` pushes exactly one
+    /// `Event::ExpectAgcMatchesGroundTruth` with the correct tolerances.
+    #[test]
+    fn tc_scn_builder_expect_agc_matches_ground_truth_emits_event() {
+        let scenario = ScenarioBuilder::new("expect-gt-event")
+            .expect_agc_matches_ground_truth(1.0, 0.1)
+            .build();
+
+        assert_eq!(scenario.events.len(), 1, "exactly one event expected");
+        match scenario.events[0] {
+            Event::ExpectAgcMatchesGroundTruth {
+                pos_tol_m,
+                vel_tol_m_s,
+            } => {
+                assert_eq!(pos_tol_m, 1.0, "pos_tol_m must be 1.0");
+                assert_eq!(vel_tol_m_s, 0.1, "vel_tol_m_s must be 0.1");
+            }
+            _ => panic!("expected Event::ExpectAgcMatchesGroundTruth"),
+        }
+    }
+
+    // ── J. MS-T2 additions: Executor positive paths ──────────────────────────
+
+    /// tc_scn_run_seed_ground_truth_sets_executor_ctx
+    ///
+    /// After running a scenario that contains only `SeedState` + `SeedGroundTruth`
+    /// (both seeding the same state vector), an immediately following
+    /// `ExpectAgcMatchesGroundTruth` with very tight tolerances (1 m / 0.1 m/s)
+    /// must pass silently — confirming the ground truth actually lands inside
+    /// `RunContext`.
+    #[test]
+    fn tc_scn_run_seed_ground_truth_sets_executor_ctx() {
+        let sv = StateVector {
+            position: [6_778_000.0, 0.0, 0.0],
+            velocity: [0.0, 7_669.0, 0.0],
+            epoch: Met(0),
+            frame: Frame::EarthInertial,
+        };
+
+        let scenario = ScenarioBuilder::new("gt-sets-ctx")
+            .seed_state()
+            .from_state_vector(sv)
+            .met(Met(0))
+            .refsmmat_identity()
+            .done()
+            .seed_ground_truth(sv)
+            // Tolerances are extremely tight — any non-zero delta would fail.
+            .expect_agc_matches_ground_truth(1.0, 0.1)
+            .build();
+
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        run_scenario(&scenario, &mut state, &mut hw);
+    }
+
+    /// tc_scn_run_advance_coast_short_advances_time_and_ground_truth
+    ///
+    /// A 60 cs `AdvanceCoast` (one outer step at the default 6000 cs, so here
+    /// the single step covers the full 60 cs) advances `state.time` by 60 cs
+    /// and advances the executor's ground truth.  Following with
+    /// `ExpectAgcMatchesGroundTruth` at a loose tolerance (100_000 m / 100 m/s)
+    /// confirms the ground truth was propagated without panicking.
+    ///
+    /// The loose tolerance is intentional: 60 cs is less than one SERVICER
+    /// cycle (200 cs), so the AGC's integrated state may not have updated yet,
+    /// giving a large position difference relative to the propagated ground truth.
+    #[test]
+    fn tc_scn_run_advance_coast_short_advances_time_and_ground_truth() {
+        let sv = StateVector {
+            position: [6_778_000.0, 0.0, 0.0],
+            velocity: [0.0, 7_669.0, 0.0],
+            epoch: Met(0),
+            frame: Frame::EarthInertial,
+        };
+
+        let scenario = ScenarioBuilder::new("coast-60cs")
+            .seed_state()
+            .from_state_vector(sv)
+            .met(Met(0))
+            .refsmmat_identity()
+            .done()
+            .seed_ground_truth(sv)
+            .advance_coast(SimDuration::cs(60))
+            // Very loose — AGC SERVICER may not have fired in 60 cs.
+            .expect_agc_matches_ground_truth(100_000.0, 100.0)
+            .build();
+
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        run_scenario(&scenario, &mut state, &mut hw);
+
+        // Time must have advanced by exactly 60 cs.
+        assert_eq!(
+            state.time,
+            Met(60),
+            "AdvanceCoast(60 cs) must advance MET to 60 cs"
+        );
+    }
+
+    /// tc_scn_run_advance_coast_without_ground_truth_advances_only_state
+    ///
+    /// `AdvanceCoast` with no prior `SeedGroundTruth` runs without panicking
+    /// and advances `state.time` by the requested duration.
+    #[test]
+    fn tc_scn_run_advance_coast_without_ground_truth_advances_only_state() {
+        let scenario = ScenarioBuilder::new("coast-no-gt")
+            .advance_coast(SimDuration::cs(60))
+            .build();
+
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        state.time = Met(0);
+        run_scenario(&scenario, &mut state, &mut hw);
+
+        assert_eq!(
+            state.time,
+            Met(60),
+            "AdvanceCoast without ground truth must still advance MET by 60 cs"
+        );
+    }
+
+    // ── K. MS-T2 additions: Executor failure paths ───────────────────────────
+
+    /// tc_scn_run_expect_agc_matches_ground_truth_without_seed_panics
+    ///
+    /// Running `ExpectAgcMatchesGroundTruth` before any `SeedGroundTruth` must
+    /// panic with a message containing "requires SeedGroundTruth".
+    #[test]
+    #[should_panic(expected = "requires SeedGroundTruth")]
+    fn tc_scn_run_expect_agc_matches_ground_truth_without_seed_panics() {
+        let scenario = ScenarioBuilder::new("gt-no-seed")
+            .expect_agc_matches_ground_truth(1.0, 0.1)
+            .build();
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        run_scenario(&scenario, &mut state, &mut hw);
+    }
+
+    /// tc_scn_run_expect_agc_matches_ground_truth_position_out_of_tol_panics
+    ///
+    /// Seed a ground-truth state vector 100 km away from the AGC state, set a
+    /// 1 m position tolerance — must panic with "position error".
+    #[test]
+    #[should_panic(expected = "position error")]
+    fn tc_scn_run_expect_agc_matches_ground_truth_position_out_of_tol_panics() {
+        // AGC state: r = 6_778_000 m
+        let agc_sv = StateVector {
+            position: [6_778_000.0, 0.0, 0.0],
+            velocity: [0.0, 7_669.0, 0.0],
+            epoch: Met(0),
+            frame: Frame::EarthInertial,
+        };
+
+        // Ground truth: 100 km further in X.
+        let gt_sv = StateVector {
+            position: [6_778_000.0 + 100_000.0, 0.0, 0.0],
+            ..agc_sv
+        };
+
+        let scenario = ScenarioBuilder::new("gt-pos-fail")
+            .seed_state()
+            .from_state_vector(agc_sv)
+            .met(Met(0))
+            .refsmmat_identity()
+            .done()
+            .seed_ground_truth(gt_sv)
+            // 1 m tolerance is far too tight for a 100 km discrepancy.
+            .expect_agc_matches_ground_truth(1.0, 1.0)
+            .build();
+
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        run_scenario(&scenario, &mut state, &mut hw);
+    }
 }
