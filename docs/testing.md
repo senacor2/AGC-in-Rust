@@ -28,10 +28,11 @@ the individual `agc-test/tests/*.rs` files.
 | **0. Pure unit tests** | `agc-core/src/**/*.rs::tests` | Per-function algorithmic correctness; edge-case sweeps. | No |
 | **1. JSON fixture tests** | `agc-test/tests/*.rs` | Validate Rust outputs against committed reference data. | No — JSON committed |
 | **2. Live VAGC capture** | `cargo run --features vagc-capture --bin capture_*` | Refresh JSON when a fixture must change. Run by a developer locally; output committed. | Yes (local) |
-| **3. End-to-end channel-trace** | (future, MS-E7b) | Drive a full P61→P67 entry through yaAGC over the channel protocol and compare cycle-by-cycle to `agc-sim`. | Yes |
+| **3. End-to-end channel-trace** | (deferred — see §4 and #49) | Drive a full P61→P67 entry through yaAGC over the channel protocol and compare cycle-by-cycle to `agc-sim`. | Yes |
+| **Scenario-API mission tests** | `agc-test/tests/phase_*.rs`, `full_mission.rs` (#23 track) | Declarative end-to-end mission tests against `agc-sim`. See §5 for the API. | No |
 
-CI runs Layers 0 and 1 on every push. Layer 2 is a developer workflow.
-Layer 3 is tracked in #35 (MS-E7b) and not yet implemented.
+CI runs Layers 0 and 1 plus the Scenario-API mission tests on every
+push. Layer 2 is a developer workflow. Layer 3 is deferred — see §4.
 
 ---
 
@@ -191,9 +192,175 @@ the harness plan). The current `vagc_harness::YaAgcRun` wrapper
 covers process orchestration; the channel-protocol client would be
 a new module (`agc-test/src/vagc_channel.rs`) consuming it.
 
+> **Update post-MS-E7i:** the live channel-trace track was attempted
+> end-to-end via the MS-E7c–i sub-track (#36 through #45) and is now
+> deferred indefinitely — see #49 for the standing parking-lot issue
+> and `entry_channel_trace.md` for the diagnostic record. The trajectory-
+> level math validation it was meant to provide is covered by per-routine
+> textbook-reference fixtures (#32, #33, #34) instead.
+
 ---
 
-## 5. AGC fixed-point conversion
+## 5. Scenario API for end-to-end mission tests
+
+The Scenario API at `agc-sim/src/scenario.rs` is the declarative test
+driver for the end-to-end mission-testing track (#23). It composes a
+typed list of `Event`s into a `Scenario`, then `run_scenario` walks the
+events against an `(AgcState, SimHardware)` pair using the same soft-
+executive pumps (`WaitlistPump`, `DapPump`, `T4Pump`,
+`pump_pipa_into_state`, `pump_engine_to_hw`, `pump_rcs_to_hw`) that
+`dsky_sim`'s render loop ticks.
+
+This is orthogonal to Layers 1–3 — it is *not* a fixture format and
+does *not* compare against yaAGC. It is the in-Rust counterpart of
+"hand-typed integration test" with an ergonomic builder and a uniform
+failure model.
+
+### 5.1 Data model
+
+```text
+Scenario { name, events, tick_cs }       // tick_cs defaults to 10 (100 ms)
+Event {
+    SeedState(SeedStateSpec)              // csm + met + refsmmat
+    AdvanceMet(SimDuration)               // walk the executive forward
+    AdvanceCoast(SimDuration)             // gravity-driven ground truth — STUB until MS-T2
+    KeyPress(Key)                         // crew keystroke (one tick after)
+    UplinkWord(u16)                       // ScriptedUplink push (one tick after)
+    OpticsSighting { star_id }            // STUB until MS-T3
+    LandmarkSighting { table, index }     // STUB until MS-T3
+    ExpectMajorMode(u8)
+    ExpectDsky(DskyExpect)                // verb / noun / r0/r1/r2 / flashing — all optional
+    ExpectCsmStateClose { ground_truth, pos_tol_m, vel_tol_m_s }
+    ExpectAlarm(u16)
+    Comment(&'static str)                 // documentation in test traces
+}
+```
+
+`SimDuration(u32)` wraps mission **centiseconds** (the AGC's native
+unit, matching `Met(u32)`). Construct via `SimDuration::cs(n) /
+ms(n) / seconds(n) / minutes(n)`. Using a dedicated wrapper instead of
+`std::time::Duration` makes cs-aligned time arithmetic exact and
+const-friendly.
+
+### 5.2 Builder
+
+`ScenarioBuilder` exposes one typed method per Event variant — no
+generic `event(Event)` escape hatch, so renames stay caught by the
+type checker. It also provides sugar helpers for common DSKY
+sequences:
+
+| Method | What it pushes |
+|---|---|
+| `.key(Key)` / `.keys(&[Key])` | `KeyPress` events |
+| `.digit(u8)` / `.digits(u32)` | `KeyPress(Digit(...))` MSB-first |
+| `.enter()` / `.pro()` / `.verb()` / `.noun()` | Single-key shortcuts |
+| `.verb_noun(u8)` | Verb-then-two-digits (no ENTR) |
+| `.v25_load_three(noun, [i32; 3])` | Full V25 Nxx ENTR +v ENTR +v ENTR +v ENTR sequence with signed values |
+| `.v71_p27_block_update(addr, &[(sign, mag)])` | Full V71 ENTR addr ENTR count ENTR ±v ENTR-each sequence |
+| `.advance(SimDuration)` / `.advance_coast(SimDuration)` | Pumps for the requested duration |
+| `.uplink_word(u16)` / `.optics_sighting(u8)` / `.landmark_sighting(...)` | One-shot inputs |
+| `.comment(&'static str)` | Trace marker |
+| `.expect_major_mode(u8)` / `.expect_dsky(DskyExpect)` / `.expect_csm_state_close(...)` / `.expect_alarm(u16)` | Assertions evaluated at the event's position |
+| `.tick_cs(u32)` | Override the default 10 cs (must not exceed `DAP_PERIOD_CS`) |
+| `.build()` | Produce the `Scenario` |
+
+The `seed_state()` sub-builder returns a `SeedStateBuilder` that
+exposes `.position_km(x, y, z)`, `.velocity_m_s(x, y, z)`, `.frame(...)`,
+`.met(Met)`, `.refsmmat([[f64; 3]; 3])`, `.refsmmat_identity()`,
+`.from_state_vector(StateVector)`, and `.done()` to push the
+`Event::SeedState` and return the parent builder.
+
+### 5.3 Executor semantics
+
+`pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardware)`
+walks the events in order. A private `RunContext` owns the three
+pumps; test code never sees them.
+
+For each `AdvanceMet(dur)` (or each `KeyPress` / `UplinkWord`'s
+single post-event tick), the executor runs this exact sequence per
+slice:
+
+```text
+state.time = Met(state.time.0 + tick_cs);
+hw.timers.set_time(state.time.0);
+hw.tick(tick_s);
+pump_pipa_into_state(state, hw);
+dap_pump.tick(state, hw);
+waitlist_pump.tick(state, hw);
+t4_pump.tick(state, hw);
+pump_engine_to_hw(state, hw);
+pump_rcs_to_hw(state, hw);
+```
+
+PIPA before DAP so `dap_step` sees fresh CDU/PIPA; T4 after Waitlist
+so an uplink word that lands this slice doesn't race a pending V37;
+engine and RCS mirror last so the HAL reflects the final staging.
+
+`run_scenario` asserts `tick_cs <= DAP_PERIOD_CS` at entry to catch
+configurations that would skip DAP cycles.
+
+### 5.4 Failure model
+
+`Expect*` failures **panic** with a uniform message:
+
+```text
+scenario "<name>": event #<idx> (<variant>) failed at MET <cs>cs (<s>s):
+  <reason>; expected <x>, got <y>
+```
+
+Panics are idiomatic for `#[test]` code and put the failure right in
+the test output. `run_scenario` returns `()`; no `Result`.
+`ExpectDsky` with a NaN register fast-fails with "DSKY register NaN
+— likely uninitialised noun" rather than producing a misleading
+comparison.
+
+### 5.5 Deferred variants
+
+`AdvanceCoast`, `OpticsSighting`, and `LandmarkSighting` are
+**no-op stubs** with a one-line stderr warning until their MS-Tx
+infrastructure lands (MS-T2 for coast, MS-T3 for sensors). This is
+deliberate: phase-test authors can stage full Apollo-8 scenarios
+against the API today and have them progress as the downstream
+milestones land, without panic-on-compose.
+
+### 5.6 Worked example — `p40_sps_burn.rs`
+
+The MS-T1 proof point is `agc-test/tests/p40_sps_burn.rs`. It
+composes three sub-scenarios that share an `(AgcState, SimHardware)`
+pair to preserve the intermediate-state assertions that cross the
+V25-N81 / P40-init / PRO boundaries:
+
+```text
+phase1a: seed state vector via V71 P27 block update +
+         select P30, load TIG (V25 N33), load ΔV (V25 N81)
+phase1b: select P40 (V37 ENTR 40 ENTR), tick the executive once
+phase1c: arm the burn (PRO)
+[direct burn loop: TIG jump + per-tick assertion of ignition / cutoff]
+```
+
+The burn loop itself is kept as direct state manipulation because the
+test asserts within a single DAP cycle of TIG — finer-grained than
+the event level. `ScenarioBuilder` is for declarative event
+sequences; intra-cycle assertions stay direct.
+
+### 5.7 Adding a new mission-phase test
+
+1. Pick a `phase_<name>.rs` file under `agc-test/tests/` matching the
+   layout in `specs/end-to-end-mission-testing-plan.md` §7.
+2. Construct a single `Scenario` (or split into sub-scenarios per the
+   P40 example) with a `seed_state()`, the relevant key /
+   uplink-word inputs, and one `expect_*` per phase invariant.
+3. Run it: `run_scenario(&scenario, &mut state, &mut hw);`.
+4. Add a `cargo test` smoke check to CI by leaving the test
+   un-`#[ignore]`d.
+
+The end-to-end mission-testing plan (#23) sequences these
+phase tests, the inter-phase handoff tests, and the full-mission
+walkthrough as MS-T4 through MS-T7.
+
+---
+
+## 6. AGC fixed-point conversion
 
 `agc-test/src/agc_convert.rs` provides:
 
@@ -219,7 +386,7 @@ hide the conversion boilerplate.
 
 ---
 
-## 6. Tolerance and acceptance criteria
+## 7. Tolerance and acceptance criteria
 
 Exact bit-for-bit `f64` agreement with AGC fixed-point results is
 **not** the goal. Tolerances are defined based on what the original
@@ -242,7 +409,7 @@ line 1545 sets `HUNTEST_CONVERGED_KM`).
 
 ---
 
-## 7. Quick reference — common commands
+## 8. Quick reference — common commands
 
 ```sh
 # One-time bootstrap: assemble Comanche055 (idempotent)
@@ -262,7 +429,7 @@ cargo test -p agc-test --test entry_fixtures
 
 ---
 
-## 8. Key decisions
+## 9. Key decisions
 
 | Question | Decision |
 |---|---|
