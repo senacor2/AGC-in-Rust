@@ -806,3 +806,663 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
         }
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Unit tests
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agc_core::navigation::state_vector::Frame;
+    use agc_core::navigation::StateVector;
+    use agc_core::services::v_n::Key;
+    use agc_core::types::Met;
+    use agc_core::AgcState;
+
+    use crate::SimHardware;
+
+    // ── A. SimDuration arithmetic ─────────────────────────────────────────────
+
+    /// tc_scn_dur_constructors_match_centiseconds
+    ///
+    /// Verify that all four constructors produce the expected raw centisecond
+    /// values and that equivalent constructions agree.
+    #[test]
+    fn tc_scn_dur_constructors_match_centiseconds() {
+        // cs() is the canonical constructor
+        assert_eq!(SimDuration::cs(123).0, 123);
+
+        // ms() rounds down to the nearest centisecond (1 cs = 10 ms)
+        assert_eq!(SimDuration::ms(1230).0, 123);
+        assert_eq!(SimDuration::ms(1239).0, 123); // floor behaviour
+
+        // seconds()
+        assert_eq!(SimDuration::seconds(1).0, 100);
+        assert_eq!(SimDuration::seconds(0).0, 0);
+        assert_eq!(SimDuration::seconds(60).0, 6_000);
+
+        // minutes()
+        assert_eq!(SimDuration::minutes(1).0, 6_000);
+        assert_eq!(SimDuration::minutes(0).0, 0);
+
+        // Cross-constructor equivalences
+        assert_eq!(SimDuration::ms(1230), SimDuration::cs(123));
+        assert_eq!(SimDuration::seconds(1), SimDuration::ms(1000));
+        assert_eq!(SimDuration::minutes(1), SimDuration::seconds(60));
+    }
+
+    /// tc_scn_dur_minutes_seconds_consistent
+    ///
+    /// Two minutes expressed in both minutes() and seconds() must agree, and
+    /// the raw value must be 12_000 centiseconds.
+    #[test]
+    fn tc_scn_dur_minutes_seconds_consistent() {
+        let via_minutes = SimDuration::minutes(2);
+        let via_seconds = SimDuration::seconds(120);
+        assert_eq!(via_minutes.0, 12_000);
+        assert_eq!(via_seconds.0, 12_000);
+        assert_eq!(via_minutes, via_seconds);
+    }
+
+    /// tc_scn_dur_zero_is_additive_identity
+    ///
+    /// A SimDuration with 0 cs has a raw value of 0 and is equal to
+    /// SimDuration::cs(0).  Advancing by 0 cs via AdvanceMet is a no-op
+    /// because the while-remaining loop body is never entered.
+    #[test]
+    fn tc_scn_dur_zero_is_additive_identity() {
+        assert_eq!(SimDuration::cs(0).0, 0);
+        assert_eq!(SimDuration::ms(0).0, 0);
+        assert_eq!(SimDuration::seconds(0).0, 0);
+        assert_eq!(SimDuration::minutes(0).0, 0);
+
+        // Confirming no-op: run a scenario with a zero advance and verify
+        // time is unchanged from what was seeded.
+        let sv = StateVector {
+            position: [6_778_000.0, 0.0, 0.0],
+            velocity: [0.0, 7_669.0, 0.0],
+            epoch: Met(500),
+            frame: Frame::EarthInertial,
+        };
+        let scenario = ScenarioBuilder::new("zero-dur-identity")
+            .seed_state()
+            .from_state_vector(sv)
+            .met(Met(500))
+            .refsmmat_identity()
+            .done()
+            .advance(SimDuration::cs(0))
+            .build();
+
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        run_scenario(&scenario, &mut state, &mut hw);
+
+        // SeedState writes MET 500; AdvanceMet(0) must not change it.
+        assert_eq!(state.time, Met(500));
+    }
+
+    // ── B. DskyExpect::any() ─────────────────────────────────────────────────
+
+    /// tc_scn_dsky_any_all_none
+    ///
+    /// DskyExpect::any() returns all-None fields with tol_pct == 0.0.
+    #[test]
+    fn tc_scn_dsky_any_all_none() {
+        let d = DskyExpect::any();
+        assert!(d.verb.is_none(), "verb should be None");
+        assert!(d.noun.is_none(), "noun should be None");
+        assert!(d.r0.is_none(), "r0 should be None");
+        assert!(d.r1.is_none(), "r1 should be None");
+        assert!(d.r2.is_none(), "r2 should be None");
+        assert!(d.flashing.is_none(), "flashing should be None");
+        assert_eq!(d.tol_pct, 0.0, "tol_pct should be 0.0");
+    }
+
+    /// tc_scn_dsky_any_passes_silently
+    ///
+    /// An ExpectDsky(DskyExpect::any()) event on a fresh AgcState must not
+    /// panic — all fields are None so nothing is compared.
+    #[test]
+    fn tc_scn_dsky_any_passes_silently() {
+        let scenario = ScenarioBuilder::new("dsky-any-pass")
+            .expect_dsky(DskyExpect::any())
+            .build();
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        run_scenario(&scenario, &mut state, &mut hw);
+    }
+
+    // ── C. ScenarioBuilder event-emission ────────────────────────────────────
+
+    /// tc_scn_builder_verb_noun_emits_3_keypress
+    ///
+    /// verb_noun(37) emits exactly [Verb, Digit(3), Digit(7)] — 3 events,
+    /// NOT 4 (no ENTR is appended by this helper).
+    #[test]
+    fn tc_scn_builder_verb_noun_emits_3_keypress() {
+        let scenario = ScenarioBuilder::new("vn").verb_noun(37).build();
+        assert_eq!(scenario.events.len(), 3);
+        assert!(matches!(scenario.events[0], Event::KeyPress(Key::Verb)));
+        assert!(matches!(
+            scenario.events[1],
+            Event::KeyPress(Key::Digit(3))
+        ));
+        assert!(matches!(
+            scenario.events[2],
+            Event::KeyPress(Key::Digit(7))
+        ));
+    }
+
+    /// tc_scn_builder_digits_pushes_msb_first
+    ///
+    /// digits(123) emits [Digit(1), Digit(2), Digit(3)] — most-significant
+    /// digit first.
+    #[test]
+    fn tc_scn_builder_digits_pushes_msb_first() {
+        let scenario = ScenarioBuilder::new("digits-msb").digits(123).build();
+        assert_eq!(scenario.events.len(), 3);
+        assert!(matches!(
+            scenario.events[0],
+            Event::KeyPress(Key::Digit(1))
+        ));
+        assert!(matches!(
+            scenario.events[1],
+            Event::KeyPress(Key::Digit(2))
+        ));
+        assert!(matches!(
+            scenario.events[2],
+            Event::KeyPress(Key::Digit(3))
+        ));
+    }
+
+    /// tc_scn_builder_digits_zero_emits_single_zero
+    ///
+    /// digits(0) emits exactly one Digit(0) event.
+    #[test]
+    fn tc_scn_builder_digits_zero_emits_single_zero() {
+        let scenario = ScenarioBuilder::new("digits-zero").digits(0).build();
+        assert_eq!(scenario.events.len(), 1);
+        assert!(matches!(
+            scenario.events[0],
+            Event::KeyPress(Key::Digit(0))
+        ));
+    }
+
+    /// tc_scn_builder_digits_panics_on_overlarge
+    ///
+    /// digits(10_000_000) panics because the implementation asserts n <= 9_999_999.
+    #[test]
+    #[should_panic(expected = "digits() called with n > 9_999_999")]
+    fn tc_scn_builder_digits_panics_on_overlarge() {
+        ScenarioBuilder::new("digits-overlarge").digits(10_000_000);
+    }
+
+    /// tc_scn_builder_v25_load_three_full_sequence
+    ///
+    /// v25_load_three(81, [1, -2, 3]) emits:
+    ///   Verb 2 5 Noun 8 1 Entr + 1 Entr - 2 Entr + 3 Entr
+    /// That is: 7 header events + 3 × (sign + digits + Entr) = 7 + 9 = 16 events.
+    /// Signs: positive values → Plus, negative → Minus.
+    #[test]
+    fn tc_scn_builder_v25_load_three_full_sequence() {
+        let scenario = ScenarioBuilder::new("v25")
+            .v25_load_three(81, [1, -2, 3])
+            .build();
+
+        // Flatten the keypresses
+        let keys: Vec<Key> = scenario
+            .events
+            .iter()
+            .filter_map(|e| {
+                if let Event::KeyPress(k) = *e {
+                    Some(k)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Header: V 2 5 N 8 1 Entr
+        assert_eq!(keys[0], Key::Verb);
+        assert_eq!(keys[1], Key::Digit(2));
+        assert_eq!(keys[2], Key::Digit(5));
+        assert_eq!(keys[3], Key::Noun);
+        assert_eq!(keys[4], Key::Digit(8));
+        assert_eq!(keys[5], Key::Digit(1));
+        assert_eq!(keys[6], Key::Entr);
+
+        // Value 1: + 1 Entr
+        assert_eq!(keys[7], Key::Plus);
+        assert_eq!(keys[8], Key::Digit(1));
+        assert_eq!(keys[9], Key::Entr);
+
+        // Value -2: - 2 Entr
+        assert_eq!(keys[10], Key::Minus);
+        assert_eq!(keys[11], Key::Digit(2));
+        assert_eq!(keys[12], Key::Entr);
+
+        // Value 3: + 3 Entr
+        assert_eq!(keys[13], Key::Plus);
+        assert_eq!(keys[14], Key::Digit(3));
+        assert_eq!(keys[15], Key::Entr);
+
+        assert_eq!(keys.len(), 16);
+    }
+
+    /// tc_scn_builder_v71_p27_block_update_full_sequence
+    ///
+    /// v71_p27_block_update(1, &[(1, 100), (-1, 200)]) emits:
+    ///   Verb 7 1 Entr (addr=1) Entr (count=2) Entr
+    ///   + 100 Entr - 200 Entr
+    #[test]
+    fn tc_scn_builder_v71_p27_block_update_full_sequence() {
+        let scenario = ScenarioBuilder::new("v71")
+            .v71_p27_block_update(1, &[(1, 100), (-1, 200)])
+            .build();
+
+        let keys: Vec<Key> = scenario
+            .events
+            .iter()
+            .filter_map(|e| {
+                if let Event::KeyPress(k) = *e {
+                    Some(k)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // V 7 1 Entr
+        assert_eq!(keys[0], Key::Verb);
+        assert_eq!(keys[1], Key::Digit(7));
+        assert_eq!(keys[2], Key::Digit(1));
+        assert_eq!(keys[3], Key::Entr);
+
+        // address = 1: Digit(1) Entr
+        assert_eq!(keys[4], Key::Digit(1));
+        assert_eq!(keys[5], Key::Entr);
+
+        // count = 2: Digit(2) Entr
+        assert_eq!(keys[6], Key::Digit(2));
+        assert_eq!(keys[7], Key::Entr);
+
+        // word 0: sign=+1 mag=100  → Plus 1 0 0 Entr
+        assert_eq!(keys[8], Key::Plus);
+        assert_eq!(keys[9], Key::Digit(1));
+        assert_eq!(keys[10], Key::Digit(0));
+        assert_eq!(keys[11], Key::Digit(0));
+        assert_eq!(keys[12], Key::Entr);
+
+        // word 1: sign=-1 mag=200  → Minus 2 0 0 Entr
+        assert_eq!(keys[13], Key::Minus);
+        assert_eq!(keys[14], Key::Digit(2));
+        assert_eq!(keys[15], Key::Digit(0));
+        assert_eq!(keys[16], Key::Digit(0));
+        assert_eq!(keys[17], Key::Entr);
+
+        assert_eq!(keys.len(), 18);
+    }
+
+    /// tc_scn_builder_seed_state_done_returns_parent
+    ///
+    /// SeedStateBuilder::done() pushes exactly one SeedState event and
+    /// returns the parent builder, which can continue chaining.
+    #[test]
+    fn tc_scn_builder_seed_state_done_returns_parent() {
+        let scenario = ScenarioBuilder::new("seed-done")
+            .seed_state()
+            .position_km(6778.0, 0.0, 0.0)
+            .velocity_m_s(0.0, 7669.0, 0.0)
+            .met(Met(0))
+            .refsmmat_identity()
+            .done() // returns parent ScenarioBuilder
+            .comment("after seed")
+            .build();
+
+        // Exactly 2 events: SeedState and Comment.
+        assert_eq!(scenario.events.len(), 2);
+        assert!(matches!(scenario.events[0], Event::SeedState(_)));
+        assert!(matches!(scenario.events[1], Event::Comment(_)));
+
+        // Inspect the embedded SeedStateSpec.
+        if let Event::SeedState(spec) = scenario.events[0] {
+            assert_eq!(spec.csm.position[0], 6_778_000.0);
+            assert_eq!(spec.csm.velocity[1], 7_669.0);
+            assert_eq!(spec.met, Met(0));
+            // REFSMMAT identity: diagonal should be 1.0
+            assert_eq!(spec.refsmmat[0][0], 1.0);
+            assert_eq!(spec.refsmmat[1][1], 1.0);
+            assert_eq!(spec.refsmmat[2][2], 1.0);
+        } else {
+            panic!("expected SeedState");
+        }
+    }
+
+    // ── D. Executor: positive paths ───────────────────────────────────────────
+
+    /// tc_scn_run_seed_state_writes_csm_and_met
+    ///
+    /// A SeedState event sets state.csm_state (position/velocity), state.time,
+    /// and state.refsmmat correctly without pumping the executive.
+    #[test]
+    fn tc_scn_run_seed_state_writes_csm_and_met() {
+        let sv = StateVector {
+            position: [6_778_000.0, 1.0, 2.0],
+            velocity: [0.0, 7_669.0, 3.0],
+            epoch: Met(12345),
+            frame: Frame::EarthInertial,
+        };
+        let refsmmat: agc_core::types::Mat3x3 =
+            [[2.0, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 0.0, 4.0]];
+
+        let scenario = ScenarioBuilder::new("seed-writes")
+            .seed_state()
+            .from_state_vector(sv)
+            .met(Met(12345))
+            .refsmmat(refsmmat)
+            .done()
+            .build();
+
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        run_scenario(&scenario, &mut state, &mut hw);
+
+        assert_eq!(state.csm_state.position[0], 6_778_000.0);
+        assert_eq!(state.csm_state.velocity[1], 7_669.0);
+        assert_eq!(state.time, Met(12345));
+        assert_eq!(state.refsmmat[0][0], 2.0);
+        assert_eq!(state.refsmmat[1][1], 3.0);
+        assert_eq!(state.refsmmat[2][2], 4.0);
+    }
+
+    /// tc_scn_run_keypress_advances_one_tick
+    ///
+    /// A KeyPress event calls do_tick which advances state.time by tick_cs (10 cs
+    /// by default).  Starting at MET 0, one KeyPress must leave MET == 10.
+    #[test]
+    fn tc_scn_run_keypress_advances_one_tick() {
+        let scenario = ScenarioBuilder::new("keypress-tick")
+            .key(Key::Pro)
+            .build();
+
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        // time starts at 0
+        assert_eq!(state.time, Met(0));
+        run_scenario(&scenario, &mut state, &mut hw);
+        // default tick_cs = 10
+        assert_eq!(state.time, Met(10));
+    }
+
+    /// tc_scn_run_advance_met_walks_full_duration
+    ///
+    /// advance(SimDuration::seconds(1)) increases state.time by exactly 100 cs.
+    #[test]
+    fn tc_scn_run_advance_met_walks_full_duration() {
+        let scenario = ScenarioBuilder::new("advance-1s")
+            .advance(SimDuration::seconds(1))
+            .build();
+
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        run_scenario(&scenario, &mut state, &mut hw);
+        assert_eq!(state.time, Met(100));
+    }
+
+    /// tc_scn_run_comment_does_not_advance_time
+    ///
+    /// A Comment event emits a log line but leaves state.time unchanged.
+    #[test]
+    fn tc_scn_run_comment_does_not_advance_time() {
+        let scenario = ScenarioBuilder::new("comment-no-time")
+            .comment("progress marker")
+            .build();
+
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        state.time = Met(42);
+        run_scenario(&scenario, &mut state, &mut hw);
+        assert_eq!(state.time, Met(42), "comment must not advance time");
+    }
+
+    // ── E. Executor: expectation passes (silent) ──────────────────────────────
+
+    /// tc_scn_run_expect_major_mode_match_silent
+    ///
+    /// ExpectMajorMode(0) passes silently when major_mode is 0 (default).
+    #[test]
+    fn tc_scn_run_expect_major_mode_match_silent() {
+        let scenario = ScenarioBuilder::new("mm-match")
+            .expect_major_mode(0)
+            .build();
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        // major_mode starts at 0 per AgcState::new()
+        run_scenario(&scenario, &mut state, &mut hw);
+    }
+
+    /// tc_scn_run_expect_alarm_match_silent
+    ///
+    /// ExpectAlarm(0) passes silently when no alarm has been raised (code == 0).
+    #[test]
+    fn tc_scn_run_expect_alarm_match_silent() {
+        let scenario = ScenarioBuilder::new("alarm-match")
+            .expect_alarm(0)
+            .build();
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        // alarm.code starts at 0
+        run_scenario(&scenario, &mut state, &mut hw);
+    }
+
+    /// tc_scn_run_expect_alarm_raised_match_silent
+    ///
+    /// Seed an alarm code via state.alarm.raise(), then assert it passes.
+    #[test]
+    fn tc_scn_run_expect_alarm_raised_match_silent() {
+        let scenario = ScenarioBuilder::new("alarm-raised-match")
+            .expect_alarm(0x0102)
+            .build();
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        state.alarm.raise(0x0102);
+        run_scenario(&scenario, &mut state, &mut hw);
+    }
+
+    /// tc_scn_run_expect_csm_state_close_within_tol
+    ///
+    /// Seed a ground-truth-close state vector: position error 0 m, velocity
+    /// error 0 m/s.  ExpectCsmStateClose with tight tolerances must pass.
+    #[test]
+    fn tc_scn_run_expect_csm_state_close_within_tol() {
+        let gt = StateVector {
+            position: [6_778_000.0, 0.0, 0.0],
+            velocity: [0.0, 7_669.0, 0.0],
+            epoch: Met(0),
+            frame: Frame::EarthInertial,
+        };
+        let scenario = ScenarioBuilder::new("csm-close")
+            .expect_csm_state_close(gt, 1.0, 0.01)
+            .build();
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        state.csm_state = gt; // exact match
+        run_scenario(&scenario, &mut state, &mut hw);
+    }
+
+    // ── F. Executor: expectation failures ────────────────────────────────────
+
+    /// tc_scn_run_expect_major_mode_mismatch_panics
+    ///
+    /// ExpectMajorMode fails when the actual major_mode != the expected value.
+    /// The panic message must contain "major_mode mismatch".
+    #[test]
+    #[should_panic(expected = "major_mode mismatch")]
+    fn tc_scn_run_expect_major_mode_mismatch_panics() {
+        let scenario = ScenarioBuilder::new("mm-mismatch")
+            .expect_major_mode(40) // state default is 0
+            .build();
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        run_scenario(&scenario, &mut state, &mut hw);
+    }
+
+    /// tc_scn_run_expect_dsky_verb_mismatch_panics
+    ///
+    /// ExpectDsky with a non-matching verb panics with "verb mismatch".
+    #[test]
+    #[should_panic(expected = "verb mismatch")]
+    fn tc_scn_run_expect_dsky_mismatch_panics() {
+        let d = DskyExpect {
+            verb: Some(37),
+            noun: None,
+            r0: None,
+            r1: None,
+            r2: None,
+            flashing: None,
+            tol_pct: 0.0,
+        };
+        let scenario = ScenarioBuilder::new("dsky-verb-mismatch")
+            .expect_dsky(d)
+            .build();
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        // state.dsky.verb defaults to 0, not 37
+        run_scenario(&scenario, &mut state, &mut hw);
+    }
+
+    /// tc_scn_run_expect_csm_position_out_of_tol_panics
+    ///
+    /// ExpectCsmStateClose panics when position error exceeds the tolerance.
+    /// The panic message must contain "position error".
+    #[test]
+    #[should_panic(expected = "position error")]
+    fn tc_scn_run_expect_csm_position_out_of_tol_panics() {
+        let gt = StateVector {
+            position: [6_778_000.0, 0.0, 0.0],
+            velocity: [0.0, 7_669.0, 0.0],
+            epoch: Met(0),
+            frame: Frame::EarthInertial,
+        };
+        // State has position 10 km off in X
+        let scenario = ScenarioBuilder::new("csm-pos-fail")
+            .expect_csm_state_close(gt, 1.0, 0.1) // 1 m tolerance
+            .build();
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        state.csm_state = StateVector {
+            position: [6_778_000.0 + 10_000.0, 0.0, 0.0], // 10 km off
+            ..gt
+        };
+        run_scenario(&scenario, &mut state, &mut hw);
+    }
+
+    /// tc_scn_run_expect_alarm_mismatch_panics
+    ///
+    /// ExpectAlarm fails with "alarm code mismatch" when codes differ.
+    #[test]
+    #[should_panic(expected = "alarm code mismatch")]
+    fn tc_scn_run_expect_alarm_mismatch_panics() {
+        let scenario = ScenarioBuilder::new("alarm-mismatch")
+            .expect_alarm(0x1234) // state has code 0
+            .build();
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        run_scenario(&scenario, &mut state, &mut hw);
+    }
+
+    /// tc_scn_run_expect_dsky_nan_register_panics
+    ///
+    /// ExpectDsky with a NaN stored in the DSKY register must panic with a
+    /// message containing "NaN".
+    #[test]
+    #[should_panic(expected = "NaN")]
+    fn tc_scn_run_expect_dsky_nan_register_panics() {
+        let d = DskyExpect {
+            verb: None,
+            noun: None,
+            r0: Some(1.0), // we expect 1.0, but state has NaN
+            r1: None,
+            r2: None,
+            flashing: None,
+            tol_pct: 0.0, // exact comparison → NaN triggers the error branch
+        };
+        let scenario = ScenarioBuilder::new("dsky-nan")
+            .expect_dsky(d)
+            .build();
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        // Inject NaN into R0 — the want is 1.0 but got is NaN, triggering
+        // the "got.is_nan()" branch in dsky_r_matches.
+        state.dsky.r[0] = f32::NAN;
+        run_scenario(&scenario, &mut state, &mut hw);
+    }
+
+    // ── G. Deferred-variant stubs ─────────────────────────────────────────────
+
+    /// tc_scn_run_advance_coast_does_not_panic
+    ///
+    /// AdvanceCoast is a no-op stub until MS-T2.  A scenario with one
+    /// AdvanceCoast must return normally without advancing time.
+    #[test]
+    fn tc_scn_run_advance_coast_does_not_panic() {
+        let scenario = ScenarioBuilder::new("coast-stub")
+            .advance_coast(SimDuration::seconds(5))
+            .build();
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        let before = state.time;
+        run_scenario(&scenario, &mut state, &mut hw);
+        // Stub must NOT advance time.
+        assert_eq!(state.time, before, "AdvanceCoast stub must not advance time");
+    }
+
+    /// tc_scn_run_optics_sighting_does_not_panic
+    ///
+    /// OpticsSighting is a stub that logs and continues — must not panic.
+    #[test]
+    fn tc_scn_run_optics_sighting_does_not_panic() {
+        let scenario = ScenarioBuilder::new("optics-stub")
+            .optics_sighting(42)
+            .build();
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        run_scenario(&scenario, &mut state, &mut hw);
+    }
+
+    /// tc_scn_run_landmark_sighting_does_not_panic
+    ///
+    /// LandmarkSighting is a stub — must not panic regardless of table variant.
+    #[test]
+    fn tc_scn_run_landmark_sighting_does_not_panic() {
+        let scenario_earth = ScenarioBuilder::new("landmark-earth")
+            .landmark_sighting(LandmarkTable::Earth, 3)
+            .build();
+        let scenario_moon = ScenarioBuilder::new("landmark-moon")
+            .landmark_sighting(LandmarkTable::Moon, 7)
+            .build();
+
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        run_scenario(&scenario_earth, &mut state, &mut hw);
+        run_scenario(&scenario_moon, &mut state, &mut hw);
+    }
+
+    // ── H. Guard: tick_cs > DAP_PERIOD_CS ────────────────────────────────────
+
+    /// tc_scn_run_overlarge_tick_cs_panics
+    ///
+    /// run_scenario panics when tick_cs exceeds DAP_PERIOD_CS (10).  The
+    /// panic message must contain "DAP_PERIOD_CS".
+    #[test]
+    #[should_panic(expected = "DAP_PERIOD_CS")]
+    fn tc_scn_run_overlarge_tick_cs_panics() {
+        let scenario = ScenarioBuilder::new("bad-tick")
+            .tick_cs(11) // DAP_PERIOD_CS == 10; 11 is over the limit
+            .build();
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        run_scenario(&scenario, &mut state, &mut hw);
+    }
+}
