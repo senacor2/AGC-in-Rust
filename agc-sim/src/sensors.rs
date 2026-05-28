@@ -141,3 +141,149 @@ fn lunar_landmark_inertial(entry: &LunarLandmarkEntry) -> Vec3 {
     let sin_lon = entry.lon_rad.sin();
     [r * cos_lat * cos_lon, r * cos_lat * sin_lon, r * sin_lat]
 }
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agc_core::math::linalg::mxv;
+    use agc_core::navigation::landmarks::R_MOON_M;
+    use agc_core::navigation::star_catalog::STAR_CATALOG;
+    use agc_core::types::{Mat3x3, Vec3};
+    use crate::physics::Attitude;
+    use crate::scenario::LandmarkTable;
+
+    const IDENTITY_REFSMMAT: Mat3x3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+
+    fn default_attitude() -> Attitude {
+        Attitude {
+            q: [1.0, 0.0, 0.0, 0.0],
+            commanded_q: [1.0, 0.0, 0.0, 0.0],
+            slew_tau_s: 5.0,
+        }
+    }
+
+    /// tc_sens_star_los_identity_refsmmat
+    ///
+    /// With identity REFSMMAT and identity attitude, `star_los_in_platform`
+    /// for star 1 (Alpheratz) must return the catalog inertial unit vector
+    /// unchanged, since multiplying by the identity matrix is a no-op.
+    #[test]
+    fn tc_sens_star_los_identity_refsmmat() {
+        let attitude = default_attitude();
+        let star_dir = STAR_CATALOG[0].direction; // star 1 = Alpheratz
+        let los = star_los_in_platform(1, &attitude, &IDENTITY_REFSMMAT);
+        for i in 0..3 {
+            assert!(
+                (los[i] - star_dir[i]).abs() < 1e-14,
+                "component {i}: expected {}, got {}",
+                star_dir[i],
+                los[i]
+            );
+        }
+    }
+
+    /// tc_sens_star_los_rotated_refsmmat
+    ///
+    /// With a 90°-about-X REFSMMAT, `star_los_in_platform` returns the
+    /// catalog inertial vector rotated by that matrix.  We verify each
+    /// component against `mxv(refsmmat, star_dir)` computed independently.
+    #[test]
+    fn tc_sens_star_los_rotated_refsmmat() {
+        // 90° rotation about X maps Y→Z and Z→-Y.
+        let refsmmat_90x: Mat3x3 = [
+            [1.0,  0.0,  0.0],
+            [0.0,  0.0,  1.0],
+            [0.0, -1.0,  0.0],
+        ];
+        let attitude = default_attitude();
+        // Use star 1 (Alpheratz) as the test vector.
+        let star_dir = STAR_CATALOG[0].direction;
+
+        // Manually compute expected result: M · star_dir.
+        let expected = mxv(refsmmat_90x, star_dir);
+        let got = star_los_in_platform(1, &attitude, &refsmmat_90x);
+
+        for i in 0..3 {
+            assert!(
+                (got[i] - expected[i]).abs() < 1e-9,
+                "component {i}: expected {}, got {}",
+                expected[i],
+                got[i]
+            );
+        }
+    }
+
+    /// tc_sens_landmark_earth_returns_unit_vector
+    ///
+    /// For Earth landmark 3 (a surface landmark at roughly 0° lat), a CSM at
+    /// +X (7000 km altitude) with identity REFSMMAT and GHA=0, the LOS in
+    /// platform must have L2 norm == 1.0 within 1e-12.  The rough direction
+    /// must point away from +X (i.e. the X component of the LOS must be negative
+    /// since the CSM is at large +X and the landmark is near the equator at the
+    /// center).
+    #[test]
+    fn tc_sens_landmark_earth_returns_unit_vector() {
+        let attitude = default_attitude();
+        // CSM at 7000 km on +X axis in ECI (above equator).
+        let csm_pos: Vec3 = [7_000_000.0, 0.0, 0.0];
+        let los = landmark_los_in_platform(
+            LandmarkTable::Earth,
+            3,
+            csm_pos,
+            &attitude,
+            &IDENTITY_REFSMMAT,
+            0.0, // GHA = 0
+        );
+        let norm = (los[0] * los[0] + los[1] * los[1] + los[2] * los[2]).sqrt();
+        assert!(
+            (norm - 1.0).abs() < 1e-12,
+            "LOS must be unit vector; norm = {norm}"
+        );
+        // CSM is far along +X from Earth center; most landmarks are closer to
+        // origin, so los[0] should be negative (pointing back toward Earth).
+        assert!(
+            los[0] < 0.0,
+            "LOS X component should be negative (landmark behind CSM in +X direction), got {}",
+            los[0]
+        );
+    }
+
+    /// tc_sens_landmark_moon_returns_unit_vector
+    ///
+    /// For Mount Marilyn (lunar landmark index 5, near +40° lon), a CSM at
+    /// +Y from Moon center at LLO altitude (1_837_400 m), identity REFSMMAT:
+    /// the LOS must be a unit vector (norm == 1.0 within 1e-12).
+    /// Since the CSM is along +Y and Mount Marilyn is near +40° longitude
+    /// (roughly in the X-Y plane, positive X and positive Y), the LOS
+    /// should have a negative Y component (pointing from +Y CSM back toward
+    /// the landmark which is at smaller Y).
+    #[test]
+    fn tc_sens_landmark_moon_returns_unit_vector() {
+        let attitude = default_attitude();
+        // CSM at 100 km LLO on +Y axis from Moon center.
+        let csm_pos: Vec3 = [0.0, R_MOON_M + 100_000.0, 0.0];
+        let los = landmark_los_in_platform(
+            LandmarkTable::Moon,
+            5, // Mount Marilyn
+            csm_pos,
+            &attitude,
+            &IDENTITY_REFSMMAT,
+            0.0, // GHA unused for Moon
+        );
+        let norm = (los[0] * los[0] + los[1] * los[1] + los[2] * los[2]).sqrt();
+        assert!(
+            (norm - 1.0).abs() < 1e-12,
+            "LOS to Moon landmark must be unit vector; norm = {norm}"
+        );
+        // Mount Marilyn is at ~40° east longitude, so its inertial Cartesian has
+        // x = R·cos(lat)·cos(lon) ≈ positive, y = R·cos(lat)·sin(lon) ≈ positive.
+        // CSM is at a larger +Y, so los[1] (Y component) should be negative.
+        assert!(
+            los[1] < 0.0,
+            "LOS Y component should be negative (CSM at +Y, landmark at smaller Y), got {}",
+            los[1]
+        );
+    }
+}

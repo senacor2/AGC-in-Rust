@@ -513,6 +513,150 @@ mod tests {
         );
     }
 
+    // ── MS-T3: Attitude and quaternion helpers ────────
+
+    /// tc_phys_quat_normalise_unit_norm
+    ///
+    /// `quat_normalise([2.0, 0.0, 0.0, 0.0])` must return `[1.0, 0.0, 0.0, 0.0]`
+    /// and the L2 norm of the result must be 1.0 within 1e-15.
+    #[test]
+    fn tc_phys_quat_normalise_unit_norm() {
+        let q = quat_normalise([2.0, 0.0, 0.0, 0.0]);
+        assert_eq!(q, [1.0, 0.0, 0.0, 0.0]);
+        let norm = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+        assert!(
+            (norm - 1.0).abs() < 1e-15,
+            "L2 norm of normalised quaternion must be 1.0, got {norm}"
+        );
+    }
+
+    /// tc_phys_quat_normalise_negative_w_canonical
+    ///
+    /// `quat_normalise([-1.0, 0.0, 0.0, 0.0])` normalises to magnitude 1.0.
+    /// The implementation does NOT impose a canonical sign flip (w >= 0);
+    /// it divides uniformly by the norm, preserving the negative w.
+    /// This test pins the actual implementation behaviour.
+    #[test]
+    fn tc_phys_quat_normalise_negative_w_canonical() {
+        let q = quat_normalise([-1.0, 0.0, 0.0, 0.0]);
+        // The implementation divides by the magnitude; no sign canonicalisation.
+        assert_eq!(q, [-1.0, 0.0, 0.0, 0.0]);
+        let norm = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+        assert!(
+            (norm - 1.0).abs() < 1e-15,
+            "L2 norm must be 1.0 regardless of sign, got {norm}"
+        );
+    }
+
+    /// tc_phys_quat_to_mat3x3_identity
+    ///
+    /// Identity quaternion `[1, 0, 0, 0]` must produce the 3×3 identity matrix.
+    #[test]
+    fn tc_phys_quat_to_mat3x3_identity() {
+        let m = quat_to_mat3x3([1.0, 0.0, 0.0, 0.0]);
+        // Diagonal must be 1.0, off-diagonal must be 0.0.
+        for i in 0..3 {
+            for j in 0..3 {
+                let expected = if i == j { 1.0 } else { 0.0 };
+                assert!(
+                    (m[i][j] - expected).abs() < 1e-15,
+                    "identity quat → mat: m[{i}][{j}] should be {expected}, got {}",
+                    m[i][j]
+                );
+            }
+        }
+    }
+
+    /// tc_phys_quat_to_mat3x3_90deg_x_rotation
+    ///
+    /// Quaternion for 90° about +X: `[cos(45°), sin(45°), 0, 0]`.
+    /// The rotation matrix `M` satisfies `v_body = M · v_inertial`.
+    /// Applying M to `[0, 1, 0]` (inertial +Y) must yield `[0, 0, 1]`
+    /// (body +Z) under the active rotation convention used by the implementation.
+    #[test]
+    fn tc_phys_quat_to_mat3x3_90deg_x_rotation() {
+        let angle = core::f64::consts::FRAC_PI_4; // 45° = half of 90°
+        let q = [angle.cos(), angle.sin(), 0.0, 0.0];
+        let m = quat_to_mat3x3(q);
+        // Rotate inertial +Y through the matrix.
+        let v_in = [0.0_f64, 1.0, 0.0];
+        let v_out = [
+            m[0][0] * v_in[0] + m[0][1] * v_in[1] + m[0][2] * v_in[2],
+            m[1][0] * v_in[0] + m[1][1] * v_in[1] + m[1][2] * v_in[2],
+            m[2][0] * v_in[0] + m[2][1] * v_in[1] + m[2][2] * v_in[2],
+        ];
+        // With the scalar-first Hamilton convention and M = R (active rotation),
+        // a 90° rotation about +X maps +Y → +Z.
+        assert!(
+            (v_out[0]).abs() < 1e-14,
+            "X component should be ~0, got {}",
+            v_out[0]
+        );
+        assert!(
+            (v_out[1]).abs() < 1e-14,
+            "Y component should be ~0, got {}",
+            v_out[1]
+        );
+        assert!(
+            (v_out[2] - 1.0).abs() < 1e-14,
+            "Z component should be ~1, got {}",
+            v_out[2]
+        );
+    }
+
+    /// tc_phys_quat_slerp_endpoints_unchanged
+    ///
+    /// `slerp(q1, q2, 0.0) == q1` and `slerp(q1, q2, 1.0) == q2`
+    /// within 1e-12 per component.
+    #[test]
+    fn tc_phys_quat_slerp_endpoints_unchanged() {
+        let q1 = [1.0_f64, 0.0, 0.0, 0.0];
+        let angle = core::f64::consts::FRAC_PI_4;
+        let q2 = [angle.cos(), angle.sin(), 0.0, 0.0];
+
+        let at_0 = quat_slerp(q1, q2, 0.0);
+        let at_1 = quat_slerp(q1, q2, 1.0);
+
+        for i in 0..4 {
+            assert!(
+                (at_0[i] - q1[i]).abs() < 1e-12,
+                "slerp(t=0) component {i}: expected {}, got {}",
+                q1[i],
+                at_0[i]
+            );
+        }
+        for i in 0..4 {
+            assert!(
+                (at_1[i] - q2[i]).abs() < 1e-12,
+                "slerp(t=1) component {i}: expected {}, got {}",
+                q2[i],
+                at_1[i]
+            );
+        }
+    }
+
+    /// tc_phys_advance_attitude_zero_tau_snaps_to_commanded
+    ///
+    /// `Attitude { q: identity, commanded_q: [0,1,0,0], slew_tau_s: 0.0 }`
+    /// after `advance_attitude(0.1)` must have `q == commanded_q` exactly.
+    #[test]
+    fn tc_phys_advance_attitude_zero_tau_snaps_to_commanded() {
+        let commanded = [0.0_f64, 1.0, 0.0, 0.0];
+        let mut sc = Spacecraft {
+            attitude: Attitude {
+                q: [1.0, 0.0, 0.0, 0.0],
+                commanded_q: commanded,
+                slew_tau_s: 0.0,
+            },
+            ..Spacecraft::new()
+        };
+        sc.advance_attitude(0.1);
+        assert_eq!(
+            sc.attitude.q, commanded,
+            "with slew_tau_s=0.0, attitude must snap instantly to commanded_q"
+        );
+    }
+
     /// TC-PHYS-7: MS-T2 exit criterion (#25, amended). Pins the
     /// **physics-model gap** between `advance_ground_truth` (RK4 Cowell
     /// with Earth J2 + Moon third-body) and a pure two-body `kepler_step`

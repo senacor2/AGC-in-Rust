@@ -101,3 +101,113 @@ pub const LUNAR_LANDMARK_TABLE: [LunarLandmarkEntry; 9] = [
     // Source: IAU/USGS Lunar Gazetteer: +23.70° lat, −47.50° lon.
     LunarLandmarkEntry::from_deg("Aristarchus", 23.70, -47.50, 0.0),
 ];
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// tc_lm_table_length_is_9
+    ///
+    /// The table must contain 9 entries: index 0 (unused sentinel) plus
+    /// indices 1..=8 (the eight real lunar landmarks).
+    #[test]
+    fn tc_lm_table_length_is_9() {
+        assert_eq!(LUNAR_LANDMARK_TABLE.len(), 9);
+    }
+
+    /// tc_lm_index_zero_is_empty
+    ///
+    /// Index 0 is the unused DSKY sentinel: name must be empty and all
+    /// coordinates must be 0.0.
+    #[test]
+    fn tc_lm_index_zero_is_empty() {
+        let entry = &LUNAR_LANDMARK_TABLE[0];
+        assert!(
+            entry.name.is_empty(),
+            "index 0 name should be empty, got {:?}",
+            entry.name
+        );
+        assert_eq!(entry.lat_rad, 0.0, "index 0 lat_rad should be 0.0");
+        assert_eq!(entry.lon_rad, 0.0, "index 0 lon_rad should be 0.0");
+        assert_eq!(entry.alt_m, 0.0, "index 0 alt_m should be 0.0");
+    }
+
+    /// tc_lm_named_entries_have_finite_coords
+    ///
+    /// For indices 1..=8, all `lat_rad`, `lon_rad`, and `alt_m` must be finite,
+    /// `|lat_rad| <= PI/2`, and `|lon_rad| <= PI`.
+    #[test]
+    fn tc_lm_named_entries_have_finite_coords() {
+        for i in 1..=8usize {
+            let entry = &LUNAR_LANDMARK_TABLE[i];
+            assert!(
+                entry.lat_rad.is_finite(),
+                "index {i} ({}) lat_rad is not finite",
+                entry.name
+            );
+            assert!(
+                entry.lon_rad.is_finite(),
+                "index {i} ({}) lon_rad is not finite",
+                entry.name
+            );
+            assert!(
+                entry.alt_m.is_finite(),
+                "index {i} ({}) alt_m is not finite",
+                entry.name
+            );
+            assert!(
+                entry.lat_rad.abs() <= PI / 2.0,
+                "index {i} ({}) lat_rad = {} exceeds PI/2",
+                entry.name,
+                entry.lat_rad
+            );
+            assert!(
+                entry.lon_rad.abs() <= PI,
+                "index {i} ({}) lon_rad = {} exceeds PI",
+                entry.name,
+                entry.lon_rad
+            );
+        }
+    }
+
+    /// tc_lm_specific_landmarks_within_expected_regions
+    ///
+    /// Regression pins for well-known landmarks.  Bounds are intentionally loose
+    /// (~3° slack) to catch gross errors (wrong hemisphere, inverted sign) while
+    /// allowing minor source discrepancies.
+    ///
+    /// - Tycho (index 1):       lat_rad ∈ (-0.78, -0.74)  ≈ -45° to -42°
+    /// - Copernicus (index 2):  lon_rad ∈ (-0.36, -0.34)  ≈ -21° to -19°
+    /// - Mount Marilyn (index 5): lat_rad ∈ (0.02, 0.03)  ≈ +1.1° to +1.7°
+    #[test]
+    fn tc_lm_specific_landmarks_within_expected_regions() {
+        // Tycho: expected ≈ -43.31° → -0.7558 rad
+        let tycho = &LUNAR_LANDMARK_TABLE[1];
+        assert_eq!(tycho.name, "Tycho");
+        assert!(
+            tycho.lat_rad > -0.78 && tycho.lat_rad < -0.74,
+            "Tycho lat_rad = {} not in (-0.78, -0.74)",
+            tycho.lat_rad
+        );
+
+        // Copernicus: expected ≈ -20.08° → -0.3504 rad
+        let copernicus = &LUNAR_LANDMARK_TABLE[2];
+        assert_eq!(copernicus.name, "Copernicus");
+        assert!(
+            copernicus.lon_rad > -0.36 && copernicus.lon_rad < -0.34,
+            "Copernicus lon_rad = {} not in (-0.36, -0.34)",
+            copernicus.lon_rad
+        );
+
+        // Mount Marilyn: expected ≈ +1.23° → 0.02147 rad
+        let marilyn = &LUNAR_LANDMARK_TABLE[5];
+        assert_eq!(marilyn.name, "Mount Marilyn");
+        assert!(
+            marilyn.lat_rad > 0.02 && marilyn.lat_rad < 0.03,
+            "Mount Marilyn lat_rad = {} not in (0.02, 0.03)",
+            marilyn.lat_rad
+        );
+    }
+}
