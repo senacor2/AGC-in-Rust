@@ -344,10 +344,7 @@ fn sync_display(state: &mut crate::AgcState) {
             state.dsky.r[2] = 0.0;
         }
         P27SingleData {
-            address,
-            sign,
-            buf,
-            ..
+            address, sign, buf, ..
         } => {
             state.dsky.verb = 72;
             state.dsky.noun = 0;
@@ -2844,7 +2841,14 @@ mod tests {
         let mut state = AgcState::new();
 
         feed(&mut state, &[Key::Verb, d(7), d(0), Key::Entr]);
-        assert!(matches!(state.vn.phase, VnPhase::P27Time { verb: 70, reg_index: 0, .. }));
+        assert!(matches!(
+            state.vn.phase,
+            VnPhase::P27Time {
+                verb: 70,
+                reg_index: 0,
+                ..
+            }
+        ));
         assert_eq!(state.dsky.prog, 27, "V70 must light the P27 major-mode");
 
         feed_key(&mut state, Key::Plus);
@@ -3083,7 +3087,10 @@ mod tests {
 
         feed_number(&mut state, 23);
         feed_key(&mut state, Key::Entr);
-        assert!(matches!(state.vn.phase, VnPhase::P27SingleData { address: 23, .. }));
+        assert!(matches!(
+            state.vn.phase,
+            VnPhase::P27SingleData { address: 23, .. }
+        ));
 
         feed_key(&mut state, Key::Minus);
         feed_number(&mut state, 456);

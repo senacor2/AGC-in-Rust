@@ -110,7 +110,7 @@ mod tests {
     fn tc_upl_3_unknown_and_zero() {
         assert_eq!(key_from_word(0), None);
         assert_eq!(key_from_word(0xFFE0), None); // low 5 bits = 0
-        // 0..31 codes not in KEYTEMP1: 10..15, 19..24, 29.
+                                                 // 0..31 codes not in KEYTEMP1: 10..15, 19..24, 29.
         assert_eq!(key_from_word(10), None);
         assert_eq!(key_from_word(15), None);
         assert_eq!(key_from_word(29), None);
@@ -176,12 +176,18 @@ mod tests {
         // One word arrives → lamp on.
         let mut uplink = uplink_of(&[17]); // VERB
         poll_uplink(&mut state, &mut uplink);
-        assert!(state.dsky.uplink_activity, "lamp must light after a drained word");
+        assert!(
+            state.dsky.uplink_activity,
+            "lamp must light after a drained word"
+        );
 
         // Next quiet poll → lamp off.
         let mut uplink = uplink_of(&[]);
         poll_uplink(&mut state, &mut uplink);
-        assert!(!state.dsky.uplink_activity, "lamp must clear on a quiet poll");
+        assert!(
+            !state.dsky.uplink_activity,
+            "lamp must clear on a quiet poll"
+        );
     }
 
     /// TC-UPL-8: a keystroke arriving while the V/N is locked in OprErr

@@ -38,9 +38,8 @@
 //! and `MoonInertial`.  It is called from `propagate_coast` (the RK4 coast
 //! integrator) but is **not** called from `average_g_step` (the SERVICER's
 //! powered-flight integrator).  As a result, SOI crossing during powered arcs
-//! is not detected.  The `AdvanceCoast` event in this module is a stub today
-//! (see the log message in its dispatch arm).  A follow-up issue has been filed
-//! to wire `soi_check` into the `AdvanceCoast` executor once MS-T2 lands.
+//! is not detected.  Wiring `soi_check` into the SERVICER integration path is
+//! tracked in GH issue #51.
 //!
 //! ## 3. REFSMMAT propagation after P52
 //!
@@ -52,10 +51,12 @@
 //! current implementation.**
 
 use agc_core::navigation::StateVector;
+use agc_core::services::average_g::start_servicer;
 use agc_core::services::v_n::{feed_key, Key};
 use agc_core::types::{Mat3x3, Met};
 use agc_core::AgcState;
 
+use crate::physics::{advance_ground_truth, GravityBody, Spacecraft};
 use crate::runtime::{
     pump_engine_to_hw, pump_pipa_into_state, pump_rcs_to_hw, DapPump, T4Pump, WaitlistPump,
 };
@@ -169,11 +170,35 @@ pub enum Event {
     /// at `Scenario::tick_cs` granularity per slice.
     AdvanceMet(SimDuration),
 
-    /// Advance mission time by `dur` without SERVICER integration.
+    /// Advance mission time by `dur` as a coast phase.
     ///
-    /// **Stub until MS-T2.** Logs a single line and continues; time is not
-    /// advanced (the intent is to add `propagate_coast` integration later).
+    /// Runs a two-tier loop: outer steps at `Scenario::coast_step_cs`
+    /// granularity each advance the ground-truth state vector (if seeded)
+    /// via [`advance_ground_truth`] and run one SERVICER cycle's worth of
+    /// inner ticks; remaining time within each outer step advances
+    /// `state.time` and the waitlist countdown in a single bump.
     AdvanceCoast(SimDuration),
+
+    /// Seed the executor-held ground-truth state vector.
+    ///
+    /// Sets the reference trajectory used by
+    /// [`Event::ExpectAgcMatchesGroundTruth`] and advanced by
+    /// [`Event::AdvanceCoast`].  Also sets `spacecraft.current_body` to
+    /// match the frame of the supplied state vector.
+    SeedGroundTruth(StateVector),
+
+    /// Assert that the AGC's CSM state vector is close to the ground truth.
+    ///
+    /// Compares `state.csm_state` against the executor-held ground-truth
+    /// state vector using L2 norms on position and velocity.  Panics if
+    /// the ground truth has not been seeded first, or if either error
+    /// exceeds the specified tolerance.
+    ExpectAgcMatchesGroundTruth {
+        /// Maximum allowed L2 position error (metres).
+        pos_tol_m: f64,
+        /// Maximum allowed L2 velocity error (m/s).
+        vel_tol_m_s: f64,
+    },
 
     /// Deliver a single DSKY keypress to the V/N processor, then tick once.
     KeyPress(Key),
@@ -221,6 +246,15 @@ pub struct Scenario {
     ///
     /// Must satisfy `tick_cs <= DAP_PERIOD_CS` — enforced by [`run_scenario`].
     pub tick_cs: u32,
+    /// Outer-loop step size for [`Event::AdvanceCoast`] in centiseconds.
+    ///
+    /// Each outer step advances the ground-truth state vector by
+    /// `coast_step_cs / 100` seconds, then runs one SERVICER cycle's worth
+    /// of inner ticks (200 cs), then bumps `state.time` for the remaining
+    /// `coast_step_cs - 200` cs in a single step.
+    ///
+    /// Default: 6000 cs (60 s).
+    pub coast_step_cs: u32,
 }
 
 // ── SeedStateBuilder ──────────────────────────────────────────────────────────
@@ -307,6 +341,7 @@ pub struct ScenarioBuilder {
     name: &'static str,
     events: Vec<Event>,
     tick_cs: u32,
+    coast_step_cs: u32,
 }
 
 impl ScenarioBuilder {
@@ -315,7 +350,8 @@ impl ScenarioBuilder {
         Self {
             name,
             events: Vec::new(),
-            tick_cs: 10, // default: 100 ms per tick
+            tick_cs: 10,         // default: 100 ms per tick
+            coast_step_cs: 6000, // default: 60 s outer coast step
         }
     }
 
@@ -325,6 +361,15 @@ impl ScenarioBuilder {
     /// time to allow zero-cost const scenarios.
     pub fn tick_cs(mut self, cs: u32) -> Self {
         self.tick_cs = cs;
+        self
+    }
+
+    /// Override the outer-loop step size for [`Event::AdvanceCoast`].
+    ///
+    /// Default is 6000 cs (60 s). Values smaller than 200 cs are not useful
+    /// because one SERVICER cycle already takes 200 cs.
+    pub fn coast_step_cs(mut self, cs: u32) -> Self {
+        self.coast_step_cs = cs;
         self
     }
 
@@ -457,9 +502,29 @@ impl ScenarioBuilder {
         self
     }
 
-    /// Advance mission time as a coast phase (stub until MS-T2).
+    /// Advance mission time as a coast phase.
     pub fn advance_coast(mut self, dur: SimDuration) -> Self {
         self.events.push(Event::AdvanceCoast(dur));
+        self
+    }
+
+    /// Seed the executor-held ground-truth state vector.
+    ///
+    /// Pushes a [`Event::SeedGroundTruth`] event. Also sets
+    /// `spacecraft.current_body` at run time to match the frame of `sv`.
+    pub fn seed_ground_truth(mut self, sv: StateVector) -> Self {
+        self.events.push(Event::SeedGroundTruth(sv));
+        self
+    }
+
+    /// Assert the AGC's CSM state vector is close to the ground truth.
+    ///
+    /// Pushes an [`Event::ExpectAgcMatchesGroundTruth`] event.
+    pub fn expect_agc_matches_ground_truth(mut self, pos_tol_m: f64, vel_tol_m_s: f64) -> Self {
+        self.events.push(Event::ExpectAgcMatchesGroundTruth {
+            pos_tol_m,
+            vel_tol_m_s,
+        });
         self
     }
 
@@ -526,6 +591,7 @@ impl ScenarioBuilder {
             name: self.name,
             events: self.events,
             tick_cs: self.tick_cs,
+            coast_step_cs: self.coast_step_cs,
         }
     }
 }
@@ -596,6 +662,17 @@ fn dsky_r_matches(got: f32, want: f32, tol_pct: f32) -> Result<(), String> {
     Ok(())
 }
 
+// ── RunContext ────────────────────────────────────────────────────────────────
+
+/// Private per-run context holding mutable executor state.
+struct RunContext {
+    /// Executor-held ground-truth state vector, initialised by
+    /// [`Event::SeedGroundTruth`] and advanced each outer coast step.
+    ground_truth: Option<StateVector>,
+    /// Spacecraft model used for ground-truth conic propagation.
+    spacecraft: Spacecraft,
+}
+
 // ── run_scenario ──────────────────────────────────────────────────────────────
 
 /// Execute `scenario` against the provided AGC state and simulated hardware.
@@ -605,11 +682,14 @@ fn dsky_r_matches(got: f32, want: f32, tol_pct: f32) -> Result<(), String> {
 /// Panics if:
 /// - `scenario.tick_cs > DAP_PERIOD_CS` (timing invariant violated).
 /// - Any `Expect*` event's assertion fails.
+/// - [`Event::ExpectAgcMatchesGroundTruth`] is used without a prior
+///   [`Event::SeedGroundTruth`].
 ///
 /// The panic message for failed assertions uses the canonical failure-message
 /// format documented on [`Scenario`].
 pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardware) {
     use agc_core::control::dap::DAP_PERIOD_CS;
+    use agc_core::navigation::state_vector::Frame;
 
     assert!(
         scenario.tick_cs <= DAP_PERIOD_CS as u32,
@@ -622,8 +702,13 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
     let mut waitlist = WaitlistPump::new();
     let mut dap = DapPump::new();
     let mut t4 = T4Pump::new();
+    let mut ctx = RunContext {
+        ground_truth: None,
+        spacecraft: Spacecraft::new(),
+    };
 
     let tick_cs = scenario.tick_cs;
+    let coast_step_cs = scenario.coast_step_cs;
     let name = scenario.name;
 
     for (idx, event) in scenario.events.iter().enumerate() {
@@ -661,14 +746,106 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
 
             // ── AdvanceCoast ──────────────────────────────────────────────────
             Event::AdvanceCoast(dur) => {
-                // MS-T2 will wire propagate_coast / soi_check here.
-                // Investigation §2 above explains why this is a stub today:
-                // soi_check is implemented in navigation::integration but is not
-                // yet called from the scenario executor.
+                // Two-tier coast loop.
+                //
+                // Outer loop at coast_step_cs granularity (default 60 s). Each
+                // outer iteration:
+                //   1. Advance ground_truth (if Some) by outer_dt_s seconds via
+                //      advance_ground_truth.
+                //   2. Run coast-mode inner ticks for the full outer step so the
+                //      SERVICER fires every 200 cs throughout. Per inner tick
+                //      only the coast-mode pumps run; hw.tick, DAP, and
+                //      engine/RCS mirrors are skipped (spacecraft is in free-fall).
+                //
+                // If dur < coast_step_cs, run a single short outer step at dur.
+                let total_dur_cs = dur.0;
+                // Mission time at start of the coast event.
+                let coast_start_cs = state.time.0;
+                let end_met_cs = coast_start_cs.wrapping_add(total_dur_cs);
+                let met_s = end_met_cs as f64 / 100.0;
+                let gt_present = if ctx.ground_truth.is_some() {
+                    "present"
+                } else {
+                    "absent"
+                };
                 log_event(
                     name,
-                    &format!("stub: AdvanceCoast({}cs) is a no-op until MS-T2", dur.0),
+                    &format!(
+                        "coast +{total_dur_cs}cs ({:.2}s) → MET {met_s}s, ground_truth {gt_present}",
+                        total_dur_cs as f64 / 100.0,
+                    ),
                 );
+
+                // Coast-mode inner tick loop.
+                //
+                // The SERVICER's step 8 writes `state.time = new_sv.epoch`
+                // (the AGC navigation epoch, advancing 2 s per SERVICER cycle).
+                // `WaitlistPump::tick` uses `state.time` to compute elapsed time
+                // for countdown management, so we let the SERVICER drive
+                // `state.time` naturally during the coast loop rather than
+                // fighting it with a separate counter. The outer loop tracks
+                // how many centiseconds of mission time remain via `remaining_cs`,
+                // and at the end we set `state.time = end_met_cs` to reflect the
+                // full coast duration.
+                // Prime last_tick_met before the first inner tick so that
+                // the waitlist countdown arms with a 10 cs credit on the
+                // very first tick (elapsed = slice, not 0).  Without this,
+                // last_tick_met is None at the start of the coast, causing
+                // the first tick to compute elapsed = 0 and the first
+                // SERVICER call to fire one tick late.
+                waitlist.skip_cs(0, state);
+
+                let mut remaining_cs = total_dur_cs;
+
+                while remaining_cs > 0 {
+                    let outer_cs = remaining_cs.min(coast_step_cs);
+                    let outer_dt_s = outer_cs as f64 / 100.0;
+
+                    // Step 1: advance ground-truth by the full outer step.
+                    if let Some(ref mut gt) = ctx.ground_truth {
+                        advance_ground_truth(&mut ctx.spacecraft, gt, outer_dt_s);
+                    }
+
+                    // Step 2: run coast-mode inner ticks for the full outer step.
+                    //
+                    // We run `tick_cs`-sized inner ticks so the SERVICER fires at
+                    // its natural 200 cs cadence throughout. Coast-mode ticks omit
+                    // hw.tick, dap_pump, engine/RCS mirrors (free-fall: no thrust).
+                    let mut inner_remaining = outer_cs;
+                    while inner_remaining > 0 {
+                        let slice = inner_remaining.min(tick_cs);
+                        state.time = Met(state.time.0.wrapping_add(slice));
+                        hw.timers.set_time(state.time.0);
+                        pump_pipa_into_state(state, hw);
+                        waitlist.tick(state, hw);
+                        t4.tick(state, hw);
+                        inner_remaining = inner_remaining.saturating_sub(slice);
+                    }
+
+                    remaining_cs = remaining_cs.saturating_sub(outer_cs);
+                }
+
+                // Ensure state.time reflects the full coast duration from the
+                // original mission start time, independent of the SERVICER's
+                // navigation epoch updates.
+                state.time = Met(end_met_cs);
+                hw.timers.set_time(end_met_cs);
+            }
+
+            // ── SeedGroundTruth ───────────────────────────────────────────────
+            Event::SeedGroundTruth(sv) => {
+                // Set spacecraft.current_body to match the seeded frame.
+                ctx.spacecraft.current_body = match sv.frame {
+                    Frame::EarthInertial => GravityBody::Earth,
+                    Frame::MoonInertial => GravityBody::Moon,
+                    Frame::StableMember => GravityBody::Earth, // unreachable in valid use
+                };
+                ctx.spacecraft.gravity_enabled = true;
+                ctx.ground_truth = Some(sv);
+                // Start the SERVICER so that the AGC's navigation integration
+                // runs during subsequent AdvanceCoast events. Idempotent:
+                // safe to call if the SERVICER is already running.
+                start_servicer(state);
             }
 
             // ── KeyPress ──────────────────────────────────────────────────────
@@ -793,6 +970,44 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
                     panic!(
                         "{}\n  alarm code mismatch; expected {code:#06x}, got {got:#06x}",
                         fail_prefix(name, idx, "ExpectAlarm", state.time.0),
+                    );
+                }
+            }
+
+            // ── ExpectAgcMatchesGroundTruth ───────────────────────────────────
+            Event::ExpectAgcMatchesGroundTruth {
+                pos_tol_m,
+                vel_tol_m_s,
+            } => {
+                let gt = ctx.ground_truth.unwrap_or_else(|| {
+                    panic!(
+                        "ExpectAgcMatchesGroundTruth requires SeedGroundTruth earlier in the scenario"
+                    )
+                });
+                let sv = &state.csm_state;
+                let prefix = fail_prefix(name, idx, "ExpectAgcMatchesGroundTruth", state.time.0);
+
+                let dp = [
+                    sv.position[0] - gt.position[0],
+                    sv.position[1] - gt.position[1],
+                    sv.position[2] - gt.position[2],
+                ];
+                let pos_err = (dp[0].powi(2) + dp[1].powi(2) + dp[2].powi(2)).sqrt();
+                if pos_err > pos_tol_m {
+                    panic!(
+                        "{prefix}\n  position error {pos_err:.1} m exceeds tolerance {pos_tol_m:.1} m"
+                    );
+                }
+
+                let dv = [
+                    sv.velocity[0] - gt.velocity[0],
+                    sv.velocity[1] - gt.velocity[1],
+                    sv.velocity[2] - gt.velocity[2],
+                ];
+                let vel_err = (dv[0].powi(2) + dv[1].powi(2) + dv[2].powi(2)).sqrt();
+                if vel_err > vel_tol_m_s {
+                    panic!(
+                        "{prefix}\n  velocity error {vel_err:.3} m/s exceeds tolerance {vel_tol_m_s:.3} m/s"
                     );
                 }
             }
@@ -944,14 +1159,8 @@ mod tests {
         let scenario = ScenarioBuilder::new("vn").verb_noun(37).build();
         assert_eq!(scenario.events.len(), 3);
         assert!(matches!(scenario.events[0], Event::KeyPress(Key::Verb)));
-        assert!(matches!(
-            scenario.events[1],
-            Event::KeyPress(Key::Digit(3))
-        ));
-        assert!(matches!(
-            scenario.events[2],
-            Event::KeyPress(Key::Digit(7))
-        ));
+        assert!(matches!(scenario.events[1], Event::KeyPress(Key::Digit(3))));
+        assert!(matches!(scenario.events[2], Event::KeyPress(Key::Digit(7))));
     }
 
     /// tc_scn_builder_digits_pushes_msb_first
@@ -962,18 +1171,9 @@ mod tests {
     fn tc_scn_builder_digits_pushes_msb_first() {
         let scenario = ScenarioBuilder::new("digits-msb").digits(123).build();
         assert_eq!(scenario.events.len(), 3);
-        assert!(matches!(
-            scenario.events[0],
-            Event::KeyPress(Key::Digit(1))
-        ));
-        assert!(matches!(
-            scenario.events[1],
-            Event::KeyPress(Key::Digit(2))
-        ));
-        assert!(matches!(
-            scenario.events[2],
-            Event::KeyPress(Key::Digit(3))
-        ));
+        assert!(matches!(scenario.events[0], Event::KeyPress(Key::Digit(1))));
+        assert!(matches!(scenario.events[1], Event::KeyPress(Key::Digit(2))));
+        assert!(matches!(scenario.events[2], Event::KeyPress(Key::Digit(3))));
     }
 
     /// tc_scn_builder_digits_zero_emits_single_zero
@@ -983,10 +1183,7 @@ mod tests {
     fn tc_scn_builder_digits_zero_emits_single_zero() {
         let scenario = ScenarioBuilder::new("digits-zero").digits(0).build();
         assert_eq!(scenario.events.len(), 1);
-        assert!(matches!(
-            scenario.events[0],
-            Event::KeyPress(Key::Digit(0))
-        ));
+        assert!(matches!(scenario.events[0], Event::KeyPress(Key::Digit(0))));
     }
 
     /// tc_scn_builder_digits_panics_on_overlarge
@@ -1153,8 +1350,7 @@ mod tests {
             epoch: Met(12345),
             frame: Frame::EarthInertial,
         };
-        let refsmmat: agc_core::types::Mat3x3 =
-            [[2.0, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 0.0, 4.0]];
+        let refsmmat: agc_core::types::Mat3x3 = [[2.0, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 0.0, 4.0]];
 
         let scenario = ScenarioBuilder::new("seed-writes")
             .seed_state()
@@ -1182,9 +1378,7 @@ mod tests {
     /// by default).  Starting at MET 0, one KeyPress must leave MET == 10.
     #[test]
     fn tc_scn_run_keypress_advances_one_tick() {
-        let scenario = ScenarioBuilder::new("keypress-tick")
-            .key(Key::Pro)
-            .build();
+        let scenario = ScenarioBuilder::new("keypress-tick").key(Key::Pro).build();
 
         let mut state = AgcState::new();
         let mut hw = SimHardware::new();
@@ -1247,9 +1441,7 @@ mod tests {
     /// ExpectAlarm(0) passes silently when no alarm has been raised (code == 0).
     #[test]
     fn tc_scn_run_expect_alarm_match_silent() {
-        let scenario = ScenarioBuilder::new("alarm-match")
-            .expect_alarm(0)
-            .build();
+        let scenario = ScenarioBuilder::new("alarm-match").expect_alarm(0).build();
         let mut state = AgcState::new();
         let mut hw = SimHardware::new();
         // alarm.code starts at 0
@@ -1388,9 +1580,7 @@ mod tests {
             flashing: None,
             tol_pct: 0.0, // exact comparison → NaN triggers the error branch
         };
-        let scenario = ScenarioBuilder::new("dsky-nan")
-            .expect_dsky(d)
-            .build();
+        let scenario = ScenarioBuilder::new("dsky-nan").expect_dsky(d).build();
         let mut state = AgcState::new();
         let mut hw = SimHardware::new();
         // Inject NaN into R0 — the want is 1.0 but got is NaN, triggering
@@ -1401,21 +1591,25 @@ mod tests {
 
     // ── G. Deferred-variant stubs ─────────────────────────────────────────────
 
-    /// tc_scn_run_advance_coast_does_not_panic
+    /// tc_scn_run_advance_coast_advances_time
     ///
-    /// AdvanceCoast is a no-op stub until MS-T2.  A scenario with one
-    /// AdvanceCoast must return normally without advancing time.
+    /// AdvanceCoast must return normally and advance state.time by the
+    /// requested duration.  A 5-second coast starting at MET 0 must leave
+    /// state.time at MET 500 cs.
     #[test]
-    fn tc_scn_run_advance_coast_does_not_panic() {
-        let scenario = ScenarioBuilder::new("coast-stub")
+    fn tc_scn_run_advance_coast_advances_time() {
+        let scenario = ScenarioBuilder::new("coast-advances")
             .advance_coast(SimDuration::seconds(5))
             .build();
         let mut state = AgcState::new();
         let mut hw = SimHardware::new();
-        let before = state.time;
+        state.time = Met(0);
         run_scenario(&scenario, &mut state, &mut hw);
-        // Stub must NOT advance time.
-        assert_eq!(state.time, before, "AdvanceCoast stub must not advance time");
+        assert_eq!(
+            state.time,
+            Met(500),
+            "AdvanceCoast(5 s) must advance time to MET 500 cs"
+        );
     }
 
     /// tc_scn_run_optics_sighting_does_not_panic
