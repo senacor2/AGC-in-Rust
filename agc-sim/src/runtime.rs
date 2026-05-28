@@ -123,12 +123,39 @@ impl WaitlistPump {
         }
     }
 
+    /// Advance the waitlist by `cs` centiseconds without dispatching tasks.
+    ///
+    /// Used by the coast loop to account for bulk time advancement (the
+    /// remainder of an outer step after the 200 cs SERVICER window) without
+    /// paying for per-tick SERVICER invocations.
+    ///
+    /// Both the internal countdown and `last_tick_met` are updated atomically
+    /// so that the next `tick()` call does not re-account for the skipped
+    /// interval. The countdown is clamped to zero from below to prevent the
+    /// SERVICER catch-up cascade that would otherwise fire multiple times at
+    /// the start of the following inner loop.
+    pub fn skip_cs(&mut self, cs: u32, state: &AgcState) {
+        // Mirror the time advance in last_tick_met so the next tick() call
+        // computes elapsed_cs = 0 for the skipped interval.
+        self.last_tick_met = Some(state.time);
+        if let Some(rem) = self.head_remaining_cs.as_mut() {
+            *rem = rem.saturating_sub(cs as i32).max(0);
+        }
+    }
+
     /// Advance the pump by one render-loop iteration.
+    ///
+    /// `last_tick_met` is updated **after** the dispatch loop so that any
+    /// `state.time` change made by a dispatched task (e.g. the SERVICER
+    /// writing `state.time = new_sv.epoch`) is accounted for in the next
+    /// tick's elapsed-time calculation.  Without this ordering, a task that
+    /// sets `state.time` backwards (or to a different epoch) would cause the
+    /// following tick to see a 0- or negative-elapsed interval, silently
+    /// delaying subsequent dispatches.
     pub fn tick(&mut self, state: &mut AgcState, hw: &mut SimHardware) {
         let now = state.time;
         let prev = self.last_tick_met.unwrap_or(now);
         let elapsed_cs = now.0.wrapping_sub(prev.0) as i32;
-        self.last_tick_met = Some(now);
 
         // Decrement an active countdown by the elapsed time.
         if let Some(rem) = self.head_remaining_cs.as_mut() {
@@ -136,13 +163,16 @@ impl WaitlistPump {
         }
 
         // Arm the countdown if the pump has no active head and the
-        // waitlist has work. Anything scheduled "between" ticks (i.e.
-        // earlier within the same render frame, which is the only way
-        // schedule calls reach the pump in dsky_sim) lands here on the
-        // very next tick — the operator never observes a missed cycle.
+        // waitlist has work.  Subtract the elapsed time that already
+        // passed this tick so the head fires at the correct absolute
+        // time, not `front_delta()` ticks *after* this tick.  Without
+        // this subtraction, the first tick after the pump is armed (or
+        // re-armed after the waitlist was empty) silently "wastes" one
+        // tick's worth of elapsed time, causing every task to fire one
+        // tick late.
         if self.head_remaining_cs.is_none() {
             if let Some(cs) = state.waitlist.front_delta() {
-                self.head_remaining_cs = Some(cs as i32);
+                self.head_remaining_cs = Some(cs as i32 - elapsed_cs);
             }
         }
 
@@ -171,6 +201,12 @@ impl WaitlistPump {
                 }
             }
         }
+
+        // Record the post-dispatch state.time so that if a task changed
+        // state.time (e.g. SERVICER epoch write), the next tick's elapsed
+        // calculation starts from the task's new time value, not the
+        // pre-dispatch value.
+        self.last_tick_met = Some(state.time);
     }
 }
 
@@ -315,9 +351,7 @@ impl T4Pump {
         // average cadence stays honest.
         while self.remaining_cs <= 0 {
             t4rupt_step(state, hw);
-            self.remaining_cs = self
-                .remaining_cs
-                .saturating_add(T4RUPT_PERIOD_CS as i32);
+            self.remaining_cs = self.remaining_cs.saturating_add(T4RUPT_PERIOD_CS as i32);
         }
     }
 }

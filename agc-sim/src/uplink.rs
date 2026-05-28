@@ -283,13 +283,22 @@ mod tests {
         // Scripted: same keystrokes via ScriptedUplink + poll_uplink.
         let mut state_uplink = AgcState::new();
         let mut uplink = ScriptedUplink::new();
-        uplink.load_script("V 7 1 E 0 1 E 0 6 E + 6 5 7 8 E").unwrap();
+        uplink
+            .load_script("V 7 1 E 0 1 E 0 6 E + 6 5 7 8 E")
+            .unwrap();
         poll_uplink(&mut state_uplink, &mut uplink);
 
         // Both paths must land on the same V/N phase. After 4 words
         // committed, P27Data { loaded: 1, count: 6 } is expected.
         assert!(
-            matches!(state_uplink.vn.phase, VnPhase::P27Data { loaded: 1, count: 6, .. }),
+            matches!(
+                state_uplink.vn.phase,
+                VnPhase::P27Data {
+                    loaded: 1,
+                    count: 6,
+                    ..
+                }
+            ),
             "scripted V71 did not advance P27Data; got {:?}",
             state_uplink.vn.phase
         );
@@ -303,6 +312,9 @@ mod tests {
             "uplink path did not write csm_state.position[0]; got {}",
             state_uplink.csm_state.position[0]
         );
-        assert_eq!(state_uplink.csm_state.position[0], state_ref.csm_state.position[0]);
+        assert_eq!(
+            state_uplink.csm_state.position[0],
+            state_ref.csm_state.position[0]
+        );
     }
 }

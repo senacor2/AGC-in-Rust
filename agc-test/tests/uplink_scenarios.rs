@@ -197,7 +197,10 @@ fn tc_ups_7_uplink_activity_lamp_tracks_traffic() {
     // Initial tick: arms the countdown and drains the (empty) FIFO once.
     state.time = Met(0);
     t4.tick(&mut state, &mut hw);
-    assert!(!state.dsky.uplink_activity, "lamp must be off after a quiet poll");
+    assert!(
+        !state.dsky.uplink_activity,
+        "lamp must be off after a quiet poll"
+    );
 
     // Burst — load the FIFO, then advance one T4 period so the next
     // tick crosses the countdown threshold and the pump fires.

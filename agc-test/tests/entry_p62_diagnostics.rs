@@ -542,7 +542,11 @@ fn build_snapshot(
 /// Read the erasable word at `symbol + offset` words.
 fn read_offset(core: &CoreImage, symtab: &Symtab, symbol: &str, offset: u16) -> Option<ReadVal> {
     let base = symtab.get(symbol)?;
-    let AgcAddress::Erasable { bank, offset: base_off } = base else {
+    let AgcAddress::Erasable {
+        bank,
+        offset: base_off,
+    } = base
+    else {
         return None;
     };
     let addr = AgcAddress::Erasable {
@@ -578,7 +582,8 @@ fn wait_for_p62_parked(
         if let Some(new_mtime) = wait_for_new_dump(
             dump_path,
             last_mtime,
-            (start + Duration::from_millis(max_ms as u64)).min(Instant::now() + Duration::from_millis(400)),
+            (start + Duration::from_millis(max_ms as u64))
+                .min(Instant::now() + Duration::from_millis(400)),
         ) {
             last_mtime = Some(new_mtime);
             if let Some(c) = try_load_core(dump_path) {
@@ -626,8 +631,8 @@ fn tc_e7i_a_parked_state_snapshot() {
     // patching the closed-loop test does.
     let mut core = CoreImage::load(&template_path)
         .unwrap_or_else(|e| panic!("load template {}: {e}", template_path.display()));
-    let symtab = Symtab::load(&listing)
-        .unwrap_or_else(|e| panic!("load symtab {}: {e}", listing.display()));
+    let symtab =
+        Symtab::load(&listing).unwrap_or_else(|e| panic!("load symtab {}: {e}", listing.display()));
     let rust_state = setup_state_direct_leo();
     let init = EntryInitialState {
         position_m: rust_state.csm_state.position,
@@ -692,8 +697,7 @@ fn tc_e7i_a_parked_state_snapshot() {
     // Background channel drain while we poll. 6 s budget is generous;
     // typical settle is 2–3 s wall.
     let (core_a, dumps_seen_a, settle_a_ms, settled_a) = {
-        let drain_until =
-            Instant::now() + std::time::Duration::from_millis(150);
+        let drain_until = Instant::now() + std::time::Duration::from_millis(150);
         drain_channels(&mut listener, drain_until - Instant::now(), &mut obs);
         wait_for_p62_parked(&dump_path, &symtab, mtime_pre, 6_000)
     };
@@ -798,11 +802,8 @@ fn tc_e7i_a_parked_state_snapshot() {
         .flatten()
         .any(|r| r.decimal == 0o01107);
     // Phase-table invariant: every pair must XOR to 0o77777.
-    let a_phase_table_complement_ok = !snapshot_a.phase_xor.is_empty()
-        && snapshot_a
-            .phase_xor
-            .iter()
-            .all(|s| s == "0o77777");
+    let a_phase_table_complement_ok =
+        !snapshot_a.phase_xor.is_empty() && snapshot_a.phase_xor.iter().all(|s| s == "0o77777");
 
     let record = ExperimentARecord {
         schema_version: 1,
@@ -934,8 +935,8 @@ fn tc_e7i_b_parked_state_no_v33() {
 
     let mut core = CoreImage::load(&template_path)
         .unwrap_or_else(|e| panic!("load template {}: {e}", template_path.display()));
-    let symtab = Symtab::load(&listing)
-        .unwrap_or_else(|e| panic!("load symtab {}: {e}", listing.display()));
+    let symtab =
+        Symtab::load(&listing).unwrap_or_else(|e| panic!("load symtab {}: {e}", listing.display()));
     let rust_state = setup_state_direct_leo();
     let init = EntryInitialState {
         position_m: rust_state.csm_state.position,
@@ -1011,16 +1012,8 @@ fn tc_e7i_b_parked_state_no_v33() {
 
     let _ = std::fs::remove_dir_all(&work);
 
-    let failreg_01204 = snap
-        .failreg
-        .iter()
-        .flatten()
-        .any(|r| r.decimal == 0o01204);
-    let failreg_01107 = snap
-        .failreg
-        .iter()
-        .flatten()
-        .any(|r| r.decimal == 0o01107);
+    let failreg_01204 = snap.failreg.iter().flatten().any(|r| r.decimal == 0o01204);
+    let failreg_01107 = snap.failreg.iter().flatten().any(|r| r.decimal == 0o01107);
     let failreg_str: Vec<String> = snap
         .failreg
         .iter()
@@ -1061,8 +1054,8 @@ fn tc_e7i_c_warm_template_no_preload() {
         );
         return;
     }
-    let symtab = Symtab::load(&listing)
-        .unwrap_or_else(|e| panic!("load symtab {}: {e}", listing.display()));
+    let symtab =
+        Symtab::load(&listing).unwrap_or_else(|e| panic!("load symtab {}: {e}", listing.display()));
 
     let work = std::env::temp_dir().join(format!("vagc_e7i_c_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&work);
@@ -1114,8 +1107,8 @@ fn tc_e7i_c_warm_template_no_preload() {
     let (_core_parked, _dumps, settle_ms, settled) =
         wait_for_p62_parked(&dump_path, &symtab, mtime_after_v62, 6_000);
 
-    let parked_snap = try_load_core(&dump_path)
-        .map(|c| build_snapshot(&c, &symtab, 0, Some(settle_ms), settled));
+    let parked_snap =
+        try_load_core(&dump_path).map(|c| build_snapshot(&c, &symtab, 0, Some(settle_ms), settled));
 
     // V33 ENTR — the wake we care about.
     let mtime_before_v33 = current_mtime(&dump_path);
@@ -1127,8 +1120,7 @@ fn tc_e7i_c_warm_template_no_preload() {
         Instant::now() + Duration::from_secs(3),
     );
 
-    let post_snap = try_load_core(&dump_path)
-        .map(|c| build_snapshot(&c, &symtab, 0, None, true));
+    let post_snap = try_load_core(&dump_path).map(|c| build_snapshot(&c, &symtab, 0, None, true));
 
     let _ = child.kill();
     let _ = child.wait();
