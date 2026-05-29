@@ -424,9 +424,31 @@ boundary; both ends keep their natural framings.
 `q`, `commanded_q`, `slew_tau_s` as scalar-first quaternions
 `[w, x, y, z]`. Slew integration uses closed-form slerp with
 `alpha = 1 - exp(-dt / slew_tau_s)`. `slew_tau_s = 0.0` snaps to
-commanded. The DAP→quaternion bridge needed for closed-loop attitude
-tracking is filed as #55 — for MS-T3, scenarios set `commanded_q`
-directly via `CommandAttitude { q }`.
+commanded.
+
+**DAP → quaternion bridge** (#55, landed alongside MS-T3): the
+`bridge_dap_to_commanded_q` free function in `agc-sim::runtime`
+reads `state.dap_state.commanded_attitude` (Euler `[roll, pitch,
+yaw]` matching the CSM IMU's 3-gimbal suspension) and writes the
+corresponding quaternion into `attitude.commanded_q`. The bridge
+fires automatically from `DapPump::tick` after each `dap_step`
+call, so scenarios that select a P-program with a target attitude
+get closed-loop attitude tracking without any explicit
+`CommandAttitude` event. The bridge is a no-op when
+`dap_state.mode` is `Off`, `RateDamping`, or `EntryRoll(_)`.
+
+The quaternion math (`quat_normalise`, `quat_to_mat3x3`,
+`quat_slerp`, plus the bridge's `quat_from_mat3x3` via Shepperd's
+branched method) lives in `agc_core::math::quaternion`; the
+Euler-to-matrix helper `gimbal_matrix_from_euler` is at
+`agc_core::control::attitude` alongside the canonical
+`compute_attitude_error`.
+
+`Event::CommandAttitude { q }` is now **snap-and-hold**: it writes
+both `attitude.q` and `attitude.commanded_q`. Useful for scenarios
+that need a deterministic starting attitude before any P-program
+runs. When the DAP later commands an attitude, the bridge updates
+`commanded_q` and the slerp dynamics take over.
 
 Exit criterion tests:
 

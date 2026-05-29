@@ -229,12 +229,12 @@ fn it_v37_p40_fires_sps_for_about_15s() {
     // Jump to TIG-1s. Pass the current state.time to the pumps first so
     // they know their reference point, then the second pair of calls after
     // the jump computes the large elapsed gap and drives SERVICER catchup.
-    dap_pump.tick(&mut state, &mut hw);
+    dap_pump.tick(&mut state, &mut hw, None);
     waitlist_pump.tick(&mut state, &mut hw);
 
     state.time = Met(tig_cs.saturating_sub(100));
     hw.timers.set_time(state.time.0);
-    dap_pump.tick(&mut state, &mut hw);
+    dap_pump.tick(&mut state, &mut hw, None);
     waitlist_pump.tick(&mut state, &mut hw);
 
     // Engine must still be cold — TIG not yet reached.
@@ -257,7 +257,7 @@ fn it_v37_p40_fires_sps_for_about_15s() {
         hw.timers.set_time(state.time.0);
         hw.tick(TICK_S);
         pump_pipa_into_state(&mut state, &mut hw);
-        dap_pump.tick(&mut state, &mut hw);
+        dap_pump.tick(&mut state, &mut hw, None);
         waitlist_pump.tick(&mut state, &mut hw);
         pump_engine_to_hw(&state, &mut hw);
         agc_sim::runtime::pump_rcs_to_hw(&mut state, &mut hw);

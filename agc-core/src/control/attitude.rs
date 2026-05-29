@@ -89,6 +89,22 @@ pub fn compute_body_rates(cdu_new: [CduAngle; 3], cdu_old: [CduAngle; 3], dt: f6
 
 // ── compute_attitude_error ────────────────────────────────────────────────────
 
+/// Build the body-frame rotation matrix for an Apollo IMU gimbal triple.
+///
+/// `euler = [roll, pitch, yaw]` where roll/pitch/yaw correspond to the
+/// outer/inner/middle gimbal angles respectively (matching the CSM's
+/// physical 3-gimbal IMU suspension). The returned matrix is
+/// `Rx(roll) · Ry(pitch) · Rz(yaw)`, matching the convention used by
+/// `compute_attitude_error`.
+///
+/// AGC source: `Comanche055/CM_BODY_ATTITUDE.agc` gimbal-to-body matrix.
+pub fn gimbal_matrix_from_euler(euler: Vec3) -> Mat3x3 {
+    let rx = rx(euler[0]);
+    let ry = ry(euler[1]);
+    let rz = rz(euler[2]);
+    mxm(mxm(rx, ry), rz)
+}
+
 /// Compute the three-axis attitude error (roll, pitch, yaw) in radians.
 ///
 /// Converts the current IMU gimbal CDU angles and the stored REFSMMAT into a
@@ -97,8 +113,9 @@ pub fn compute_body_rates(cdu_new: [CduAngle; 3], cdu_old: [CduAngle; 3], dt: f6
 ///
 /// # Algorithm (§4.2)
 /// 1. Convert CDU counts to radians.
-/// 2. Build M_gimbal = Rx(roll) · Ry(pitch) · Rz(yaw) (CM outer→inner→middle
-///    gimbal suspension = Tait-Bryan XYZ applied left-to-right).
+/// 2. Build M_gimbal = Rx(roll) · Ry(pitch) · Rz(yaw) via
+///    [`gimbal_matrix_from_euler`] (CM outer→inner→middle gimbal suspension
+///    = Tait-Bryan XYZ applied left-to-right).
 /// 3. M_current = refsmmat · M_gimbal
 /// 4. M_err = desired^T · M_current
 /// 5. Extract small-angle errors from the anti-symmetric part of M_err.
@@ -120,10 +137,7 @@ pub fn compute_attitude_error(
     let theta_z = current_cdu[2].to_radians(); // middle / yaw
 
     // Step 2 — Build M_gimbal = Rx(θx) · Ry(θy) · Rz(θz)
-    let rx = rx(theta_x);
-    let ry = ry(theta_y);
-    let rz = rz(theta_z);
-    let m_gimbal = mxm(mxm(rx, ry), rz);
+    let m_gimbal = gimbal_matrix_from_euler([theta_x, theta_y, theta_z]);
 
     // Step 3 — Current inertial attitude: M_current = refsmmat · M_gimbal
     let m_current = mxm(refsmmat, m_gimbal);
@@ -513,6 +527,87 @@ mod tests {
             zero_rate,
             [0.0, 0.0, 0.0],
             "zero rate expected for current == target"
+        );
+    }
+
+    // ── TC-ATT-GIMBAL: gimbal_matrix_from_euler tests ────────────────────────
+
+    /// tc_att_gimbal_matrix_zero_is_identity
+    ///
+    /// `gimbal_matrix_from_euler([0, 0, 0])` must return the 3×3 identity
+    /// matrix within 1e-12 per cell.
+    #[test]
+    fn tc_att_gimbal_matrix_zero_is_identity() {
+        let m = gimbal_matrix_from_euler([0.0, 0.0, 0.0]);
+        let identity: Mat3x3 = linalg::IDENTITY;
+        for r in 0..3 {
+            for c in 0..3 {
+                assert!(
+                    (m[r][c] - identity[r][c]).abs() < 1e-12,
+                    "zero euler: m[{r}][{c}] = {} (expected {})",
+                    m[r][c],
+                    identity[r][c]
+                );
+            }
+        }
+    }
+
+    /// tc_att_gimbal_matrix_90deg_roll
+    ///
+    /// `gimbal_matrix_from_euler([PI/2, 0, 0])` = Rx(90°).
+    /// Rx(90°) maps +Y to +Z: the second column of M must be [0, 0, 1]
+    /// (i.e. the image of e_y is e_z) and the first column must stay [1, 0, 0].
+    #[test]
+    fn tc_att_gimbal_matrix_90deg_roll() {
+        use core::f64::consts::FRAC_PI_2;
+        let m = gimbal_matrix_from_euler([FRAC_PI_2, 0.0, 0.0]);
+
+        // Column 0 (image of e_x): must be unchanged [1, 0, 0].
+        assert!((m[0][0] - 1.0).abs() < 1e-12, "m[0][0] should be 1, got {}", m[0][0]);
+        assert!(m[1][0].abs() < 1e-12, "m[1][0] should be 0, got {}", m[1][0]);
+        assert!(m[2][0].abs() < 1e-12, "m[2][0] should be 0, got {}", m[2][0]);
+
+        // Column 1 (image of e_y under Rx(90°)): Rx(90°)·ey = [0, 0, 1].
+        assert!(m[0][1].abs() < 1e-12, "m[0][1] should be 0, got {}", m[0][1]);
+        assert!(m[1][1].abs() < 1e-12, "m[1][1] should be 0, got {}", m[1][1]);
+        assert!((m[2][1] - 1.0).abs() < 1e-12, "m[2][1] should be 1, got {}", m[2][1]);
+    }
+
+    /// tc_att_gimbal_matrix_composition_yzx_independent
+    ///
+    /// For roll=0.1, pitch=0.2, yaw=0.3 the result must be a proper rotation:
+    /// - M·Mᵀ ≈ I (orthogonal) within 1e-12 per cell.
+    /// - det(M) = +1 within 1e-12 (proper rotation, not reflection).
+    #[test]
+    fn tc_att_gimbal_matrix_composition_yzx_independent() {
+        let m = gimbal_matrix_from_euler([0.1, 0.2, 0.3]);
+
+        // Orthogonality: M · Mᵀ == I
+        let mt = linalg::transpose(m);
+        let mmt = linalg::mxm(m, mt);
+        let identity: Mat3x3 = linalg::IDENTITY;
+        for r in 0..3 {
+            for c in 0..3 {
+                assert!(
+                    (mmt[r][c] - identity[r][c]).abs() < 1e-12,
+                    "M·Mᵀ[{r}][{c}] = {} (expected {})",
+                    mmt[r][c],
+                    identity[r][c]
+                );
+            }
+        }
+
+        // Determinant +1 (proper rotation, not reflection).
+        // det = m[0][0]*(m[1][1]*m[2][2] - m[1][2]*m[2][1])
+        //     - m[0][1]*(m[1][0]*m[2][2] - m[1][2]*m[2][0])
+        //     + m[0][2]*(m[1][0]*m[2][1] - m[1][1]*m[2][0])
+        let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+            - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+        assert!(
+            (det - 1.0).abs() < 1e-12,
+            "determinant must be +1, got {}",
+            det
         );
     }
 
