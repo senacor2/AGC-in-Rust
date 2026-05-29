@@ -555,13 +555,12 @@ mod tests {
     fn tc_phys_quat_to_mat3x3_identity() {
         let m = quat_to_mat3x3([1.0, 0.0, 0.0, 0.0]);
         // Diagonal must be 1.0, off-diagonal must be 0.0.
-        for i in 0..3 {
-            for j in 0..3 {
+        for (i, row) in m.iter().enumerate() {
+            for (j, &cell) in row.iter().enumerate() {
                 let expected = if i == j { 1.0 } else { 0.0 };
                 assert!(
-                    (m[i][j] - expected).abs() < 1e-15,
-                    "identity quat → mat: m[{i}][{j}] should be {expected}, got {}",
-                    m[i][j]
+                    (cell - expected).abs() < 1e-15,
+                    "identity quat → mat: m[{i}][{j}] should be {expected}, got {cell}",
                 );
             }
         }

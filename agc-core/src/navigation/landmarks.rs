@@ -140,8 +140,7 @@ mod tests {
     /// `|lat_rad| <= PI/2`, and `|lon_rad| <= PI`.
     #[test]
     fn tc_lm_named_entries_have_finite_coords() {
-        for i in 1..=8usize {
-            let entry = &LUNAR_LANDMARK_TABLE[i];
+        for (i, entry) in LUNAR_LANDMARK_TABLE.iter().enumerate().skip(1).take(8) {
             assert!(
                 entry.lat_rad.is_finite(),
                 "index {i} ({}) lat_rad is not finite",

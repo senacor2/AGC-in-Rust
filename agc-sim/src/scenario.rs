@@ -995,8 +995,18 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
                     &refsmmat,
                     state.gha_epoch_rad,
                 );
-                // Rotate los_platform back to inertial: REFSMMAT^T · los_platform
-                let los_inertial = mxv(transpose(refsmmat), los_platform);
+                // Rotate los_platform back to inertial: REFSMMAT^T · los_platform.
+                // landmark_los_in_platform returns the sensor convention
+                // (unit(landmark - CSM): the direction the spacecraft looks
+                // to see the landmark). p22_incorporate_landmark_mark
+                // expects the rho-vector convention (unit(CSM - landmark):
+                // the predicted landmark→CSM direction). Negate to match.
+                let los_inertial_sensor = mxv(transpose(refsmmat), los_platform);
+                let los_inertial = [
+                    -los_inertial_sensor[0],
+                    -los_inertial_sensor[1],
+                    -los_inertial_sensor[2],
+                ];
 
                 // Compute landmark inertial position for the mark struct.
                 let lm_inertial: Vec3 = match table {
@@ -2168,7 +2178,8 @@ mod tests {
     fn tc_scn_run_command_attitude_writes_commanded_q() {
         // The executor sets ctx.spacecraft.attitude.commanded_q.
         // We confirm it doesn't panic and emits the correct event.
-        let q = [0.7071_f64, 0.7071, 0.0, 0.0];
+        use std::f64::consts::FRAC_1_SQRT_2;
+        let q = [FRAC_1_SQRT_2, FRAC_1_SQRT_2, 0.0, 0.0];
         let scenario = ScenarioBuilder::new("cmd-att-runs")
             .command_attitude(q)
             .build();
