@@ -89,6 +89,22 @@ pub fn compute_body_rates(cdu_new: [CduAngle; 3], cdu_old: [CduAngle; 3], dt: f6
 
 // ── compute_attitude_error ────────────────────────────────────────────────────
 
+/// Build the body-frame rotation matrix for an Apollo IMU gimbal triple.
+///
+/// `euler = [roll, pitch, yaw]` where roll/pitch/yaw correspond to the
+/// outer/inner/middle gimbal angles respectively (matching the CSM's
+/// physical 3-gimbal IMU suspension). The returned matrix is
+/// `Rx(roll) · Ry(pitch) · Rz(yaw)`, matching the convention used by
+/// `compute_attitude_error`.
+///
+/// AGC source: `Comanche055/CM_BODY_ATTITUDE.agc` gimbal-to-body matrix.
+pub fn gimbal_matrix_from_euler(euler: Vec3) -> Mat3x3 {
+    let rx = rx(euler[0]);
+    let ry = ry(euler[1]);
+    let rz = rz(euler[2]);
+    mxm(mxm(rx, ry), rz)
+}
+
 /// Compute the three-axis attitude error (roll, pitch, yaw) in radians.
 ///
 /// Converts the current IMU gimbal CDU angles and the stored REFSMMAT into a
@@ -97,8 +113,9 @@ pub fn compute_body_rates(cdu_new: [CduAngle; 3], cdu_old: [CduAngle; 3], dt: f6
 ///
 /// # Algorithm (§4.2)
 /// 1. Convert CDU counts to radians.
-/// 2. Build M_gimbal = Rx(roll) · Ry(pitch) · Rz(yaw) (CM outer→inner→middle
-///    gimbal suspension = Tait-Bryan XYZ applied left-to-right).
+/// 2. Build M_gimbal = Rx(roll) · Ry(pitch) · Rz(yaw) via
+///    [`gimbal_matrix_from_euler`] (CM outer→inner→middle gimbal suspension
+///    = Tait-Bryan XYZ applied left-to-right).
 /// 3. M_current = refsmmat · M_gimbal
 /// 4. M_err = desired^T · M_current
 /// 5. Extract small-angle errors from the anti-symmetric part of M_err.
@@ -120,10 +137,7 @@ pub fn compute_attitude_error(
     let theta_z = current_cdu[2].to_radians(); // middle / yaw
 
     // Step 2 — Build M_gimbal = Rx(θx) · Ry(θy) · Rz(θz)
-    let rx = rx(theta_x);
-    let ry = ry(theta_y);
-    let rz = rz(theta_z);
-    let m_gimbal = mxm(mxm(rx, ry), rz);
+    let m_gimbal = gimbal_matrix_from_euler([theta_x, theta_y, theta_z]);
 
     // Step 3 — Current inertial attitude: M_current = refsmmat · M_gimbal
     let m_current = mxm(refsmmat, m_gimbal);

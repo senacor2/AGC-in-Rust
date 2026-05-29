@@ -106,7 +106,7 @@ fn main() {
         &mut state,
         &[Key::Verb, d(3), d(7), Key::Entr, d(4), d(0), Key::Entr],
     );
-    dap_pump.tick(&mut state, &mut hw);
+    dap_pump.tick(&mut state, &mut hw, None);
     waitlist_pump.tick(&mut state, &mut hw);
     println!(
         "After V37 ENTR 40 ENTR: verb={} noun={} burn_active={} pending_v50={}",
@@ -129,7 +129,7 @@ fn main() {
     let tig_cs = state.burn.tig.0;
     state.time = Met(tig_cs.saturating_sub(100));
     hw.timers.set_time(state.time.0);
-    dap_pump.tick(&mut state, &mut hw);
+    dap_pump.tick(&mut state, &mut hw, None);
     waitlist_pump.tick(&mut state, &mut hw);
     println!(
         "Approaching TIG (state.time={} cs, burn.tig={} cs): armed={} engine={}",
@@ -143,7 +143,7 @@ fn main() {
         hw.timers.set_time(state.time.0);
         hw.tick(0.1);
         pump_pipa_into_state(&mut state, &mut hw);
-        dap_pump.tick(&mut state, &mut hw);
+        dap_pump.tick(&mut state, &mut hw, None);
         waitlist_pump.tick(&mut state, &mut hw);
         pump_engine_to_hw(&state, &mut hw);
         pump_rcs_to_hw(&mut state, &mut hw);

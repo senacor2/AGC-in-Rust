@@ -28,10 +28,14 @@
 //! Tests are free to wire these in any order; `dsky_sim` calls them
 //! from its render-loop tick.
 
+use agc_core::control::DapMode;
 use agc_core::hal::{AgcHardware, Engine, Imu, Rcs};
+use agc_core::math::linalg::mxm;
+use agc_core::math::quaternion::quat_from_mat3x3;
 use agc_core::types::Met;
 use agc_core::AgcState;
 
+use crate::physics::Attitude;
 use crate::SimHardware;
 
 /// Mirror of the executive's foreground PIPA accumulator: drain
@@ -76,6 +80,30 @@ pub fn pump_rcs_to_hw(state: &mut AgcState, hw: &mut SimHardware) {
         state.rcs_commanded_jets = 0;
         state.rcs_commanded_pulse_cs = 0;
     }
+}
+
+/// Translate the AGC DAP's commanded attitude (Euler gimbal angles) into a
+/// quaternion target for `Spacecraft::attitude.commanded_q`.
+///
+/// Reads `state.dap_state.commanded_attitude` and `state.refsmmat`; computes
+/// `M_target = refsmmat · gimbal_matrix_from_euler(commanded_attitude)` and
+/// converts to a quaternion.  The result is written into `attitude.commanded_q`.
+///
+/// No-op when `state.dap_state.mode` is `Off` or `RateDamping` (no
+/// commanded attitude in those modes), and no-op when `state.dap_state.mode`
+/// is `EntryRoll(_)` (pitch/yaw aerodynamically stable during entry; out of
+/// scope for #55).
+pub fn bridge_dap_to_commanded_q(state: &AgcState, attitude: &mut Attitude) {
+    use agc_core::control::attitude::gimbal_matrix_from_euler;
+
+    match state.dap_state.mode {
+        DapMode::Off | DapMode::RateDamping | DapMode::EntryRoll(_) => return,
+        DapMode::AttitudeHold | DapMode::Maneuver | DapMode::Tvc => {}
+    }
+
+    let m_gimbal = gimbal_matrix_from_euler(state.dap_state.commanded_attitude);
+    let m_target = mxm(state.refsmmat, m_gimbal);
+    attitude.commanded_q = quat_from_mat3x3(m_target);
 }
 
 /// Pumps the waitlist at its mission-time cadence.
@@ -251,9 +279,20 @@ impl DapPump {
     }
 
     /// Advance the pump by one render-loop iteration.
-    pub fn tick(&mut self, state: &mut AgcState, hw: &mut SimHardware) {
+    ///
+    /// `attitude` is an optional reference to the simulator's [`Attitude`]
+    /// state.  When `Some`, the bridge [`bridge_dap_to_commanded_q`] is
+    /// invoked after each `dap_step` call to translate the DAP's Euler
+    /// commanded attitude into the quaternion representation used by the
+    /// physics model.  Pass `None` in unit tests that do not need attitude
+    /// tracking.
+    pub fn tick(
+        &mut self,
+        state: &mut AgcState,
+        hw: &mut SimHardware,
+        mut attitude: Option<&mut Attitude>,
+    ) {
         use agc_core::control::dap::{dap_step, DAP_PERIOD_CS};
-        use agc_core::control::DapMode;
 
         let now = state.time;
         let prev = self.last_tick_met.unwrap_or(now);
@@ -282,6 +321,9 @@ impl DapPump {
 
         // Fire dap_step for every expired cycle (catch-up across slow
         // frames), preserving overshoot to keep average cadence honest.
+        // The `attitude` reborrow via `&mut attitude` inside the loop
+        // gives a fresh `&mut Attitude` each iteration without
+        // consuming the outer Option.
         while let Some(rem) = self.cycle_remaining_cs {
             if rem > 0 {
                 break;
@@ -289,6 +331,9 @@ impl DapPump {
             // Mirror the bare-metal T5 branch: refresh CDU staging.
             state.current_cdu = hw.imu().read_cdu();
             dap_step(state);
+            if let Some(att) = &mut attitude {
+                bridge_dap_to_commanded_q(state, att);
+            }
             // dap_step may have turned the DAP off.
             if state.dap_state.mode == DapMode::Off {
                 self.cycle_remaining_cs = None;
@@ -529,7 +574,7 @@ mod tests {
         };
 
         // First tick at MET=0: arms the cycle, no dap_step yet.
-        dap_pump.tick(&mut state, &mut hw);
+        dap_pump.tick(&mut state, &mut hw, None);
         assert!(
             !state.engine_thrusting,
             "no dap_step has run yet -- engine must still be off"
@@ -537,7 +582,7 @@ mod tests {
 
         // Advance past TIG and past one DAP cycle.
         state.time = Met((DAP_PERIOD_CS as u32) + 50);
-        dap_pump.tick(&mut state, &mut hw);
+        dap_pump.tick(&mut state, &mut hw, None);
 
         assert!(
             state.engine_thrusting,
@@ -598,10 +643,10 @@ mod tests {
 
         state.dap_state.mode = DapMode::Off;
         state.time = Met(0);
-        dap_pump.tick(&mut state, &mut hw);
+        dap_pump.tick(&mut state, &mut hw, None);
 
         state.time = Met(10_000);
-        dap_pump.tick(&mut state, &mut hw);
+        dap_pump.tick(&mut state, &mut hw, None);
 
         // No fields the pump would have written touched.
         assert_eq!(state.rcs_commanded_jets, 0);

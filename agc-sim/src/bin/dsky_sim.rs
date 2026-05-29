@@ -167,7 +167,7 @@ fn run<W: Write>(out: &mut W) -> io::Result<()> {
         hw.tick(dt_physics);
         pump_pipa_into_state(&mut state, &mut hw);
         t4_pump.tick(&mut state, &mut hw);
-        dap_pump.tick(&mut state, &mut hw);
+        dap_pump.tick(&mut state, &mut hw, None);
         waitlist_pump.tick(&mut state, &mut hw);
         pump_engine_to_hw(&state, &mut hw);
         pump_rcs_to_hw(&mut state, &mut hw);
