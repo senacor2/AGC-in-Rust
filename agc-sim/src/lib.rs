@@ -9,12 +9,14 @@ pub mod hardware;
 pub mod physics;
 pub mod runtime;
 pub mod scenario;
+pub mod sensors;
 pub mod uplink;
 
 pub use hardware::SimHardware;
-pub use physics::GravityBody;
+pub use physics::{Attitude, GravityBody};
 pub use scenario::{
     run_scenario, DskyExpect, Event, LandmarkTable, Scenario, ScenarioBuilder, SeedStateSpec,
     SimDuration,
 };
+pub use sensors::{landmark_los_in_platform, star_los_in_platform};
 pub use uplink::ScriptedUplink;

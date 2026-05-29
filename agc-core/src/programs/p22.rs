@@ -99,7 +99,12 @@ const ALARM_BAD_LANDMARK_INDEX: u16 = 0o01424;
 /// Alarm 01425 (octal): CSM-to-landmark range below MIN_LANDMARK_RANGE_M.
 const ALARM_LANDMARK_RANGE_ZERO: u16 = 0o01425;
 
-/// Alarm 00400 (octal): CSM state vector is not in ECI frame (frame mismatch).
+/// Alarm 00400 (octal): CSM state vector frame is not supported by P22 (not ECI or MCI).
+///
+/// Raised when `csm_state.frame == Frame::StableMember`, which is an invalid
+/// navigation state.  EarthInertial (ECI) and MoonInertial (MCI) are both
+/// supported: ECI enables Earth landmark tracking, MCI enables lunar landmark
+/// tracking via the [`agc_core::navigation::landmarks`] table.
 const ALARM_FRAME_MISMATCH: u16 = 0o00400;
 
 /// Alarm 1211: Waitlist full (standard AGC waitlist-overflow alarm).
@@ -300,8 +305,12 @@ pub const LANDMARK_TABLE: [LandmarkEntry; 9] = [
 /// 2-second update cycle.
 ///
 /// # Preconditions
+/// - `state.csm_state.frame` must be `EarthInertial` or `MoonInertial`;
+///   otherwise alarm 00400 is raised and tracking is not started.
+///   `EarthInertial` enables Earth landmark tracking; `MoonInertial` enables
+///   lunar landmark tracking via [`agc_core::navigation::landmarks`].
 /// - `state.csm_state.epoch` must be non-zero; otherwise alarm 01420 is raised.
-/// - `state.gha_epoch_rad` must have been set by uplink.
+/// - `state.gha_epoch_rad` must have been set by uplink (used for Earth landmarks).
 ///
 /// # Post-conditions
 /// - `state.major_mode == 22`
@@ -315,13 +324,18 @@ pub fn p22_init(state: &mut AgcState) -> JobPriority {
     state.major_mode = P22_MAJOR_MODE;
     state.dsky.prog = P22_MAJOR_MODE;
 
-    // Precondition: CSM frame must be ECI for landmark navigation.
-    // (landmark_inertial_pos produces ECI coordinates only.)
-    if state.csm_state.frame != Frame::EarthInertial {
-        state.alarm.code = ALARM_FRAME_MISMATCH;
-        state.alarm.lit = true;
-        state.csm_nav.tracking_active = false;
-        return P22_PRIORITY;
+    // Precondition: CSM frame must be ECI or MCI.
+    // ECI ⇒ Earth landmark tracking (LANDMARK_TABLE).
+    // MCI ⇒ lunar landmark tracking (navigation::landmarks::LUNAR_LANDMARK_TABLE).
+    // StableMember is not a valid navigation frame.
+    match state.csm_state.frame {
+        Frame::EarthInertial | Frame::MoonInertial => {}
+        Frame::StableMember => {
+            state.alarm.code = ALARM_FRAME_MISMATCH;
+            state.alarm.lit = true;
+            state.csm_nav.tracking_active = false;
+            return P22_PRIORITY;
+        }
     }
 
     // Precondition: non-zero CSM epoch (sanity check for initialised state vector).
@@ -362,7 +376,7 @@ pub fn p22_init(state: &mut AgcState) -> JobPriority {
 /// Called every `P22_CYCLE_CS` centiseconds (≈ 2 s) after `p22_init`.
 ///
 /// Steps per cycle:
-/// 1. Verify CSM frame is ECI; raise alarm and suspend if not.
+/// 1. Verify CSM frame is ECI or MCI; raise alarm and suspend if StableMember.
 /// 2. Compute Δt since last mark/cycle; grow W-matrix diagonal by process noise.
 ///    If Δt > 3600 s, re-initialise W.
 /// 3. Update DSKY display registers (V16 N43 — lat/lon/alt of current sub-satellite
@@ -376,13 +390,18 @@ pub fn p22_init(state: &mut AgcState) -> JobPriority {
 ///
 /// Spec: p21_p22-spec.md §4.2; edge case (k)
 pub fn p22_cycle_task(state: &mut AgcState) {
-    // Edge case (k): frame check — landmark tracking is ECI-only.
-    if state.csm_state.frame != Frame::EarthInertial {
-        state.alarm.code = ALARM_FRAME_MISMATCH;
-        state.alarm.lit = true;
-        state.csm_nav.tracking_active = false;
-        reschedule_if_active(state);
-        return;
+    // Edge case (k): frame check.
+    // ECI and MCI are both valid landmark-tracking frames.
+    // Only StableMember is invalid (not a navigation frame).
+    match state.csm_state.frame {
+        Frame::EarthInertial | Frame::MoonInertial => {}
+        Frame::StableMember => {
+            state.alarm.code = ALARM_FRAME_MISMATCH;
+            state.alarm.lit = true;
+            state.csm_nav.tracking_active = false;
+            reschedule_if_active(state);
+            return;
+        }
     }
 
     let now_s = state.time.to_seconds();
