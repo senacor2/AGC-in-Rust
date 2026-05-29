@@ -374,6 +374,27 @@ mod tests {
         assert_mat_near(m_rt, m, 1e-12);
     }
 
+    /// tc_quat_from_mat3x3_sign_convention_canonical
+    ///
+    /// `quat_from_mat3x3(identity)` must return a quaternion with `w >= 0`.
+    /// Shepperd's method picks the `t0 = 1 + tr(I) = 4` branch (w-dominant)
+    /// and computes `w = sqrt(t0)/2 = 1.0` — always positive.
+    /// This test pins the sign branch against future algorithmic regressions.
+    #[test]
+    fn tc_quat_from_mat3x3_sign_convention_canonical() {
+        let identity: Mat3x3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let q = quat_from_mat3x3(identity);
+        assert!(
+            q[0] >= 0.0,
+            "quat_from_mat3x3(identity): w must be >= 0 (canonical sign), got w={}",
+            q[0]
+        );
+        assert!((q[0] - 1.0).abs() < 1e-12, "w must be 1.0, got {}", q[0]);
+        assert!(q[1].abs() < 1e-12, "x must be 0, got {}", q[1]);
+        assert!(q[2].abs() < 1e-12, "y must be 0, got {}", q[2]);
+        assert!(q[3].abs() < 1e-12, "z must be 0, got {}", q[3]);
+    }
+
     /// tc_quat_from_mat3x3_arbitrary_rotation
     ///
     /// Arbitrary rotation: q = normalise([0.5, -0.5, 0.3, 0.7]).

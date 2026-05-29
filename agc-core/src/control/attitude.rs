@@ -530,6 +530,87 @@ mod tests {
         );
     }
 
+    // ── TC-ATT-GIMBAL: gimbal_matrix_from_euler tests ────────────────────────
+
+    /// tc_att_gimbal_matrix_zero_is_identity
+    ///
+    /// `gimbal_matrix_from_euler([0, 0, 0])` must return the 3×3 identity
+    /// matrix within 1e-12 per cell.
+    #[test]
+    fn tc_att_gimbal_matrix_zero_is_identity() {
+        let m = gimbal_matrix_from_euler([0.0, 0.0, 0.0]);
+        let identity: Mat3x3 = linalg::IDENTITY;
+        for r in 0..3 {
+            for c in 0..3 {
+                assert!(
+                    (m[r][c] - identity[r][c]).abs() < 1e-12,
+                    "zero euler: m[{r}][{c}] = {} (expected {})",
+                    m[r][c],
+                    identity[r][c]
+                );
+            }
+        }
+    }
+
+    /// tc_att_gimbal_matrix_90deg_roll
+    ///
+    /// `gimbal_matrix_from_euler([PI/2, 0, 0])` = Rx(90°).
+    /// Rx(90°) maps +Y to +Z: the second column of M must be [0, 0, 1]
+    /// (i.e. the image of e_y is e_z) and the first column must stay [1, 0, 0].
+    #[test]
+    fn tc_att_gimbal_matrix_90deg_roll() {
+        use core::f64::consts::FRAC_PI_2;
+        let m = gimbal_matrix_from_euler([FRAC_PI_2, 0.0, 0.0]);
+
+        // Column 0 (image of e_x): must be unchanged [1, 0, 0].
+        assert!((m[0][0] - 1.0).abs() < 1e-12, "m[0][0] should be 1, got {}", m[0][0]);
+        assert!(m[1][0].abs() < 1e-12, "m[1][0] should be 0, got {}", m[1][0]);
+        assert!(m[2][0].abs() < 1e-12, "m[2][0] should be 0, got {}", m[2][0]);
+
+        // Column 1 (image of e_y under Rx(90°)): Rx(90°)·ey = [0, 0, 1].
+        assert!(m[0][1].abs() < 1e-12, "m[0][1] should be 0, got {}", m[0][1]);
+        assert!(m[1][1].abs() < 1e-12, "m[1][1] should be 0, got {}", m[1][1]);
+        assert!((m[2][1] - 1.0).abs() < 1e-12, "m[2][1] should be 1, got {}", m[2][1]);
+    }
+
+    /// tc_att_gimbal_matrix_composition_yzx_independent
+    ///
+    /// For roll=0.1, pitch=0.2, yaw=0.3 the result must be a proper rotation:
+    /// - M·Mᵀ ≈ I (orthogonal) within 1e-12 per cell.
+    /// - det(M) = +1 within 1e-12 (proper rotation, not reflection).
+    #[test]
+    fn tc_att_gimbal_matrix_composition_yzx_independent() {
+        let m = gimbal_matrix_from_euler([0.1, 0.2, 0.3]);
+
+        // Orthogonality: M · Mᵀ == I
+        let mt = linalg::transpose(m);
+        let mmt = linalg::mxm(m, mt);
+        let identity: Mat3x3 = linalg::IDENTITY;
+        for r in 0..3 {
+            for c in 0..3 {
+                assert!(
+                    (mmt[r][c] - identity[r][c]).abs() < 1e-12,
+                    "M·Mᵀ[{r}][{c}] = {} (expected {})",
+                    mmt[r][c],
+                    identity[r][c]
+                );
+            }
+        }
+
+        // Determinant +1 (proper rotation, not reflection).
+        // det = m[0][0]*(m[1][1]*m[2][2] - m[1][2]*m[2][1])
+        //     - m[0][1]*(m[1][0]*m[2][2] - m[1][2]*m[2][0])
+        //     + m[0][2]*(m[1][0]*m[2][1] - m[1][1]*m[2][0])
+        let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+            - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+        assert!(
+            (det - 1.0).abs() < 1e-12,
+            "determinant must be +1, got {}",
+            det
+        );
+    }
+
     // ── TC-ATT-SIGN: CI-10 sign-convention validation ─────────────────────────
 
     /// TC-ATT-SIGN: A +1° positive roll error (body frame rotated +1° CCW about
