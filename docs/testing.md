@@ -227,12 +227,14 @@ Scenario {
 Event {
     SeedState(SeedStateSpec)              // csm + met + refsmmat
     SeedGroundTruth(StateVector)          // executor-held ground truth (MS-T2)
+    SeedTruthRefsmmat(Mat3x3)             // executor-held truth REFSMMAT (MS-T3)
     AdvanceMet(SimDuration)               // walk the executive forward
     AdvanceCoast(SimDuration)             // gravity-driven ground truth (MS-T2)
     KeyPress(Key)                         // crew keystroke (one tick after)
     UplinkWord(u16)                       // ScriptedUplink push (one tick after)
-    OpticsSighting { star_id }            // STUB until MS-T3
-    LandmarkSighting { table, index }     // STUB until MS-T3
+    CommandAttitude { q: [f64; 4] }       // direct setter for commanded_q (MS-T3)
+    OpticsSighting { star_id }            // P52 mark dispatch (MS-T3)
+    LandmarkSighting { table, index }     // P22 mark dispatch (MS-T3)
     ExpectMajorMode(u8)
     ExpectDsky(DskyExpect)                // verb / noun / r0/r1/r2 / flashing — all optional
     ExpectCsmStateClose { ground_truth, pos_tol_m, vel_tol_m_s }
@@ -265,7 +267,9 @@ sequences:
 | `.v71_p27_block_update(addr, &[(sign, mag)])` | Full V71 ENTR addr ENTR count ENTR ±v ENTR-each sequence |
 | `.advance(SimDuration)` / `.advance_coast(SimDuration)` | Pumps for the requested duration |
 | `.seed_ground_truth(StateVector)` | Initialise the executor's ground-truth state (MS-T2) |
-| `.uplink_word(u16)` / `.optics_sighting(u8)` / `.landmark_sighting(...)` | One-shot inputs |
+| `.seed_truth_refsmmat(Mat3x3)` | Initialise the executor's truth REFSMMAT used by sensor sims (MS-T3) |
+| `.command_attitude([f64; 4])` | Direct setter for spacecraft `commanded_q` (MS-T3) |
+| `.uplink_word(u16)` / `.optics_sighting(u8)` / `.landmark_sighting(...)` | One-shot inputs (Optics/Landmark wired MS-T3) |
 | `.comment(&'static str)` | Trace marker |
 | `.expect_major_mode(u8)` / `.expect_dsky(DskyExpect)` / `.expect_csm_state_close(...)` / `.expect_alarm(u16)` | Assertions evaluated at the event's position |
 | `.expect_agc_matches_ground_truth(pos_tol_m, vel_tol_m_s)` | Compare AGC `csm_state` against the executor's ground truth (MS-T2) |
@@ -342,16 +346,15 @@ comparison.
 
 ### 5.5 Deferred variants
 
-`OpticsSighting` and `LandmarkSighting` are **no-op stubs** with a
-one-line stderr warning until MS-T3 (#26) wires the sensor sims.
-Phase-test authors can stage full Apollo-8 scenarios against the
-API today and have them progress as MS-T3 lands, without
-panic-on-compose.
+All Event variants are now wired as of MS-T3. The current deferred
+work is in the form of follow-up issues (#55 DAP→quaternion bridge,
+#56 Moon libration, #57 sextant CDU+MARK pipeline) — see §5.7.
 
-`AdvanceCoast` is **no longer a stub** as of MS-T2 (PR #53,
-amendments in this PR). It runs the two-tier loop documented in
-§5.3 against an executor-held ground truth (seeded by
-`SeedGroundTruth`).
+`AdvanceCoast` was wired in MS-T2 against an executor-held ground
+truth (seeded by `SeedGroundTruth`); see §5.6. `OpticsSighting` and
+`LandmarkSighting` were wired in MS-T3 against sensor simulators and
+direct-call dispatch to `p52_mark_align` / `p22_incorporate_landmark_mark`;
+see §5.7.
 
 ### 5.6 Ground-truth oracle (MS-T2)
 
@@ -377,7 +380,62 @@ Three tests pin the three layers of validation:
 including J2 (~1.9 Mm/day phase divergence from the 0.144 %
 J2-corrected mean motion in LEO).
 
-### 5.7 Worked example — `p40_sps_burn.rs`
+### 5.7 Sensor sims and lunar landmarks (MS-T3)
+
+`agc-sim/src/sensors.rs` provides two functions used by the executor
+to inject sighting data into the AGC:
+
+```text
+star_los_in_platform(star_id, attitude, refsmmat) -> Vec3
+landmark_los_in_platform(table, index, csm_pos_inertial,
+                         attitude, refsmmat, gha_epoch_rad) -> Vec3
+```
+
+Both return the **platform-frame line-of-sight unit vector** — the
+direct input shape that `p52_mark_align` and
+`p22_incorporate_landmark_mark` consume. No CDU-shaft-trunnion-to-LOS
+geometry layer exists in `agc-core` today; the architect's MS-T3
+design routes `OpticsSighting` and `LandmarkSighting` events
+directly to the program-level entry points and defers the full
+sextant pipeline to #57.
+
+`agc-core/src/navigation/landmarks.rs` ships
+`LUNAR_LANDMARK_TABLE: [LunarLandmarkEntry; 9]` (index 0 unused for
+1-indexed parity with the Earth table). The eight real entries mix
+IAU-canonical craters (Tycho, Copernicus, Censorinus, Maskelyne F,
+Aristarchus) with Apollo 8 crew-specific names (Mount Marilyn —
+Lovell's name for Secchi θ; Boot Hill; Sidewinder Rille). Per-entry
+`// Source:` comments document provenance — NASSP's Apollo 8 marker
+file for the crew names, IAU gazetteer for the rest.
+
+`agc-core/src/programs/p22.rs` was extended to dispatch frame-aware:
+`Frame::EarthInertial` keeps the existing Earth path with GHA rotation,
+`Frame::MoonInertial` looks up the lunar landmark table and treats
+MoonFixed ≡ MCI (libration deferred to #56).
+
+**LOS sign convention**: `landmark_los_in_platform` returns the sensor
+convention `unit(landmark - csm)` (the direction the spacecraft looks
+to see the landmark). `p22_incorporate_landmark_mark` uses the
+rho-vector convention `unit(csm - landmark)` (the predicted
+landmark→CSM direction). The scenario executor negates at the
+boundary; both ends keep their natural framings.
+
+**Attitude model**: `agc-sim/src/physics.rs::Attitude` holds
+`q`, `commanded_q`, `slew_tau_s` as scalar-first quaternions
+`[w, x, y, z]`. Slew integration uses closed-form slerp with
+`alpha = 1 - exp(-dt / slew_tau_s)`. `slew_tau_s = 0.0` snaps to
+commanded. The DAP→quaternion bridge needed for closed-loop attitude
+tracking is filed as #55 — for MS-T3, scenarios set `commanded_q`
+directly via `CommandAttitude { q }`.
+
+Exit criterion tests:
+
+| Test | Location | What it pins |
+|---|---|---|
+| `tc_ms_t3_p52_two_star_alignment_recovers_refsmmat` | `agc-test/tests/p52_two_star_alignment.rs` | Two star sightings with a perturbed REFSMMAT recover truth within 3 arc-min Frobenius. |
+| `tc_ms_t3_p22_lunar_landmark_kalman_update_moves_toward_truth` | `agc-test/tests/p22_lunar_landmark_nav.rs` | One Mount Marilyn sighting in lunar orbit pulls a 500 m position offset closer to truth. |
+
+### 5.8 Worked example — `p40_sps_burn.rs`
 
 The MS-T1 proof point is `agc-test/tests/p40_sps_burn.rs`. It
 composes three sub-scenarios that share an `(AgcState, SimHardware)`
@@ -397,7 +455,7 @@ test asserts within a single DAP cycle of TIG — finer-grained than
 the event level. `ScenarioBuilder` is for declarative event
 sequences; intra-cycle assertions stay direct.
 
-### 5.8 Adding a new mission-phase test
+### 5.9 Adding a new mission-phase test
 
 1. Pick a `phase_<name>.rs` file under `agc-test/tests/` matching the
    layout in `specs/end-to-end-mission-testing-plan.md` §7.
