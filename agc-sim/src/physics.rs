@@ -71,11 +71,11 @@ pub mod apollo_csm {
     /// Approximate CSM mid-mission mass with a partially-loaded SM (kg).
     pub const MASS_KG: f64 = 30_000.0;
 
-    /// SPS thrust used by the simulator. The Apollo SPS produced ~91 kN
-    /// at full thrust; we use a smaller value here so an unrescaled
-    /// burn-time demonstration runs in the tens of seconds rather than
-    /// the tens of milliseconds — see `docs/p40_burn_demo.md`.
-    pub const SPS_THRUST_N: f64 = 45_000.0;
+    /// SPS thrust used by the simulator. Matches the AGC's own
+    /// `agc_core::guidance::targeting::SPS_THRUST_N` so that burn-time
+    /// predictions and the simulator's integrated burn duration agree.
+    /// Historical Apollo SPS produced ~91 188 N at full thrust.
+    pub const SPS_THRUST_N: f64 = 91_188.0;
 }
 
 /// The gravitating body acting on the spacecraft.
@@ -325,18 +325,18 @@ mod tests {
         assert_eq!(sc.pipa_residue_m_s, [0.0; 3]);
     }
 
-    /// TC-PHYS-2: 2-second tick at default thrust produces 51 pulses
-    /// along the configured axis (1.5 m/s² × 2 s = 3.0 m/s, ÷0.0585 ≈ 51.28).
+    /// TC-PHYS-2: 2-second tick at default thrust produces 103 pulses
+    /// along the configured axis (3.0396 m/s² × 2 s = 6.0792 m/s, ÷0.0585 ≈ 103.92).
     #[test]
     fn tc_phys_2_default_thrust_one_cycle() {
         let mut sc = Spacecraft::new();
         sc.tick(2.0, true);
         let pulses = sc.drain_pipa_pulses();
-        assert_eq!(pulses, [0, 51, 0]);
-        // Residue ≈ 0.0165 m/s carried forward.
+        assert_eq!(pulses, [0, 103, 0]);
+        // Residue ≈ 0.0537 m/s carried forward.
         assert!(
-            (sc.pipa_residue_m_s[1] - 0.0165).abs() < 1e-6,
-            "residue carry-over should be ≈ 0.0165, got {}",
+            (sc.pipa_residue_m_s[1] - 0.0537).abs() < 1e-3,
+            "residue carry-over should be ≈ 0.0537, got {}",
             sc.pipa_residue_m_s[1]
         );
     }
@@ -350,10 +350,10 @@ mod tests {
             sc.tick(2.0, true);
             total_pulses += sc.drain_pipa_pulses()[1] as i64;
         }
-        // 7 × 3.0 m/s = 21.0 m/s simulated, ÷0.0585 ≈ 358.97 pulses.
-        // The trunc-with-residue strategy must emit exactly 358 pulses
+        // 7 × 6.0792 m/s = 42.5544 m/s simulated, ÷0.0585 ≈ 727.43 pulses.
+        // The trunc-with-residue strategy must emit exactly 727 pulses
         // over 7 cycles — never lose more than one quantum total.
-        assert_eq!(total_pulses, 358);
+        assert_eq!(total_pulses, 727);
     }
 
     /// TC-PHYS-4: zero or negative dt is a no-op.
@@ -374,7 +374,7 @@ mod tests {
         let pulses = sc.drain_pipa_pulses();
         assert_eq!(pulses[0], 0);
         assert_eq!(pulses[1], 0);
-        assert_eq!(pulses[2], 51);
+        assert_eq!(pulses[2], 103);
     }
 
     /// TC-PHYS-6: subdivision self-consistency of `advance_ground_truth`.
