@@ -89,7 +89,7 @@
 //! | Phase | Window | Position tol | Velocity tol | Extra assertion                        |
 //! |-------|--------|--------------|--------------|----------------------------------------|
 //! | 1     | 5 min  | 1 000 m      | 1 m/s        | baseline post-TLI ECI                  |
-//! | 2     | 5 min  | 1 000 m      | 1 m/s        | MCC-2 applied (-0.73 m/s)              |
+//! | 2     | 5 min  | 1 000 m      | 1 m/s        | MCC-2 applied (-2.35 m/s)              |
 //! | 3     | 5 min  | 1 000 m      | 1 m/s        | mid-transit ECI                        |
 //! | 4     | 5 min  | 1 000 m      | 1 m/s        | high-apogee coast                      |
 //! | 4b    | 5 min  | 1 000 m      | 1 m/s        | synthetic MCI seed, Moon gravity check |
@@ -149,7 +149,8 @@ const LOI1_MET_CS: u32 = 24_890_000;
 // ── MCC ΔV magnitudes ────────────────────────────────────────────────────────
 
 /// MCC-2 ΔV magnitude (m/s). Applied anti-velocity.
-const MCC2_DV_MPS: f64 = 0.73;
+/// Apollo 8 Mission Report MSC-PA-R-69-1, Table 3-I: MCC-2 was ~2.35 m/s SPS.
+const MCC2_DV_MPS: f64 = 2.35;
 /// MCC-4 ΔV magnitude (m/s). Applied anti-velocity.
 const MCC4_DV_MPS: f64 = 0.43;
 
@@ -266,7 +267,7 @@ fn tc_phase_translunar_apollo_8_tracks_through_soi_to_loi1() {
 
     // ── Phase 2: MCC-2 (ECI) ─────────────────────────────────────────────────
     //
-    // Apply MCC-2: −0.73 m/s along velocity direction (anti-velocity correction).
+    // Apply MCC-2: −2.35 m/s along velocity direction (anti-velocity correction).
 
     let vh2 = v_hat(sv_at_mcc2.velocity);
     let sv_mcc2_applied = StateVector {
@@ -279,7 +280,7 @@ fn tc_phase_translunar_apollo_8_tracks_through_soi_to_loi1() {
     };
 
     let phase2 = ScenarioBuilder::new("phase_translunar/phase2_mcc2")
-        .comment("Phase 2: MCC-2 applied at T+10:55:04 — anti-velocity -0.73 m/s")
+        .comment("Phase 2: MCC-2 applied at T+10:55:04 — anti-velocity -2.35 m/s")
         .seed_state()
         .from_state_vector(sv_mcc2_applied)
         .met(Met(MCC2_MET_CS))
