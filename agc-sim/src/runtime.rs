@@ -639,8 +639,8 @@ mod tests {
     /// `attitude.commanded_q` unchanged.
     #[test]
     fn tc_rt_bridge_dap_off_no_change() {
-        use agc_core::control::DapMode;
         use crate::physics::Attitude;
+        use agc_core::control::DapMode;
 
         let mut state = AgcState::new();
         state.dap_state.mode = DapMode::Off;
@@ -666,8 +666,8 @@ mod tests {
     /// leave `attitude.commanded_q` unchanged (no commanded attitude in this mode).
     #[test]
     fn tc_rt_bridge_rate_damping_no_change() {
-        use agc_core::control::DapMode;
         use crate::physics::Attitude;
+        use agc_core::control::DapMode;
 
         let mut state = AgcState::new();
         state.dap_state.mode = DapMode::RateDamping;
@@ -693,8 +693,8 @@ mod tests {
     /// leave `attitude.commanded_q` unchanged (entry roll out of scope for #55).
     #[test]
     fn tc_rt_bridge_entry_roll_no_change() {
-        use agc_core::control::DapMode;
         use crate::physics::Attitude;
+        use agc_core::control::DapMode;
 
         let mut state = AgcState::new();
         state.dap_state.mode = DapMode::EntryRoll(0.5);
@@ -721,8 +721,8 @@ mod tests {
     /// identity quaternion `[1, 0, 0, 0]` within 1e-12.
     #[test]
     fn tc_rt_bridge_attitude_hold_identity_inputs() {
-        use agc_core::control::DapMode;
         use crate::physics::Attitude;
+        use agc_core::control::DapMode;
 
         let mut state = AgcState::new();
         state.dap_state.mode = DapMode::AttitudeHold;
@@ -752,8 +752,8 @@ mod tests {
     /// `[cos(PI/4), sin(PI/4), 0, 0]` within 1e-12 (90° rotation about +X).
     #[test]
     fn tc_rt_bridge_attitude_hold_90deg_roll() {
-        use agc_core::control::DapMode;
         use crate::physics::Attitude;
+        use agc_core::control::DapMode;
         use core::f64::consts::{FRAC_PI_2, FRAC_PI_4};
 
         let mut state = AgcState::new();
@@ -768,19 +768,24 @@ mod tests {
         let eps = 1e-12;
 
         // Norm must be 1.
-        let norm = (q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]).sqrt();
-        assert!((norm - 1.0).abs() < eps, "quaternion must be unit norm, got {norm}");
+        let norm = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+        assert!(
+            (norm - 1.0).abs() < eps,
+            "quaternion must be unit norm, got {norm}"
+        );
 
         // Axis-angle check: 90° about +X → w = cos(PI/4), x = sin(PI/4), y = z = 0.
         assert!(
             (q[0] - FRAC_PI_4.cos()).abs() < eps,
             "w should be cos(PI/4) = {}, got {}",
-            FRAC_PI_4.cos(), q[0]
+            FRAC_PI_4.cos(),
+            q[0]
         );
         assert!(
             (q[1] - FRAC_PI_4.sin()).abs() < eps,
             "x should be sin(PI/4) = {}, got {}",
-            FRAC_PI_4.sin(), q[1]
+            FRAC_PI_4.sin(),
+            q[1]
         );
         assert!(q[2].abs() < eps, "y should be 0, got {}", q[2]);
         assert!(q[3].abs() < eps, "z should be 0, got {}", q[3]);

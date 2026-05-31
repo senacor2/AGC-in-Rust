@@ -44,8 +44,8 @@ use agc_core::navigation::StateVector;
 use agc_core::programs::p22::{p22_init, CSM_W_INIT_POS_VARIANCE};
 use agc_core::types::{Mat3x3, Met};
 use agc_core::AgcState;
-use agc_sim::{run_scenario, LandmarkTable, ScenarioBuilder, SimDuration};
 use agc_sim::SimHardware;
+use agc_sim::{run_scenario, LandmarkTable, ScenarioBuilder, SimDuration};
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -170,8 +170,7 @@ fn tc_ms_t3_p22_lunar_landmark_kalman_update_moves_toward_truth() {
          (reject_count = {} — if reject_count = 1 and mark_count = 0 the \
          LOS sign convention bug is present: scenario runner passes \
          unit(lm-csm) but P22 expects unit(csm-lm))",
-        state.csm_nav.mark_count,
-        state.csm_nav.reject_count
+        state.csm_nav.mark_count, state.csm_nav.reject_count
     );
     assert_eq!(
         state.csm_nav.reject_count, 0,
@@ -192,7 +191,6 @@ fn tc_ms_t3_p22_lunar_landmark_kalman_update_moves_toward_truth() {
          an accepted landmark mark.\n\
          Before: {:?}\n\
          After:  {:?}",
-        w_diag_before,
-        w_diag_after
+        w_diag_before, w_diag_after
     );
 }

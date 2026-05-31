@@ -912,13 +912,29 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
             // ── KeyPress ──────────────────────────────────────────────────────
             Event::KeyPress(k) => {
                 feed_key(state, k);
-                do_tick(state, hw, tick_cs, &mut waitlist, &mut dap, &mut t4, &mut ctx);
+                do_tick(
+                    state,
+                    hw,
+                    tick_cs,
+                    &mut waitlist,
+                    &mut dap,
+                    &mut t4,
+                    &mut ctx,
+                );
             }
 
             // ── UplinkWord ────────────────────────────────────────────────────
             Event::UplinkWord(w) => {
                 hw.uplink.push_word(w);
-                do_tick(state, hw, tick_cs, &mut waitlist, &mut dap, &mut t4, &mut ctx);
+                do_tick(
+                    state,
+                    hw,
+                    tick_cs,
+                    &mut waitlist,
+                    &mut dap,
+                    &mut t4,
+                    &mut ctx,
+                );
             }
 
             // ── SeedTruthRefsmmat ─────────────────────────────────────────────
@@ -942,9 +958,9 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
 
             // ── OpticsSighting ────────────────────────────────────────────────
             Event::OpticsSighting { star_id } => {
-                let refsmmat = ctx.truth_refsmmat.expect(
-                    "OpticsSighting requires SeedTruthRefsmmat earlier in the scenario",
-                );
+                let refsmmat = ctx
+                    .truth_refsmmat
+                    .expect("OpticsSighting requires SeedTruthRefsmmat earlier in the scenario");
                 let star_inertial = STAR_CATALOG[(star_id - 1) as usize].direction;
                 let star_platform =
                     star_los_in_platform(star_id, &ctx.spacecraft.attitude, &refsmmat);
@@ -988,9 +1004,9 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
 
             // ── LandmarkSighting ──────────────────────────────────────────────
             Event::LandmarkSighting { table, index } => {
-                let refsmmat = ctx.truth_refsmmat.expect(
-                    "LandmarkSighting requires SeedTruthRefsmmat earlier in the scenario",
-                );
+                let refsmmat = ctx
+                    .truth_refsmmat
+                    .expect("LandmarkSighting requires SeedTruthRefsmmat earlier in the scenario");
                 let csm_pos = state.csm_state.position;
                 let los_platform = landmark_los_in_platform(
                     table,
@@ -2121,12 +2137,10 @@ mod tests {
     /// `Event::SeedTruthRefsmmat(matrix)` with the same matrix data.
     #[test]
     fn tc_scn_builder_seed_truth_refsmmat_emits_event() {
-        let m: agc_core::types::Mat3x3 = [
-            [1.0, 0.0, 0.0],
-            [0.0, 0.0, -1.0],
-            [0.0, 1.0, 0.0],
-        ];
-        let scenario = ScenarioBuilder::new("seed-truth-refsmmat").seed_truth_refsmmat(m).build();
+        let m: agc_core::types::Mat3x3 = [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]];
+        let scenario = ScenarioBuilder::new("seed-truth-refsmmat")
+            .seed_truth_refsmmat(m)
+            .build();
 
         assert_eq!(scenario.events.len(), 1, "exactly one event expected");
         match scenario.events[0] {
@@ -2152,7 +2166,9 @@ mod tests {
     #[test]
     fn tc_scn_builder_command_attitude_emits_event() {
         let q = [1.0_f64, 0.0, 0.0, 0.0];
-        let scenario = ScenarioBuilder::new("cmd-attitude").command_attitude(q).build();
+        let scenario = ScenarioBuilder::new("cmd-attitude")
+            .command_attitude(q)
+            .build();
 
         assert_eq!(scenario.events.len(), 1, "exactly one event expected");
         match scenario.events[0] {

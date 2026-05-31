@@ -49,7 +49,7 @@ pub struct Attitude {
 impl Default for Attitude {
     fn default() -> Self {
         Self {
-            q: [1.0, 0.0, 0.0, 0.0],          // identity
+            q: [1.0, 0.0, 0.0, 0.0],           // identity
             commanded_q: [1.0, 0.0, 0.0, 0.0], // identity
             slew_tau_s: 5.0,
         }

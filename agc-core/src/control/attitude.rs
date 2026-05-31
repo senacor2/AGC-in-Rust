@@ -563,14 +563,38 @@ mod tests {
         let m = gimbal_matrix_from_euler([FRAC_PI_2, 0.0, 0.0]);
 
         // Column 0 (image of e_x): must be unchanged [1, 0, 0].
-        assert!((m[0][0] - 1.0).abs() < 1e-12, "m[0][0] should be 1, got {}", m[0][0]);
-        assert!(m[1][0].abs() < 1e-12, "m[1][0] should be 0, got {}", m[1][0]);
-        assert!(m[2][0].abs() < 1e-12, "m[2][0] should be 0, got {}", m[2][0]);
+        assert!(
+            (m[0][0] - 1.0).abs() < 1e-12,
+            "m[0][0] should be 1, got {}",
+            m[0][0]
+        );
+        assert!(
+            m[1][0].abs() < 1e-12,
+            "m[1][0] should be 0, got {}",
+            m[1][0]
+        );
+        assert!(
+            m[2][0].abs() < 1e-12,
+            "m[2][0] should be 0, got {}",
+            m[2][0]
+        );
 
         // Column 1 (image of e_y under Rx(90°)): Rx(90°)·ey = [0, 0, 1].
-        assert!(m[0][1].abs() < 1e-12, "m[0][1] should be 0, got {}", m[0][1]);
-        assert!(m[1][1].abs() < 1e-12, "m[1][1] should be 0, got {}", m[1][1]);
-        assert!((m[2][1] - 1.0).abs() < 1e-12, "m[2][1] should be 1, got {}", m[2][1]);
+        assert!(
+            m[0][1].abs() < 1e-12,
+            "m[0][1] should be 0, got {}",
+            m[0][1]
+        );
+        assert!(
+            m[1][1].abs() < 1e-12,
+            "m[1][1] should be 0, got {}",
+            m[1][1]
+        );
+        assert!(
+            (m[2][1] - 1.0).abs() < 1e-12,
+            "m[2][1] should be 1, got {}",
+            m[2][1]
+        );
     }
 
     /// tc_att_gimbal_matrix_composition_yzx_independent
