@@ -11,6 +11,7 @@ The architecture is constrained by hardware which has very little memory and a s
 
 You need to understand the functional specification of the Apollo Guidance Computer which contains all requirements for the navigation software.
 
-When in doubt, consult the appropriate specialist agent instead of guessing:
+The subject matter is very complex and requires deep knowlegde about the architecture of the AGC and the physics of space flight.
+Present your design to the analysts and take their feedback into account:
 - **analyst-reengineer** — for AGC software internals (waitlist timing, program internals, register layouts, fixed-point conversions, interpretation of the original assembler source).
 - **orbital-mechanics** — for orbital mechanics, finite-burn dynamics, mission operations (burn geometries, MCC strategy, SOI handovers, free-return trajectories), and interpretation of the Apollo Mission Reports / NASSP data. Especially when designing tests or algorithms involving trajectory propagation, burn timing, or anything where the historical Apollo flight profile is the reference.
