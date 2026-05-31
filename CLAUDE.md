@@ -12,7 +12,8 @@ The target system is a bare-metal, hard real-time computer with very limited mem
 
 Work proceeds through a pipeline of specialized agents defined in `.claude/agents/`:
 
-1. **analyst-reengineer** — reads the AGC assembler source and reference docs, produces functional specifications per component
+1. **analyst-reengineer** — reads the AGC assembler source and reference docs, produces functional specifications per component. This step is optional, if there is no legacy code involved. The analyst-reengineer however can be consulted later in the process if AGC-related questions arise.
+2. **orbital-mechanics** - produces a specification of the underlying physics of spaceflight for the architect. This step is optional but the orbital-mechanics agent must be consulted when issues arise concerning the physical model.
 2. **architect** — designs the Rust architecture based on functional specs; uses `EnterPlanMode`/`ExitPlanMode`
 3. **developer** — implements Rust code following architect guidelines and analyst specs
 4. **tester** — writes Rust unit tests (per public interface) and system tests
