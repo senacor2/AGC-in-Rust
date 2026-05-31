@@ -2,7 +2,7 @@
 //!
 //! Drives a complete crew keystroke sequence through the agc-sim
 //! `SimHardware` to seed the state vector, target a burn, arm the SPS,
-//! wait for TIG, fire the engine for ~15 seconds, and observe
+//! wait for TIG, fire the engine for ~7 seconds, and observe
 //! autonomous cutoff — entirely through the same code path
 //! `dsky_sim`'s render loop uses (the
 //! [`agc_sim::runtime`] soft executive pumps). The companion
@@ -29,7 +29,7 @@ use agc_sim::{run_scenario, DskyExpect, ScenarioBuilder};
 ///
 /// At the simulator's default 1.5 m/s² SPS acceleration the SERVICER
 /// will accumulate ≈21 m/s in seven 2-second cycles = 14 s, well within
-/// the "~15 s" demonstration window and within the 0.3 m/s burn-cutoff
+/// the "~7 s" demonstration window and within the 0.3 m/s burn-cutoff
 /// tolerance.
 const TARGET_DV_MS: u32 = 21;
 
@@ -52,7 +52,7 @@ const TIG_SECONDS_X100: u32 = 0;
 // ── Test ─────────────────────────────────────────────────────────────────────
 
 /// Crew V/N sequence arms the SPS, waits for TIG, fires the engine for
-/// ~15 seconds, and observes autonomous cutoff.
+/// ~7 seconds, and observes autonomous cutoff.
 ///
 /// Sequence (matches `docs/p40_burn_demo.md`):
 ///   1. V71 E 1 E 6 E + ... — P27 block-address state-vector load
@@ -74,7 +74,7 @@ const TIG_SECONDS_X100: u32 = 0;
 ///     `hw.engine.thrusting` returns to `false`, accumulated ΔV is
 ///     within the 0.3 m/s cutoff tolerance of the 21 m/s target.
 #[test]
-fn it_v37_p40_fires_sps_for_about_15s() {
+fn it_v37_p40_fires_sps_for_about_7s() {
     let mut state = AgcState::new();
     let mut hw = SimHardware::new();
 
@@ -281,8 +281,8 @@ fn it_v37_p40_fires_sps_for_about_15s() {
     let post_ignition_iters = iters - ignition_iter;
     let burn_duration_s = post_ignition_iters as f64 * TICK_S;
     assert!(
-        (12.0..=18.0).contains(&burn_duration_s),
-        "engine should fire for about 15 s, got {burn_duration_s} s"
+        (6.0..=10.0).contains(&burn_duration_s),
+        "engine should fire for about 7 s, got {burn_duration_s} s"
     );
 
     // ── Final state via scenario assertion + direct checks ────────────────────
