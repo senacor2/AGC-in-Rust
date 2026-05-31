@@ -19,8 +19,8 @@ use agc_core::navigation::state_vector::Frame;
 use agc_core::navigation::StateVector;
 use agc_core::types::{Mat3x3, Met};
 use agc_core::AgcState;
-use agc_sim::{run_scenario, ScenarioBuilder, SimDuration};
 use agc_sim::SimHardware;
+use agc_sim::{run_scenario, ScenarioBuilder, SimDuration};
 
 // ── Star IDs used in this test ─────────────────────────────────────────────────
 

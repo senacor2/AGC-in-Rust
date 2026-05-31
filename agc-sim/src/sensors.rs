@@ -52,11 +52,7 @@ use crate::scenario::LandmarkTable;
 ///
 /// # Panics
 /// Panics if `star_id == 0` or `star_id > 37` (invalid catalogue number).
-pub fn star_los_in_platform(
-    star_id: u8,
-    _attitude: &Attitude,
-    refsmmat: &Mat3x3,
-) -> Vec3 {
+pub fn star_los_in_platform(star_id: u8, _attitude: &Attitude, refsmmat: &Mat3x3) -> Vec3 {
     assert!(
         (1..=agc_core::navigation::star_catalog::CATALOG_SIZE).contains(&star_id),
         "star_los_in_platform: star_id {star_id} out of range 1..=37"
@@ -147,12 +143,12 @@ fn lunar_landmark_inertial(entry: &LunarLandmarkEntry) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::physics::Attitude;
+    use crate::scenario::LandmarkTable;
     use agc_core::math::linalg::mxv;
     use agc_core::navigation::landmarks::R_MOON_M;
     use agc_core::navigation::star_catalog::STAR_CATALOG;
     use agc_core::types::{Mat3x3, Vec3};
-    use crate::physics::Attitude;
-    use crate::scenario::LandmarkTable;
 
     const IDENTITY_REFSMMAT: Mat3x3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
@@ -192,11 +188,7 @@ mod tests {
     #[test]
     fn tc_sens_star_los_rotated_refsmmat() {
         // 90° rotation about X maps Y→Z and Z→-Y.
-        let refsmmat_90x: Mat3x3 = [
-            [1.0,  0.0,  0.0],
-            [0.0,  0.0,  1.0],
-            [0.0, -1.0,  0.0],
-        ];
+        let refsmmat_90x: Mat3x3 = [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]];
         let attitude = default_attitude();
         // Use star 1 (Alpheratz) as the test vector.
         let star_dir = STAR_CATALOG[0].direction;

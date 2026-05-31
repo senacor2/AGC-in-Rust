@@ -110,10 +110,10 @@ pub fn quat_from_mat3x3(m: Mat3x3) -> Quat {
     let tr = m[0][0] + m[1][1] + m[2][2];
 
     // Four candidates: t = 4 × (w² | x² | y² | z²) respectively.
-    let t0 = 1.0 + tr;                       // 4w²
-    let t1 = 1.0 + 2.0 * m[0][0] - tr;      // 4x²
-    let t2 = 1.0 + 2.0 * m[1][1] - tr;      // 4y²
-    let t3 = 1.0 + 2.0 * m[2][2] - tr;      // 4z²
+    let t0 = 1.0 + tr; // 4w²
+    let t1 = 1.0 + 2.0 * m[0][0] - tr; // 4x²
+    let t2 = 1.0 + 2.0 * m[1][1] - tr; // 4y²
+    let t3 = 1.0 + 2.0 * m[2][2] - tr; // 4z²
 
     // Pick the branch with the largest t so the extracted component has
     // maximum magnitude and we divide by the largest possible denominator.
@@ -346,7 +346,12 @@ mod tests {
         // Allow sign flip (both represent the same rotation).
         let sign = if q_rt[0] * q_ref[0] >= 0.0 { 1.0 } else { -1.0 };
         assert_quat_near(
-            [sign * q_rt[0], sign * q_rt[1], sign * q_rt[2], sign * q_rt[3]],
+            [
+                sign * q_rt[0],
+                sign * q_rt[1],
+                sign * q_rt[2],
+                sign * q_rt[3],
+            ],
             q_ref,
             1e-12,
         );
@@ -407,7 +412,12 @@ mod tests {
         let q_rt = quat_from_mat3x3(m);
         let sign = if q_rt[0] * q_ref[0] >= 0.0 { 1.0 } else { -1.0 };
         assert_quat_near(
-            [sign * q_rt[0], sign * q_rt[1], sign * q_rt[2], sign * q_rt[3]],
+            [
+                sign * q_rt[0],
+                sign * q_rt[1],
+                sign * q_rt[2],
+                sign * q_rt[3],
+            ],
             q_ref,
             1e-12,
         );
