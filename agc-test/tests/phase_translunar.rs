@@ -12,6 +12,18 @@
 //! - The SOI handover from Earth to Moon is exercised via `soi_check` (see
 //!   findings below).
 //!
+//! # MCC direction convention
+//!
+//! Real Apollo MCCs were small ΔVs applied **perpendicular to the velocity
+//! vector** in the orbital plane, targeting pericynthion altitude rather than
+//! orbit energy (Apollo 8 Mission Report MSC-PA-R-69-1, §4.4). This simulation
+//! uses the in-plane radial-outward direction `n_hat = unit(h × v)` where
+//! `h = r × v` is the angular-momentum vector. This direction is perpendicular
+//! to velocity and lies in the orbital plane pointing outward. The positive sign
+//! (+|ΔV| · n_hat) is a free choice of convention; either sign is physically
+//! valid as a pericynthion trim — positive raises pericynthion when applied on
+//! the outbound leg.
+//!
 //! # Checkpoint-reseed strategy
 //!
 //! A straight continuous SERVICER simulation would take roughly 10 min of wall
@@ -89,18 +101,18 @@
 //! | Phase | Window | Position tol | Velocity tol | Extra assertion                        |
 //! |-------|--------|--------------|--------------|----------------------------------------|
 //! | 1     | 5 min  | 1 000 m      | 1 m/s        | baseline post-TLI ECI                  |
-//! | 2     | 5 min  | 1 000 m      | 1 m/s        | MCC-2 applied (-2.35 m/s)              |
+//! | 2     | 5 min  | 1 000 m      | 1 m/s        | MCC-2 applied (+2.35 m/s perp-in-plane)|
 //! | 3     | 5 min  | 1 000 m      | 1 m/s        | mid-transit ECI                        |
 //! | 4     | 5 min  | 1 000 m      | 1 m/s        | high-apogee coast                      |
 //! | 4b    | 5 min  | 1 000 m      | 1 m/s        | synthetic MCI seed, Moon gravity check |
-//! | 5     | 5 min  | 1 000 m      | 1 m/s        | MCC-4 applied (-0.43 m/s)              |
+//! | 5     | 5 min  | 1 000 m      | 1 m/s        | MCC-4 applied (+0.43 m/s perp-in-plane)|
 //! | 6     | 2 sec  | 1 000 m      | 1 m/s        | end-of-coast ECI                       |
 //!
 //! # Design reference
 //!
 //! Architect's locked design, GitHub issue #27 (parent #23).
 
-use agc_core::math::linalg::norm;
+use agc_core::math::linalg::{cross, norm, unit};
 use agc_core::navigation::gravity::{MU_EARTH, R_EARTH, R_SOI_MOON};
 use agc_core::navigation::integration::propagate_coast;
 use agc_core::navigation::planetary::moon_position;
@@ -148,10 +160,10 @@ const LOI1_MET_CS: u32 = 24_890_000;
 
 // ── MCC ΔV magnitudes ────────────────────────────────────────────────────────
 
-/// MCC-2 ΔV magnitude (m/s). Applied anti-velocity.
+/// MCC-2 ΔV magnitude (m/s). Applied perpendicular-in-plane (radial-outward direction).
 /// Apollo 8 Mission Report MSC-PA-R-69-1, Table 3-I: MCC-2 was ~2.35 m/s SPS.
 const MCC2_DV_MPS: f64 = 2.35;
-/// MCC-4 ΔV magnitude (m/s). Applied anti-velocity.
+/// MCC-4 ΔV magnitude (m/s). Applied perpendicular-in-plane (radial-outward direction).
 const MCC4_DV_MPS: f64 = 0.43;
 
 // ── Parking-orbit / TLI parameters (same arithmetic as phase_tli.rs) ─────────
@@ -209,11 +221,21 @@ fn derive_post_tli_sv() -> StateVector {
     propagate_coast(sv_post_ignition, burn_window_s, moon_p2)
 }
 
-// ── Helper: normalise a velocity vector ──────────────────────────────────────
-
-fn v_hat(v: [f64; 3]) -> [f64; 3] {
-    let mag = norm(v);
-    [v[0] / mag, v[1] / mag, v[2] / mag]
+/// In-plane radial-outward unit vector — perpendicular to velocity, in the orbital plane.
+///
+/// Computes `unit(h × v)` where `h = r × v` (angular-momentum direction).
+/// For a circular orbit this is purely radially outward. For an elliptical orbit
+/// on the outbound leg it points outward with a small along-track component.
+///
+/// Used for MCC ΔV direction: real Apollo MCCs targeted pericynthion altitude
+/// (perpendicular trim), not orbit energy (anti-velocity). Applying `+|ΔV| * n_hat`
+/// raises pericynthion when executed on the outbound leg.
+/// Reference: Apollo 8 Mission Report MSC-PA-R-69-1, §4.4.
+fn n_hat_perp_in_plane(r: [f64; 3], v: [f64; 3]) -> [f64; 3] {
+    let h = cross(r, v); // angular momentum vector (out-of-plane)
+    let h_n = unit(h); // angular momentum direction
+    let v_n = unit(v); // prograde direction
+    unit(cross(h_n, v_n)) // in-plane, perpendicular to v, radial-outward
 }
 
 // ── Test ──────────────────────────────────────────────────────────────────────
@@ -267,20 +289,23 @@ fn tc_phase_translunar_apollo_8_tracks_through_soi_to_loi1() {
 
     // ── Phase 2: MCC-2 (ECI) ─────────────────────────────────────────────────
     //
-    // Apply MCC-2: −2.35 m/s along velocity direction (anti-velocity correction).
+    // Apply MCC-2: +2.35 m/s perpendicular-in-plane (radial-outward direction,
+    // ΔV normal to velocity in orbital plane — historically faithful pericynthion
+    // trim). Real Apollo MCCs targeted pericynthion altitude, not orbit energy.
+    // Reference: Apollo 8 Mission Report MSC-PA-R-69-1, §4.4.
 
-    let vh2 = v_hat(sv_at_mcc2.velocity);
+    let nh2 = n_hat_perp_in_plane(sv_at_mcc2.position, sv_at_mcc2.velocity);
     let sv_mcc2_applied = StateVector {
         velocity: [
-            sv_at_mcc2.velocity[0] - MCC2_DV_MPS * vh2[0],
-            sv_at_mcc2.velocity[1] - MCC2_DV_MPS * vh2[1],
-            sv_at_mcc2.velocity[2] - MCC2_DV_MPS * vh2[2],
+            sv_at_mcc2.velocity[0] + MCC2_DV_MPS * nh2[0],
+            sv_at_mcc2.velocity[1] + MCC2_DV_MPS * nh2[1],
+            sv_at_mcc2.velocity[2] + MCC2_DV_MPS * nh2[2],
         ],
         ..sv_at_mcc2
     };
 
     let phase2 = ScenarioBuilder::new("phase_translunar/phase2_mcc2")
-        .comment("Phase 2: MCC-2 applied at T+10:55:04 — anti-velocity -2.35 m/s")
+        .comment("Phase 2: MCC-2 applied at T+10:55:04 — +2.35 m/s perpendicular-in-plane (radial-outward, pericynthion trim)")
         .seed_state()
         .from_state_vector(sv_mcc2_applied)
         .met(Met(MCC2_MET_CS))
@@ -432,21 +457,24 @@ fn tc_phase_translunar_apollo_8_tracks_through_soi_to_loi1() {
 
     // ── Phase 5: MCC-4 (ECI) ─────────────────────────────────────────────────
     //
-    // Apply MCC-4: −0.43 m/s along velocity direction. The spacecraft is now on
-    // the inbound leg, falling back toward Earth after the high-ellipse apogee.
+    // Apply MCC-4: +0.43 m/s perpendicular-in-plane (radial-outward direction,
+    // ΔV normal to velocity in orbital plane — historically faithful pericynthion
+    // trim). The spacecraft is now on the inbound leg, falling back toward Earth
+    // after the high-ellipse apogee. Same convention as MCC-2 (positive radial-
+    // outward perpendicular trim); see module doc for direction rationale.
 
-    let vh5 = v_hat(sv_at_mcc4.velocity);
+    let nh5 = n_hat_perp_in_plane(sv_at_mcc4.position, sv_at_mcc4.velocity);
     let sv_mcc4_applied = StateVector {
         velocity: [
-            sv_at_mcc4.velocity[0] - MCC4_DV_MPS * vh5[0],
-            sv_at_mcc4.velocity[1] - MCC4_DV_MPS * vh5[1],
-            sv_at_mcc4.velocity[2] - MCC4_DV_MPS * vh5[2],
+            sv_at_mcc4.velocity[0] + MCC4_DV_MPS * nh5[0],
+            sv_at_mcc4.velocity[1] + MCC4_DV_MPS * nh5[1],
+            sv_at_mcc4.velocity[2] + MCC4_DV_MPS * nh5[2],
         ],
         ..sv_at_mcc4
     };
 
     let phase5 = ScenarioBuilder::new("phase_translunar/phase5_mcc4")
-        .comment("Phase 5: MCC-4 applied at T+60:59:55 — anti-velocity -0.43 m/s (ECI)")
+        .comment("Phase 5: MCC-4 applied at T+60:59:55 — +0.43 m/s perpendicular-in-plane (radial-outward, pericynthion trim, ECI)")
         .seed_state()
         .from_state_vector(sv_mcc4_applied)
         .met(Met(MCC4_MET_CS))
