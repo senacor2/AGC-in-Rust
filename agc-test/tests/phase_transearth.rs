@@ -15,9 +15,18 @@
 //! |-------|---------------|----------------|-------|---------------|-----------------------------------|
 //! | 1     | MoonInertial  | T+89:24:40     | 300 s | 2 km / 2 m/s  | Post-TEI hyperbolic departure     |
 //! | 2     | EarthInertial | T+99:00:00     | 300 s | 2 km / 2 m/s  | Synthetic ECI seed at SOI exit    |
-//! | 3     | EarthInertial | T+103:59:54    | 300 s | 2 km / 2 m/s  | MCC-5 applied (−1.463 m/s)        |
+//! | 3     | EarthInertial | T+103:59:54    | 300 s | 2 km / 2 m/s  | MCC-5 applied (+1.463 m/s perp-in-plane) |
 //! | 4     | EarthInertial | T+115:00:00    | 300 s | 5 km / 5 m/s  | Mid-coast (12 h propagation)      |
 //! | 5     | EarthInertial | T+146:43:00    |  10 s | 2 km / 2 m/s  | Synthetic EI seed at 400 000 ft   |
+//!
+//! # MCC direction convention
+//!
+//! Real Apollo MCCs were small ΔVs applied **perpendicular to the velocity
+//! vector** in the orbital plane, targeting entry-corridor (flight-path angle)
+//! alignment rather than orbit energy (Apollo 8 Mission Report MSC-PA-R-69-1,
+//! §4.4). MCC-5 uses the in-plane radial-outward direction `n_hat = unit(h × v)`
+//! where `h = r × v` is the angular-momentum vector. The positive sign
+//! (+|ΔV| · n_hat) raises the entry corridor when applied on the inbound leg.
 //!
 //! # Synthetic seeds — Moon-ephemeris-epoch limitation
 //!
@@ -61,7 +70,7 @@
 //!
 //! Architect's locked design, GitHub issue #27 (parent #23).
 
-use agc_core::math::linalg::{dot, norm, unit};
+use agc_core::math::linalg::{cross, dot, norm, unit};
 use agc_core::navigation::gravity::{MU_MOON, R_EARTH, R_MOON};
 use agc_core::navigation::integration::propagate_coast;
 use agc_core::navigation::planetary::moon_position;
@@ -95,7 +104,8 @@ const EI_MET_CS: u32 = 52_818_000;
 
 // ── Maneuver and entry constants ──────────────────────────────────────────────
 
-/// MCC-5 ΔV magnitude (m/s). Applied anti-velocity (RCS correction burn).
+/// MCC-5 ΔV magnitude (m/s). Applied perpendicular-in-plane (radial-outward,
+/// entry-corridor trim per MSC-PA-R-69-1 §4.4).
 const MCC5_DV_MPS: f64 = 1.463;
 
 /// Entry interface altitude above Earth's surface (m). 400 000 ft = 121 920 m.
@@ -107,11 +117,23 @@ const EI_SPEED_MPS: f64 = 11_040.0;
 /// Flight path angle at EI (degrees). Apollo 8 actual: −6.48° (into atmosphere).
 const EI_FPA_DEG: f64 = -6.48;
 
-// ── Helper: normalise a velocity vector ──────────────────────────────────────
+// ── Helper: in-plane radial-outward unit vector ───────────────────────────────
 
-fn v_hat(v: [f64; 3]) -> [f64; 3] {
-    let mag = norm(v);
-    [v[0] / mag, v[1] / mag, v[2] / mag]
+/// In-plane radial-outward unit vector — perpendicular to velocity, in the orbital plane.
+///
+/// Computes `unit(h × v)` where `h = r × v` (angular-momentum direction).
+/// For a circular orbit this is purely radially outward. For an elliptical orbit
+/// on the inbound leg it points outward with a small along-track component.
+///
+/// Used for MCC ΔV direction: real Apollo MCCs targeted entry-corridor alignment
+/// (perpendicular trim), not orbit energy (anti-velocity). Applying `+|ΔV| * n_hat`
+/// raises the entry corridor when executed on the inbound leg.
+/// Reference: Apollo 8 Mission Report MSC-PA-R-69-1, §4.4.
+fn n_hat_perp_in_plane(r: [f64; 3], v: [f64; 3]) -> [f64; 3] {
+    let h = cross(r, v); // angular momentum vector (out-of-plane)
+    let h_n = unit(h); // angular momentum direction
+    let v_n = unit(v); // prograde direction
+    unit(cross(h_n, v_n)) // in-plane, perpendicular to v, radial-outward
 }
 
 // ── Helper: construct post-TEI hyperbolic MCI state vector ───────────────────
@@ -155,7 +177,7 @@ fn post_tei_sv_mci() -> StateVector {
 ///
 /// Phases 2 and 5 use **synthetic state vectors** to work around the Moon-
 /// ephemeris-epoch limitation (see module doc comment). Phase 3 applies the
-/// Apollo 8 MCC-5 correction (1.463 m/s, anti-velocity). Phase 4 uses looser
+/// Apollo 8 MCC-5 correction (1.463 m/s, perpendicular-in-plane trim). Phase 4 uses looser
 /// tolerances (5 km / 5 m/s) to absorb 12-hour propagation drift.
 ///
 /// End-state assertions (post Phase 5):
@@ -287,19 +309,21 @@ fn tc_phase_transearth_apollo_8_returns_to_entry_interface() {
     // ── Oracle propagation: Phase 2 end → MCC-5 epoch ─────────────────────────
     //
     // Propagate the oracle from Phase 2 end-state to MCC5_MET_CS, then apply
-    // the MCC-5 anti-velocity correction. Phase 3 seeds from this result.
+    // the MCC-5 perpendicular-in-plane trim. Phase 3 seeds from this result.
 
     let dt_p2_to_mcc5_s = (MCC5_MET_CS - SOI_EXIT_MET_CS) as f64 / 100.0;
     let moon_p2 = moon_position(sv_soi_exit.epoch);
     let sv_at_mcc5 = propagate_coast(sv_soi_exit, dt_p2_to_mcc5_s, moon_p2);
 
-    // Apply MCC-5: anti-velocity ΔV of −1.463 m/s.
-    let vh_mcc5 = v_hat(sv_at_mcc5.velocity);
+    // Apply MCC-5: perpendicular-in-plane trim of +1.463 m/s (radial-outward
+    // direction, ΔV normal to velocity in orbital plane — historically faithful
+    // entry-corridor trim per Mission Report MSC-PA-R-69-1 §4.4).
+    let nh_mcc5 = n_hat_perp_in_plane(sv_at_mcc5.position, sv_at_mcc5.velocity);
     let sv_mcc5_applied = StateVector {
         velocity: [
-            sv_at_mcc5.velocity[0] - MCC5_DV_MPS * vh_mcc5[0],
-            sv_at_mcc5.velocity[1] - MCC5_DV_MPS * vh_mcc5[1],
-            sv_at_mcc5.velocity[2] - MCC5_DV_MPS * vh_mcc5[2],
+            sv_at_mcc5.velocity[0] + MCC5_DV_MPS * nh_mcc5[0],
+            sv_at_mcc5.velocity[1] + MCC5_DV_MPS * nh_mcc5[1],
+            sv_at_mcc5.velocity[2] + MCC5_DV_MPS * nh_mcc5[2],
         ],
         epoch: Met(MCC5_MET_CS),
         ..sv_at_mcc5
@@ -314,7 +338,9 @@ fn tc_phase_transearth_apollo_8_returns_to_entry_interface() {
 
     let phase3 = ScenarioBuilder::new("phase_transearth/phase3_mcc5_eci")
         .comment(
-            "Phase 3: MCC-5 applied at T+103:59:54 — anti-velocity −1.463 m/s (ECI). \
+            "Phase 3: MCC-5 applied at T+103:59:54 — +1.463 m/s perpendicular-in-plane \
+             (radial-outward, ΔV normal to velocity in orbital plane — historically faithful \
+             entry-corridor trim per Mission Report MSC-PA-R-69-1 §4.4). \
              MCC-5 was the only trans-earth MCC flown by Apollo 8; \
              MCC-6 and MCC-7 were not executed.",
         )
