@@ -55,6 +55,10 @@ use agc_core::navigation::star_catalog::STAR_CATALOG;
 use agc_core::navigation::StateVector;
 use agc_core::programs::p20::LosComponent;
 use agc_core::programs::p22::{landmark_inertial_pos, LandmarkMark, LANDMARK_TABLE};
+use agc_core::programs::p23::{
+    p23_incorporate_star_horizon_mark, p23_incorporate_star_landmark_mark, StarHorizonMark,
+    StarLandmarkMark,
+};
 use agc_core::programs::p51_p52::p52_mark_align;
 use agc_core::services::average_g::start_servicer;
 use agc_core::services::v_n::{feed_key, Key};
@@ -217,6 +221,22 @@ pub enum Event {
 
     /// Log a stub "not-yet-implemented" landmark sighting and continue.
     LandmarkSighting { table: LandmarkTable, index: u8 },
+
+    /// Apply a P23 star-horizon mark directly to the CSM nav filter.
+    ///
+    /// Bypasses the sextant HAL and calls
+    /// [`agc_core::programs::p23::p23_incorporate_star_horizon_mark`] with the
+    /// pre-computed mark. The test owns the geometry: it constructs a
+    /// [`StarHorizonMark`] whose `angle_observed_rad` represents the
+    /// "true" measurement, then expects the Kalman update to pull
+    /// `state.csm_state` toward truth.
+    P23StarHorizonMark(StarHorizonMark),
+
+    /// Apply a P23 star-landmark mark directly to the CSM nav filter.
+    ///
+    /// Bypasses the sextant HAL and calls
+    /// [`agc_core::programs::p23::p23_incorporate_star_landmark_mark`].
+    P23StarLandmarkMark(StarLandmarkMark),
 
     /// Assert `state.major_mode == mm`.
     ExpectMajorMode(u8),
@@ -568,6 +588,18 @@ impl ScenarioBuilder {
     /// Push a landmark sighting event (stub).
     pub fn landmark_sighting(mut self, table: LandmarkTable, index: u8) -> Self {
         self.events.push(Event::LandmarkSighting { table, index });
+        self
+    }
+
+    /// Apply a P23 star-horizon mark directly to the CSM nav filter.
+    pub fn p23_star_horizon_mark(mut self, mark: StarHorizonMark) -> Self {
+        self.events.push(Event::P23StarHorizonMark(mark));
+        self
+    }
+
+    /// Apply a P23 star-landmark mark directly to the CSM nav filter.
+    pub fn p23_star_landmark_mark(mut self, mark: StarLandmarkMark) -> Self {
+        self.events.push(Event::P23StarLandmarkMark(mark));
         self
     }
 
@@ -1076,6 +1108,30 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
                     ),
                 );
                 agc_core::programs::p22::p22_incorporate_landmark_mark(state, mark);
+            }
+
+            // ── P23StarHorizonMark ────────────────────────────────────────────
+            Event::P23StarHorizonMark(mark) => {
+                log_event(
+                    name,
+                    &format!(
+                        "P23StarHorizonMark: body={:?}, angle={:.6} rad → p23_incorporate_star_horizon_mark",
+                        mark.body, mark.angle_observed_rad
+                    ),
+                );
+                p23_incorporate_star_horizon_mark(state, mark);
+            }
+
+            // ── P23StarLandmarkMark ───────────────────────────────────────────
+            Event::P23StarLandmarkMark(mark) => {
+                log_event(
+                    name,
+                    &format!(
+                        "P23StarLandmarkMark: body={:?}, angle={:.6} rad → p23_incorporate_star_landmark_mark",
+                        mark.body, mark.angle_observed_rad
+                    ),
+                );
+                p23_incorporate_star_landmark_mark(state, mark);
             }
 
             // ── ExpectMajorMode ───────────────────────────────────────────────
