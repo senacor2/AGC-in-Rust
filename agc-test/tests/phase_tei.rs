@@ -26,9 +26,9 @@
 //! | Phase | What happens                                                                   |
 //! |-------|--------------------------------------------------------------------------------|
 //! | A     | Seed 60 nm MCI circular SV at TIG−300 s; select P30, load TIG via N33        |
-//! | B     | Load ΔV via V25 N81 (+1051 m/s prograde, R1 slot, mirroring phase_loi.rs)    |
+//! | B     | Load ΔV via V25 N81 (+1073 m/s prograde, R1 slot, mirroring phase_loi.rs)    |
 //! | C     | Select P40, display V50 N99, crew PRO to arm burn                             |
-//! | D     | Burn loop: tick until `burn_active` clears (~346 s at 3.04 m/s²)             |
+//! | D     | Burn loop: tick until `burn_active` clears (~353 s at 3.04 m/s²)             |
 //! | E     | Post-burn hyperbolic-departure assertions                                      |
 //!
 //! # LVLH slot convention and robust direction check
@@ -51,16 +51,18 @@
 //!
 //! # Assertion table (Phase E)
 //!
-//! | Parameter       | Lower bound  | Upper bound  | Derivation                               |
-//! |-----------------|--------------|--------------|------------------------------------------|
-//! | Post-burn speed | 2 620 m/s    | 2 720 m/s    | v_circ + ΔV − gravity_loss ≈ 2636 m/s    |
-//! | Specific energy | > 0.5 MJ/kg  | —            | ε > 0 confirms hyperbolic departure      |
-//! | Eccentricity    | > 1.0        | —            | Hyperbolic conic                         |
-//! | r after coast   | > r at cutoff| —            | Spacecraft receding from Moon            |
+//! | Parameter       | Lower bound  | Upper bound  | Derivation                                                          |
+//! |-----------------|--------------|--------------|---------------------------------------------------------------------|
+//! | Post-burn speed | 2 640 m/s    | 2 740 m/s    | v_circ + ΔV − gravity_loss ≈ 2662 m/s (MSC-PA-R-69-1 Table 3-I)   |
+//! | Specific energy | > 0.5 MJ/kg  | —            | ε > 0 confirms hyperbolic departure                                 |
+//! | Eccentricity    | > 1.0        | —            | Hyperbolic conic                                                    |
+//! | r after coast   | > r at cutoff| —            | Spacecraft receding from Moon                                       |
 //!
 //! # Design reference
 //!
 //! Architect's locked design, GitHub issue #27 (MS-T4 phase_tei), parent #23.
+//! ΔV value sourced from Apollo 8 Mission Report MSC-PA-R-69-1, Table 3-I
+//! (post-flight reconstruction): 3522 ft/s = 1073.5 m/s, rounded to 1073 m/s.
 
 use agc_core::math::linalg::{dot, norm, unit};
 use agc_core::navigation::conics::sv_to_elements;
@@ -90,13 +92,16 @@ const TEI_TIG_S100: u32 = 1600;
 
 /// Apollo 8 TEI prograde ΔV (m/s, positive = prograde in LVLH R1 slot).
 ///
+/// Source: Apollo 8 Mission Report MSC-PA-R-69-1, Table 3-I (post-flight
+/// reconstruction): 3522 ft/s = 1073.5 m/s. Rounded to 1073 m/s.
+///
 /// The spacecraft is in a 60 nm (111 km) circular orbit at ~1633 m/s.
-/// The 1051 m/s prograde burn accelerates it to ~2684 m/s, exceeding escape
+/// The 1073 m/s prograde burn accelerates it to ~2706 m/s, exceeding escape
 /// velocity (~2381 m/s at that altitude) and producing a hyperbolic departure.
 ///
 /// With `SPS_THRUST_N = 91 188 N` and vehicle mass 30 000 kg, the acceleration
-/// is ~3.04 m/s², giving a burn duration of ~346 s.
-const TEI_DV_MPS: i32 = 1051;
+/// is ~3.04 m/s², giving a burn duration of ~353 s.
+const TEI_DV_MPS: i32 = 1073;
 
 /// Circular orbit altitude above Moon surface (m). 60 nautical miles = 111 km.
 const LUNAR_ALT_M: f64 = 111_000.0;
@@ -140,13 +145,16 @@ fn pre_tei_sv() -> StateVector {
 /// lunar orbit (ε_MCI > 0, e > 1).
 ///
 /// Drives P40 in MCI via a five-phase split-scenario chain. The seed is a 60 nm
-/// circular MCI orbit at TIG. The 1051 m/s prograde V25 N81 burn (R1 slot,
+/// circular MCI orbit at TIG. The 1073 m/s prograde V25 N81 burn (R1 slot,
 /// same as phase_loi.rs with sign flipped) exceeds escape velocity and produces
 /// a hyperbolic departure trajectory.
 ///
+/// ΔV source: Apollo 8 Mission Report MSC-PA-R-69-1, Table 3-I, 3522 ft/s =
+/// 1073.5 m/s (post-flight reconstruction).
+///
 /// The end state must satisfy:
 /// - `burn_active == false`, `engine_thrusting == false`
-/// - `|v| ∈ [2640, 2730] m/s`
+/// - `|v| ∈ [2640, 2740] m/s`
 /// - `ε_MCI > 0.5 MJ/kg`
 /// - `e > 1.0` (hyperbolic conic)
 /// - After 600 s coast: `|r|` has increased (spacecraft receding from Moon)
@@ -244,16 +252,16 @@ fn tc_phase_tei_apollo_8_departs_lunar_orbit_hyperbolically() {
     //
     // V25 N81 loads the prograde ΔV in LVLH R1 slot.
     // With velocity along +Y at the circular orbit and identity REFSMMAT, P30
-    // transforms the R1 +1051 m/s LVLH vector to inertial +Y ΔV.
+    // transforms the R1 +1073 m/s LVLH vector to inertial +Y ΔV.
     // The SPS thrust_dir_platform default is [0, 1, 0] → inertial +Y at
     // identity REFSMMAT, which is pro-velocity (prograde). This produces the
     // required orbital energy increase to escape Moon's gravity.
     //
     // This is the exact structural mirror of phase_loi.rs: LOI uses [-914, 0, 0]
-    // (negative R1 = anti-velocity at LOI seed geometry), TEI uses [+1051, 0, 0]
+    // (negative R1 = anti-velocity at LOI seed geometry), TEI uses [+1073, 0, 0]
     // (positive R1 = pro-velocity at TEI seed geometry).
     let phase_b = ScenarioBuilder::new("phase_tei/phase_b_load_dv")
-        .comment("Phase B: load TEI prograde ΔV via V25 N81 (R1 slot, +1051 m/s)")
+        .comment("Phase B: load TEI prograde ΔV via V25 N81 (R1 slot, +1073 m/s)")
         .v25_load_three(81, [TEI_DV_MPS, 0, 0])
         .build();
 
@@ -374,8 +382,8 @@ fn tc_phase_tei_apollo_8_departs_lunar_orbit_hyperbolically() {
     );
 
     // Walk the full TEI burn at 100 ms granularity.
-    // At 91 188 N / 30 000 kg ≈ 3.04 m/s², the 1051 m/s burn takes ~346 s
-    // = 3 460 ticks. Budget 5 000 ticks (500 s) as a safety margin.
+    // At 91 188 N / 30 000 kg ≈ 3.04 m/s², the 1073 m/s burn takes ~353 s
+    // = 3 530 ticks. Budget 5 000 ticks (500 s) as a safety margin.
     const TICK_CS: u32 = 10;
     const TICK_S: f64 = TICK_CS as f64 / 100.0;
     let max_iters: u32 = 5_000; // 500 s of sim time — safety margin over ~346 s burn
@@ -454,13 +462,14 @@ fn tc_phase_tei_apollo_8_departs_lunar_orbit_hyperbolically() {
         energy > 0.5e6,
         "Phase E: ε_MCI should be > 0.5 MJ/kg (hyperbolic departure), got {energy:.3e} J/kg"
     );
-    // Speed band: ideal v_circ + ΔV ≈ 2680 m/s; gravity loss over the full
-    // ~346 s burn (no symmetric arc) is ~44 m/s, giving ~2636 m/s actual.
-    // Band [2620, 2720] provides 16 m/s margin below the observed value.
+    // Speed band: ideal v_circ + ΔV ≈ 2706 m/s (MSC-PA-R-69-1 Table 3-I,
+    // 3522 ft/s = 1073.5 m/s); gravity loss over the full ~353 s burn
+    // (no symmetric arc) is ~44 m/s, giving ~2662 m/s actual.
+    // Band [2640, 2740] provides ~22 m/s margin on each side.
     assert!(
-        (2_620.0..=2_720.0).contains(&v_cutoff),
-        "Phase E: post-burn speed = {v_cutoff:.2} m/s must be in [2620, 2720] m/s \
-         (v_circ + ΔV ≈ 2680 m/s, minus ~44 m/s gravity loss over ~346 s burn)"
+        (2_640.0..=2_740.0).contains(&v_cutoff),
+        "Phase E: post-burn speed = {v_cutoff:.2} m/s must be in [2640, 2740] m/s \
+         (v_circ + ΔV ≈ 2706 m/s, minus ~44 m/s gravity loss over ~353 s burn)"
     );
     assert!(
         elements.e > 1.0,
