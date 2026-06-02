@@ -33,8 +33,8 @@ The four boundaries are taken verbatim from
 
 ## 2. Conventions used in this spec
 
-- All paths absolute. The developer creates exactly one file:
-  `/Users/Juergen.Schiewe/dev/AGC-in-Rust/agc-test/tests/handoffs.rs`.
+- All paths relative to the code base. The developer creates exactly one file:
+  `agc-test/tests/handoffs.rs`.
 - One `#[test] fn …` per numbered test below (Test 3 is two functions:
   `_outbound` and `_inbound` — keeps each test focused, no parameterisation
   framework needed).
