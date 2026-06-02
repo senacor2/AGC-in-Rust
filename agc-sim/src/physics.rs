@@ -22,13 +22,25 @@
 //!
 //! Coupled with [`crate::SimHardware`] via `SimHardware::tick`.
 
+use agc_core::control::dap::DapMode;
+use agc_core::math::linalg::{cross, dot, norm, vadd, vscale, vsub};
 use agc_core::math::quaternion::{quat_normalise, quat_slerp};
+use agc_core::navigation::atmosphere::density;
 use agc_core::navigation::gravity::{MU_EARTH, MU_MOON};
+
+/// Mean Earth radius (m) used for altitude in the atmosphere model. Matches
+/// `agc_test::entry_sim::R_EARTH` (6 371 000.0). This is the *mean* radius
+/// the exponential atmosphere model is calibrated against — distinct from
+/// the equatorial `agc_core::navigation::gravity::R_EARTH` (6 378 137.0)
+/// used for geocentric position. The 7 km difference materially changes
+/// drag at entry interface (factor ≈ 2.6× density per scale-height).
+pub const R_EARTH_ATMOSPHERE_M: f64 = 6_371_000.0;
 use agc_core::navigation::integration::{propagate_coast, soi_check};
 use agc_core::navigation::planetary::moon_position;
 use agc_core::navigation::state_vector::Frame;
 use agc_core::navigation::StateVector;
-use agc_core::types::Met;
+use agc_core::types::{Met, Vec3};
+use agc_core::AgcState;
 
 /// Simulator truth attitude state for a spacecraft.
 ///
@@ -76,6 +88,22 @@ pub mod apollo_csm {
     /// predictions and the simulator's integrated burn duration agree.
     /// Historical Apollo SPS produced ~91 188 N at full thrust.
     pub const SPS_THRUST_N: f64 = 91_188.0;
+}
+
+/// Apollo Command Module entry-phase constants used as `Spacecraft` defaults
+/// when atmosphere is enabled. Values mirror
+/// `agc-test/src/entry_sim.rs` (APOLLO_CM_*) so the scenario-runner-driven
+/// entry test produces the same aerodynamic forces as `EntryIntegrator`.
+pub mod apollo_cm {
+    /// CM mass after CSM separation (kg).
+    pub const MASS_KG: f64 = 5_800.0;
+    /// CM heat-shield reference area (m²). π · (3.91 m / 2)² ≈ 12.0.
+    pub const AREA_M2: f64 = 12.0;
+    /// Hypersonic drag coefficient.
+    pub const CD: f64 = 1.3;
+    /// Hypersonic vertical lift-to-drag ratio. The AGC's signed
+    /// `entry.ld_command` is interpreted as a fraction of this magnitude.
+    pub const LD: f64 = 0.30;
 }
 
 /// The gravitating body acting on the spacecraft.
@@ -145,10 +173,46 @@ pub struct Spacecraft {
     /// when an SOI crossing is detected.
     pub current_body: GravityBody,
 
-    /// Whether atmospheric drag is modelled (stub for MS-T6).
+    /// Whether atmospheric drag and lift are modelled in
+    /// [`advance_ground_truth`] (MS-T6).
     ///
-    /// Defaults to `false`. Currently has no effect; reserved for future use.
+    /// Defaults to `false`; coast-only scenarios are unaffected. When `true`,
+    /// `advance_ground_truth` applies a velocity kick of
+    /// `aero_acceleration_inertial(…) · dt` plus a `½·a·dt²` position trim
+    /// after the gravity step. The aero force is parameterised by
+    /// `ref_area_m2`, `cd`, `ld_hypersonic`, `bank_rad` and `ld_fraction`.
     pub atmosphere_enabled: bool,
+
+    /// Reference area (m²) for the drag and lift forces. Defaults to
+    /// `apollo_cm::AREA_M2`.
+    pub ref_area_m2: f64,
+
+    /// Hypersonic drag coefficient. Defaults to `apollo_cm::CD`.
+    pub cd: f64,
+
+    /// Hypersonic L/D ceiling (Apollo CM ≈ 0.30). Retained as the symmetric
+    /// clamp for `ld_signed`; the AGC's `compute_ld_command` saturates at
+    /// this value during HUNTEST / UPCONTRL.
+    pub ld_hypersonic: f64,
+
+    /// Last commanded bank angle (radians). `0 = lift up`, positive rotates
+    /// the lift vector toward `+v̂ × r̂` (right of velocity). Written by
+    /// [`apply_bank_from_agc`] from the AGC's `DapMode::EntryRoll(_)`.
+    pub bank_rad: f64,
+
+    /// Signed lift-to-drag commanded by the AGC for the next aero step.
+    /// Written by [`apply_bank_from_agc`] from `state.entry.ld_command`,
+    /// clamped to `±ld_hypersonic`. Same convention as the `ld_command`
+    /// argument to `agc_test::entry_sim::EntryIntegrator::integrate_cycle`.
+    pub ld_signed: f64,
+
+    /// Sub-quantum aerodynamic Δv residue (m/s, inertial frame).
+    ///
+    /// Mirrors `pipa_residue_m_s` but for the aero kick applied by
+    /// [`advance_ground_truth`]. [`Spacecraft::drain_aero_pipa_pulses`]
+    /// converts the residue to integer PIPA pulses and carries the
+    /// remainder forward.
+    aero_dv_residue_m_s: [f64; 3],
 
     /// Simulator truth attitude state.
     ///
@@ -175,6 +239,12 @@ impl Spacecraft {
             gravity_enabled: false,
             current_body: GravityBody::Earth,
             atmosphere_enabled: false,
+            ref_area_m2: apollo_cm::AREA_M2,
+            cd: apollo_cm::CD,
+            ld_hypersonic: apollo_cm::LD,
+            bank_rad: 0.0,
+            ld_signed: 0.0,
+            aero_dv_residue_m_s: [0.0; 3],
             attitude: Attitude::default(),
         }
     }
@@ -243,6 +313,178 @@ impl Spacecraft {
         }
         out
     }
+
+    /// Accumulate an inertial-frame aerodynamic Δv (m/s) into the aero PIPA
+    /// residue. Called by [`advance_ground_truth`] once per outer coast
+    /// step when `atmosphere_enabled` is true.
+    ///
+    /// The Δv is in the inertial frame because the simulator (and the
+    /// scenario runner's default `REFSMMAT = identity` fixture) treats
+    /// platform = inertial. If a future test needs a non-identity REFSMMAT
+    /// during entry, this should rotate the Δv into the platform frame.
+    pub fn accumulate_aero_dv_inertial(&mut self, dv: Vec3) {
+        for (residue, &component) in self.aero_dv_residue_m_s.iter_mut().zip(dv.iter()) {
+            *residue += component;
+        }
+    }
+
+    /// Drain accumulated aero Δv as integer PIPA pulses. Same quantisation
+    /// and residue-carry rules as [`Self::drain_pipa_pulses`].
+    pub fn drain_aero_pipa_pulses(&mut self) -> [i16; 3] {
+        let mut out = [0i16; 3];
+        for (residue, slot) in self.aero_dv_residue_m_s.iter_mut().zip(out.iter_mut()) {
+            let raw = (*residue / PIPA_QUANTUM_M_S).trunc();
+            let clamped = raw.clamp(i16::MIN as f64, i16::MAX as f64);
+            let pulses = clamped as i16;
+            *residue -= pulses as f64 * PIPA_QUANTUM_M_S;
+            *slot = pulses;
+        }
+        out
+    }
+}
+
+// ── Aerodynamic force model (MS-T6) ──────────────────────────────────────────
+
+/// Compute the sensed (non-gravitational) acceleration on the spacecraft at the
+/// given inertial state.
+///
+/// Returns the drag + lift acceleration in the inertial frame (m/s²). Pure
+/// function of inputs.
+///
+/// The model is a direct port of
+/// `agc_test::entry_sim::EntryIntegrator::acceleration` (lines 144–198) minus
+/// the gravity term — gravity is owned by [`propagate_coast`] inside
+/// [`advance_ground_truth`]. The signed lift fraction is taken from
+/// `sc.ld_fraction`; the bank rotation from `sc.bank_rad`.
+///
+/// Bank convention: `bank_rad = 0` → lift directed along `r̂ ⊥ v̂` ("up", away
+/// from Earth). Positive bank rotates the lift vector toward `v̂ × r̂` (right of
+/// velocity).
+pub fn aero_acceleration_inertial(
+    sc: &Spacecraft,
+    position_eci: Vec3,
+    velocity_eci: Vec3,
+) -> Vec3 {
+    let r_mag = norm(position_eci);
+    if r_mag < 1.0 {
+        return [0.0; 3];
+    }
+    let r_hat = vscale(position_eci, 1.0 / r_mag);
+
+    let v_mag = norm(velocity_eci);
+    if v_mag < 1.0 {
+        return [0.0; 3];
+    }
+    let v_hat = vscale(velocity_eci, 1.0 / v_mag);
+
+    let altitude = r_mag - R_EARTH_ATMOSPHERE_M;
+    let rho = density(altitude);
+
+    // Drag magnitude (m/s²): F/m = ½·ρ·v²·C_D·A / m.
+    let drag_mag = 0.5 * rho * v_mag * v_mag * sc.cd * sc.ref_area_m2 / sc.mass_kg;
+    let a_drag = vscale(v_hat, -drag_mag);
+
+    // Lift frame: `up_hat` is r̂ projected perpendicular to v̂ (away from Earth);
+    // `right_hat` is v̂ × up_hat (positive crossrange).
+    let v_dot_r = dot(v_hat, r_hat);
+    let up_raw = vsub(r_hat, vscale(v_hat, v_dot_r));
+    let up_mag = norm(up_raw);
+    let (up_hat, right_hat) = if up_mag > 1.0e-6 {
+        let up = vscale(up_raw, 1.0 / up_mag);
+        let right = cross(v_hat, up);
+        (up, right)
+    } else {
+        // Pure radial velocity (degenerate); pick an arbitrary plane.
+        ([0.0, 0.0, 1.0], [0.0, 1.0, 0.0])
+    };
+    let cos_b = sc.bank_rad.cos();
+    let sin_b = sc.bank_rad.sin();
+    let lift_dir = vadd(vscale(up_hat, cos_b), vscale(right_hat, sin_b));
+
+    // Lift acceleration: drag magnitude × signed L/D commanded by AGC.
+    // `ld_command` from agc-core::guidance::entry is the absolute signed L/D
+    // (range ≈ ±LD_max ≈ ±0.30), NOT a fraction of `ld_hypersonic`. The
+    // EntryIntegrator reference at agc-test/src/entry_sim.rs:193 multiplies
+    // `drag_mag * ld_command` directly with no extra scaling.
+    let a_lift = vscale(lift_dir, drag_mag * sc.ld_signed);
+
+    vadd(a_drag, a_lift)
+}
+
+/// Integrate one SERVICER cycle's worth of aerodynamic Δv starting from the
+/// given inertial state and return the accumulated **sensed** Δv (m/s,
+/// inertial frame).
+///
+/// Sub-steps internally at 0.1 s using an RK2 midpoint scheme — matches
+/// `agc_test::entry_sim::EntryIntegrator::integrate_cycle`
+/// (`agc-test/src/entry_sim.rs:105-138`). Gravity is **not** applied here:
+/// the AGC's own SERVICER (`average_g_step`) handles gravity propagation.
+/// Position and velocity advance during the sub-steps under gravity + drag +
+/// lift so the aero force is evaluated at locally correct state; only the
+/// sensed (drag + lift) Δv is returned.
+pub fn integrate_aero_cycle(
+    sc: &Spacecraft,
+    position: Vec3,
+    velocity: Vec3,
+    dt_s: f64,
+) -> Vec3 {
+    const SUB_STEP_S: f64 = 0.1;
+
+    let n_sub = ((dt_s / SUB_STEP_S).round() as usize).max(1);
+    let h = dt_s / n_sub as f64;
+    let mut pos = position;
+    let mut vel = velocity;
+    let mut sensed_dv: Vec3 = [0.0; 3];
+
+    for _ in 0..n_sub {
+        // RK2 midpoint with gravity + aero coupling — the working copy of
+        // pos/vel is advanced under the FULL acceleration so the aero force
+        // is evaluated at locally correct state. Only the sensed (aero) part
+        // is accumulated for the return value.
+        let r_mag_0 = norm(pos);
+        let g_mag_0 = MU_EARTH / (r_mag_0 * r_mag_0);
+        let r_hat_0 = vscale(pos, 1.0 / r_mag_0);
+        let a_grav_0 = vscale(r_hat_0, -g_mag_0);
+        let a_sensed_0 = aero_acceleration_inertial(sc, pos, vel);
+        let a_full_0 = vadd(a_grav_0, a_sensed_0);
+
+        let pos_mid = vadd(pos, vscale(vel, h * 0.5));
+        let vel_mid = vadd(vel, vscale(a_full_0, h * 0.5));
+
+        let r_mag_m = norm(pos_mid);
+        let g_mag_m = MU_EARTH / (r_mag_m * r_mag_m);
+        let r_hat_m = vscale(pos_mid, 1.0 / r_mag_m);
+        let a_grav_m = vscale(r_hat_m, -g_mag_m);
+        let a_sensed_m = aero_acceleration_inertial(sc, pos_mid, vel_mid);
+        let a_full_m = vadd(a_grav_m, a_sensed_m);
+
+        pos = vadd(pos, vscale(vel_mid, h));
+        vel = vadd(vel, vscale(a_full_m, h));
+
+        // Sensed Δv: average of start and midpoint sensed accel × step.
+        let a_sensed_avg = vscale(vadd(a_sensed_0, a_sensed_m), 0.5);
+        sensed_dv = vadd(sensed_dv, vscale(a_sensed_avg, h));
+    }
+
+    sensed_dv
+}
+
+/// Update `sc.bank_rad` and `sc.ld_signed` from the AGC's entry-guidance state.
+///
+/// - `state.dap_state.mode == DapMode::EntryRoll(b)` → `sc.bank_rad = b`.
+///   Any other DAP mode leaves `bank_rad` unchanged (the AGC has not entered
+///   the entry-guidance bank-control regime yet).
+/// - `state.entry.ld_command` → `sc.ld_signed`, clamped to
+///   `±sc.ld_hypersonic`. Same convention as the `ld_command` argument to
+///   `agc_test::entry_sim::EntryIntegrator::integrate_cycle`.
+pub fn apply_bank_from_agc(sc: &mut Spacecraft, state: &AgcState) {
+    if let DapMode::EntryRoll(b) = state.dap_state.mode {
+        sc.bank_rad = b;
+    }
+    // Pass `ld_command` through verbatim — the reference EntryIntegrator at
+    // agc-test/src/entry_sim.rs:193 does no clamping; the AGC's
+    // `compute_ld_command` saturates internally at ±LD_max.
+    sc.ld_signed = state.entry.ld_command;
 }
 
 // ── Ground-truth propagator ───────────────────────────────────────────────────
@@ -280,6 +522,18 @@ pub fn advance_ground_truth(sc: &mut Spacecraft, state: &mut StateVector, dt: f6
     let propagated = propagate_coast(*state, dt, moon_pos);
 
     *state = propagated;
+
+    // Apply aerodynamic drag + lift (MS-T6) via an operator-split kick after
+    // the gravity step. Acceleration is evaluated at the post-gravity state.
+    // The 200 cs outer step pinned by `ScenarioBuilder::enable_atmosphere`
+    // keeps the Euler velocity kick within the entry footprint tolerance
+    // (see specs/ms-t6-phase-entry-spec.md §3.3).
+    // Note: aerodynamic Δv is NOT applied here. The aero kick is evaluated at
+    // the AGC's own csm_state (not the ground-truth StateVector this function
+    // owns) by `integrate_aero_cycle`, called from the scenario-runner coast
+    // loop once per SERVICER cycle. That mirrors `simulate_to_drogue`
+    // (agc-test/src/entry_scenario.rs:101-116), keeping the closed loop
+    // self-consistent.
 
     // Compute Moon position and velocity at the new epoch for SOI check.
     // Moon velocity is computed via central difference since moon_velocity
@@ -570,6 +824,166 @@ mod tests {
              phase-rotation estimate ~1.1 km/s plus RAAN precession + orbit \
              shape variation contributes the rest)",
             vel_err
+        );
+    }
+
+    // ── Aerodynamic force model unit tests (MS-T6 §3.5) ──────────────────────
+
+    /// TC-PHYS-AERO-1: above 250 km altitude the atmosphere clamps to 0 and
+    /// `aero_acceleration_inertial` returns the zero vector.
+    #[test]
+    fn tc_phys_aero_vacuum_no_sensed() {
+        let sc = Spacecraft::new();
+        let pos: Vec3 = [R_EARTH_ATMOSPHERE_M + 300_000.0, 0.0, 0.0];
+        let vel: Vec3 = [0.0, 7_800.0, 0.0];
+        let a = aero_acceleration_inertial(&sc, pos, vel);
+        for (i, &component) in a.iter().enumerate() {
+            assert!(
+                component.abs() < 1.0e-10,
+                "vacuum: aero accel component {i} should be 0, got {component}"
+            );
+        }
+    }
+
+    /// TC-PHYS-AERO-2: at h = 50 km, V = 7800 m/s the drag-only sensed
+    /// acceleration is a few g (≈ 5..50 m/s²) and anti-velocity.
+    #[test]
+    fn tc_phys_aero_peak_decel() {
+        let mut sc = Spacecraft::new();
+        sc.ld_signed = 0.0; // drag only
+        let pos: Vec3 = [R_EARTH_ATMOSPHERE_M + 50_000.0, 0.0, 0.0];
+        let vel: Vec3 = [0.0, 7_800.0, 0.0];
+        let a = aero_acceleration_inertial(&sc, pos, vel);
+        let mag = norm(a);
+        assert!(
+            (5.0..=50.0).contains(&mag),
+            "peak entry decel magnitude {mag} m/s² outside [5, 50] m/s² band"
+        );
+        // Drag is anti-velocity (negative-Y dominant for this fixture).
+        assert!(
+            a[1] < -1.0,
+            "drag-dominated accel must have negative-Y component; got {}",
+            a[1]
+        );
+    }
+
+    /// TC-PHYS-AERO-3: at bank = 0 the lift component is along +r̂ (away from
+    /// Earth). Mirrors `entry_sim::tests::tc_esim_3_lift_up_zero_bank`.
+    #[test]
+    fn tc_phys_aero_bank_zero_lift_radial() {
+        let mut sc = Spacecraft::new();
+        sc.bank_rad = 0.0;
+        sc.ld_signed = sc.ld_hypersonic; // full lift up
+        let pos: Vec3 = [R_EARTH_ATMOSPHERE_M + 50_000.0, 0.0, 0.0];
+        let vel: Vec3 = [0.0, 7_800.0, 0.0]; // tangential, perp to r̂
+        let a_full = aero_acceleration_inertial(&sc, pos, vel);
+
+        // Subtract the drag (which is anti-velocity, along -Y) to isolate lift.
+        sc.ld_signed = 0.0;
+        let a_drag = aero_acceleration_inertial(&sc, pos, vel);
+        let a_lift = [
+            a_full[0] - a_drag[0],
+            a_full[1] - a_drag[1],
+            a_full[2] - a_drag[2],
+        ];
+        // r̂ = +X for this fixture, so lift should be +X.
+        assert!(
+            a_lift[0] > 1.0,
+            "bank=0 lift must be along +r̂ (+X); got X = {}",
+            a_lift[0]
+        );
+        assert!(
+            a_lift[1].abs() < 0.1 && a_lift[2].abs() < 0.1,
+            "lift cross-components should be ≈ 0; got Y={}, Z={}",
+            a_lift[1],
+            a_lift[2]
+        );
+    }
+
+    /// TC-PHYS-AERO-4: with `atmosphere_enabled = false` the entry-altitude
+    /// state passes through `advance_ground_truth` unchanged relative to the
+    /// pure-gravity path — regression guard for all existing coast tests.
+    #[test]
+    fn tc_phys_advance_ground_truth_aero_disabled_no_change() {
+        // Two independently-constructed identical Spacecrafts (Spacecraft is
+        // not Clone, so we build them in parallel rather than copying).
+        let mut sc_atmo = Spacecraft::new();
+        sc_atmo.gravity_enabled = true;
+        sc_atmo.atmosphere_enabled = false;
+        sc_atmo.bank_rad = 0.4;
+        sc_atmo.ld_signed = 0.15;
+
+        let mut sc_baseline = Spacecraft::new();
+        sc_baseline.gravity_enabled = true;
+        sc_baseline.atmosphere_enabled = false;
+        sc_baseline.bank_rad = 0.4;
+        sc_baseline.ld_signed = 0.15;
+
+        let sv0 = StateVector {
+            position: [R_EARTH_ATMOSPHERE_M + 50_000.0, 0.0, 0.0],
+            velocity: [0.0, 7_800.0, 0.0],
+            epoch: Met::from_seconds(0.0),
+            frame: Frame::EarthInertial,
+        };
+        let mut sv_atmo = sv0;
+        let mut sv_baseline = sv0;
+        advance_ground_truth(&mut sc_atmo, &mut sv_atmo, 2.0);
+        advance_ground_truth(&mut sc_baseline, &mut sv_baseline, 2.0);
+
+        for i in 0..3 {
+            assert_eq!(
+                sv_atmo.position[i], sv_baseline.position[i],
+                "position[{i}] must be bit-identical when atmosphere off"
+            );
+            assert_eq!(
+                sv_atmo.velocity[i], sv_baseline.velocity[i],
+                "velocity[{i}] must be bit-identical when atmosphere off"
+            );
+        }
+    }
+
+    /// TC-PHYS-AERO-5: `apply_bank_from_agc` reads `DapMode::EntryRoll(b)`
+    /// and `state.entry.ld_command` into `sc.bank_rad` / `sc.ld_fraction`;
+    /// other DAP modes leave `bank_rad` alone, and ld_fraction clamps to ±1.
+    #[test]
+    fn tc_phys_apply_bank_from_agc_entry_roll() {
+        let mut sc = Spacecraft::new();
+        sc.bank_rad = 99.0; // sentinel — must be overwritten only by EntryRoll
+        let mut state = AgcState::new();
+
+        // Mode that is NOT EntryRoll → bank_rad must not change.
+        state.dap_state.mode = DapMode::AttitudeHold;
+        state.entry.ld_command = 0.15;
+        apply_bank_from_agc(&mut sc, &state);
+        assert_eq!(sc.bank_rad, 99.0, "non-EntryRoll modes must not touch bank_rad");
+        assert!(
+            (sc.ld_signed - 0.15).abs() < 1.0e-12,
+            "ld_signed must follow ld_command in band; got {}",
+            sc.ld_signed
+        );
+
+        // EntryRoll mode: bank_rad updates, ld_command saturates to +ld_hypersonic.
+        state.dap_state.mode = DapMode::EntryRoll(0.7);
+        state.entry.ld_command = 0.30;
+        apply_bank_from_agc(&mut sc, &state);
+        assert!(
+            (sc.bank_rad - 0.7).abs() < 1.0e-12,
+            "EntryRoll must set bank_rad; got {}",
+            sc.bank_rad
+        );
+        assert!(
+            (sc.ld_signed - 0.30).abs() < 1.0e-12,
+            "ld_signed must equal ld_command verbatim; got {}",
+            sc.ld_signed
+        );
+
+        // Negative ld_command passes through unchanged.
+        state.entry.ld_command = -0.25;
+        apply_bank_from_agc(&mut sc, &state);
+        assert!(
+            (sc.ld_signed - (-0.25)).abs() < 1.0e-12,
+            "negative ld_command passes through; got {}",
+            sc.ld_signed
         );
     }
 }

@@ -275,6 +275,23 @@ pub enum Event {
 
     /// Emit a one-line progress message; no state change.
     Comment(&'static str),
+
+    /// Enable atmospheric drag + lift in the ground-truth propagator and
+    /// force the outer coast-step granularity to 200 cs (one SERVICER cycle).
+    ///
+    /// Required before any `AdvanceCoast` event that should produce entry
+    /// physics. The outer step pinning ensures the operator-split aero kick
+    /// in `advance_ground_truth` is applied at the same cadence as the
+    /// SERVICER, keeping integration error inside the entry footprint
+    /// tolerance (see specs/ms-t6-phase-entry-spec.md §3.3).
+    EnableAtmosphere,
+
+    /// Assert that the AGC's entry phase reached drogue deploy and the
+    /// great-circle miss distance to the configured target landing site is
+    /// below `miss_km_tol`. Computed via haversine on the sub-satellite
+    /// point of `state.csm_state.position` vs
+    /// `(state.entry.target_lat_rad, state.entry.target_lon_rad)`.
+    ExpectDrogueWithin { miss_km_tol: f64 },
 }
 
 // ── Scenario ──────────────────────────────────────────────────────────────────
@@ -659,6 +676,26 @@ impl ScenarioBuilder {
         self
     }
 
+    /// Enable atmospheric drag + lift in the entry-phase pipeline and pin
+    /// the outer coast step to 200 cs (one SERVICER cycle).
+    ///
+    /// Aero Δv is evaluated once per outer step at the AGC's own
+    /// `state.csm_state` (matches `agc_test::entry_scenario::simulate_to_drogue`),
+    /// quantised to PIPA pulses, and injected directly into
+    /// `state.pipa_counts`. The 200 cs cadence matches the SERVICER cycle so
+    /// each aero injection is consumed by exactly one SERVICER fire.
+    pub fn enable_atmosphere(mut self) -> Self {
+        self.events.push(Event::EnableAtmosphere);
+        self.coast_step_cs = 200;
+        self
+    }
+
+    /// Assert drogue deployed and miss distance ≤ `miss_km_tol`.
+    pub fn expect_drogue_within(mut self, miss_km_tol: f64) -> Self {
+        self.events.push(Event::ExpectDrogueWithin { miss_km_tol });
+        self
+    }
+
     /// Consume the builder and produce a [`Scenario`].
     pub fn build(self) -> Scenario {
         Scenario {
@@ -894,9 +931,36 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
                     let outer_cs = remaining_cs.min(coast_step_cs);
                     let outer_dt_s = outer_cs as f64 / 100.0;
 
-                    // Step 1: advance ground-truth by the full outer step.
+                    // Step 1a (MS-T6): mirror the AGC's commanded bank angle
+                    // and signed L/D into the simulator before ground-truth
+                    // propagation. No-op when the AGC is not in EntryRoll mode.
+                    crate::physics::apply_bank_from_agc(&mut ctx.spacecraft, state);
+
+                    // Step 1b: advance ground-truth by the full outer step.
                     if let Some(ref mut gt) = ctx.ground_truth {
                         advance_ground_truth(&mut ctx.spacecraft, gt, outer_dt_s);
+                    }
+
+                    // Step 1c (MS-T6): integrate one cycle of aerodynamic
+                    // Δv at the AGC's own csm_state (matching the
+                    // simulate_to_drogue pattern), quantise to PIPA pulses
+                    // and write directly to state.pipa_counts. The SERVICER
+                    // reads them on its next fire.
+                    //
+                    // Assign (not accumulate): each outer step is paired 1:1
+                    // with a SERVICER fire when `coast_step_cs == 200`
+                    // (enforced by `enable_atmosphere`), so any stale pulses
+                    // in pipa_counts are either zero (SERVICER consumed
+                    // them) or stragglers we want to drop.
+                    if ctx.spacecraft.atmosphere_enabled {
+                        let aero_dv = crate::physics::integrate_aero_cycle(
+                            &ctx.spacecraft,
+                            state.csm_state.position,
+                            state.csm_state.velocity,
+                            outer_dt_s,
+                        );
+                        state.pipa_counts =
+                            agc_test_pipa_pulses_for_dv(aero_dv, state.pipa_cal.scale);
                     }
 
                     // Step 2: run coast-mode inner ticks for the full outer step.
@@ -1274,8 +1338,110 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
                 let met_s = met_cs as f64 / 100.0;
                 log_event(name, &format!("{msg} (MET {met_cs}cs / {met_s:.2}s)"));
             }
+
+            // ── EnableAtmosphere ──────────────────────────────────────────────
+            Event::EnableAtmosphere => {
+                // Aerodynamic flight requires gravity to be propagated too —
+                // the operator-split in advance_ground_truth runs after the
+                // gravity step, and `advance_ground_truth` early-returns
+                // unless `gravity_enabled` is set.
+                ctx.spacecraft.gravity_enabled = true;
+                ctx.spacecraft.atmosphere_enabled = true;
+                // Atmospheric flight in Apollo is post-CSM-separation, so
+                // switch the simulator's mass to the CM-only value (5 800 kg).
+                // Without this, the default CSM mass (30 000 kg) produces
+                // ~5× too little drag and skip-out is too vigorous.
+                ctx.spacecraft.mass_kg = crate::physics::apollo_cm::MASS_KG;
+                log_event(
+                    name,
+                    "atmosphere ON (drag + lift in ground truth; gravity auto-enabled; mass → CM)",
+                );
+            }
+
+            // ── ExpectDrogueWithin ────────────────────────────────────────────
+            Event::ExpectDrogueWithin { miss_km_tol } => {
+                if !state.entry.drogue_deployed {
+                    let prefix = fail_prefix(name, idx, "ExpectDrogueWithin", state.time.0);
+                    panic!(
+                        "{prefix}\n  drogue NOT deployed (entry.phase={:?}); \
+                         miss-distance tolerance was {miss_km_tol:.1} km",
+                        state.entry.phase
+                    );
+                }
+                let (lat, lon) = sub_satellite_lat_lon(state.csm_state.position);
+                let miss_km =
+                    haversine_km(lat, lon, state.entry.target_lat_rad, state.entry.target_lon_rad);
+                if miss_km > miss_km_tol {
+                    let prefix = fail_prefix(name, idx, "ExpectDrogueWithin", state.time.0);
+                    panic!(
+                        "{prefix}\n  miss-distance {miss_km:.1} km exceeds tolerance \
+                         {miss_km_tol:.1} km;\n  landed lat={:.4}° lon={:.4}°, \
+                         target lat={:.4}° lon={:.4}°",
+                        lat.to_degrees(),
+                        lon.to_degrees(),
+                        state.entry.target_lat_rad.to_degrees(),
+                        state.entry.target_lon_rad.to_degrees(),
+                    );
+                }
+                log_event(
+                    name,
+                    &format!(
+                        "ExpectDrogueWithin OK: miss={miss_km:.1} km ≤ tol={miss_km_tol:.1} km"
+                    ),
+                );
+            }
         }
     }
+}
+
+// ── Helpers for ExpectDrogueWithin (MS-T6) ────────────────────────────────────
+//
+// These duplicate the bodies of `agc_test::entry_sim::haversine_km` (line 221)
+// and `agc_test::entry_scenario::sub_satellite_lat_lon` (line 198) because
+// `agc-sim` cannot depend on `agc-test` (cyclic build order). Kept private so
+// the public API surface stays minimal.
+
+const R_EARTH_KM: f64 = 6_378.137;
+
+/// Great-circle range in km between two (lat, lon) points in radians.
+fn haversine_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    let dlat = lat2 - lat1;
+    let dlon = lon2 - lon1;
+    let sd_lat = (dlat / 2.0).sin();
+    let sd_lon = (dlon / 2.0).sin();
+    let a = sd_lat * sd_lat + lat1.cos() * lat2.cos() * sd_lon * sd_lon;
+    let c = 2.0 * a.sqrt().asin();
+    R_EARTH_KM * c
+}
+
+/// Quantise an inertial-frame Δv (m/s) into `[i16; 3]` PIPA counts using the
+/// given calibration scale. Mirrors
+/// `agc_test::entry_sim::pipa_pulses_for_dv` (lines 208–216) but does not
+/// depend on it (agc-sim cannot depend on agc-test). Assumes REFSMMAT = I.
+fn agc_test_pipa_pulses_for_dv(dv_inertial: [f64; 3], scale: f64) -> [i16; 3] {
+    let mut out = [0_i16; 3];
+    for (i, &dv) in dv_inertial.iter().enumerate() {
+        let raw = (dv / scale).round();
+        let clamped = raw.clamp(i16::MIN as f64, i16::MAX as f64);
+        out[i] = clamped as i16;
+    }
+    out
+}
+
+/// Convert an ECI position to (lat, lon) of the sub-satellite point on a
+/// spherical Earth, ignoring Earth rotation (matches the entry test
+/// convention). Returns radians.
+fn sub_satellite_lat_lon(position_eci: [f64; 3]) -> (f64, f64) {
+    let r = (position_eci[0] * position_eci[0]
+        + position_eci[1] * position_eci[1]
+        + position_eci[2] * position_eci[2])
+        .sqrt();
+    if r < 1.0 {
+        return (0.0, 0.0);
+    }
+    let lat = (position_eci[2] / r).asin();
+    let lon = position_eci[1].atan2(position_eci[0]);
+    (lat, lon)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
