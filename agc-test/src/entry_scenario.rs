@@ -177,20 +177,34 @@ pub fn make_initial_state(speed_mps: f64, fpa_deg: f64, target_lon_deg_east: f64
     state
 }
 
-/// Direct-LEO initial state — 200 km circular orbit deorbited to FPA = −6°.
-/// V = 7900 m/s (slightly super-circular at interface altitude).
+/// Direct-LEO initial state — synthetic 200 km circular orbit deorbited to
+/// FPA = −6°. V = 7900 m/s (slightly super-circular at interface altitude).
 /// Target 20° east ≈ 2226 km downrange.
+///
+/// This is a **synthetic** scenario — no historical Apollo mission ever flew
+/// a direct LEO entry. The −6° FPA is therefore not "wrong" per Apollo 8
+/// Mission Report; it is a plausible operational value. Kept distinct from
+/// the lunar-return setup (which uses Apollo 8 actual −6.48°, see #81).
 pub fn setup_state_direct_leo() -> AgcState {
     make_initial_state(7_900.0, -6.0, 20.0)
 }
 
-/// Lunar-return initial state — translunar-return entry per
-/// `specs/entry-guidance-plan.md` §5 MS-E7. V = 11 000 m/s super-
-/// circular; orbit highly elliptical, perigee well below the surface
-/// (a ≈ 221 000 km, e ≈ 0.971). Target 45° east ≈ 5004 km downrange
-/// (Pacific splashdown).
+/// Lunar-return initial state — translunar-return entry, Apollo 8 actual
+/// entry-interface conditions per Apollo 8 Mission Report NASA TM X-65500
+/// Table 3-I:
+///
+/// - V_EI = 11 000 m/s (Mission Report: 10 825.4 m/s — using 11 000 here as
+///   slightly conservative on peak g; ~1.6 % above historical).
+/// - FPA_EI = **−6.48°** — Apollo 8 actual; the half-width of the Chapman
+///   entry corridor is ≈ ±1.0°, so the previously-used −6.0° gave away
+///   roughly half a corridor of trajectory shape (orbital-mechanics review
+///   of MS-T7, GitHub issue #81).
+/// - Target lon = 45° E (≈ 5004 km downrange Pacific) — synthetic equatorial
+///   target; not Apollo 8's actual splashdown (8°N 165°W). The entry
+///   guidance is frame-agnostic, so an equatorial setup exercises the same
+///   control law.
 pub fn setup_state_lunar_return() -> AgcState {
-    make_initial_state(11_000.0, -6.0, 45.0)
+    make_initial_state(11_000.0, -6.48, 45.0)
 }
 
 /// Sub-satellite latitude and longitude (radians, east positive) of
