@@ -25,31 +25,23 @@ use agc_test::entry_scenario::{
 };
 
 /// Direct-LEO miss-distance threshold (km). The original MS-E7 exit
-/// criterion is ~25 nmi ≈ 46 km. The 1000 km gate accepts the cumulative
-/// effect of the remaining entry-guidance simplifications listed below.
+/// criterion is ~25 nmi ≈ 46 km. The 1000 km gate is now the only
+/// active limit — #85 (GLIMITER scope), #86 (CONSTD divergence), and
+/// #87 (Earth rotation) have all landed.
 ///
-/// Lunar-return achieves ~645 km miss (post-#85/#86). Direct-LEO ~730 km.
-/// Apollo 8 actual splashdown miss was ~4.6 km. Remaining gap:
-///
-/// - #87 — Earth-rotation correction omitted in EntryIntegrator and the
-///   agc-sim aero model (`v_rel = v_inertial`). Expected to materially
-///   tighten both numbers once the relative-velocity drag computation
-///   is wired in.
-///
-/// #82 (entry gate tightening) is now unblocked: #85 (GLIMITER scope)
-/// and #86 (CONSTD divergence routing) have landed, and the integrator
-/// lift sign convention (Apollo CSM fixed L/D = LAD with bank-only
-/// direction) is now physically correct.
+/// Lunar-return achieves ~111 km miss (post-#87). Direct-LEO ~680 km.
+/// Apollo 8 actual splashdown miss was ~4.6 km. #82 will tighten both
+/// gates to match the achieved baselines.
 const MISS_DISTANCE_DIRECT_LEO_KM: f64 = 1_000.0;
 
 /// Lunar-return miss-distance threshold (km). Lunar return is the
 /// harder trajectory: V ≈ 11 km/s super-circular, perigee well below
 /// the atmosphere, requiring the P65 skip-phase UPCONTRL feedback law
 /// to fly up out of the dense atmosphere and re-enter at a lower
-/// energy. Currently achieves ~645 km miss (post-#85/#86).
+/// energy. Currently achieves ~111 km miss (post-#87).
 ///
-/// **3000 km** remains a wide gate while #87 (Earth rotation) is
-/// still open; #82 will tighten it to ~1000 km once #87 lands.
+/// **3000 km** is still a wide gate; #82 will tighten it now that the
+/// physical model is in place.
 const MISS_DISTANCE_LUNAR_RETURN_KM: f64 = 3_000.0;
 
 /// `entry_direct_leo` — direct entry from a 200 km LEO trajectory.

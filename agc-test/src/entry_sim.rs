@@ -14,9 +14,12 @@
 //!   the SERVICER; we don't apply it here, only consume the AGC's CSM state.
 //! - Exponential atmosphere from [`agc_core::navigation::atmosphere::density`]
 //!   (sea-level density × `exp(−h/H_s)`, `H_s = 7160 m`).
-//! - **No** Earth-rotation correction: `v_rel = v_inertial`. The ~470 m/s
-//!   equatorial slip at entry interface is below MS-E7 stage A's miss-distance
-//!   resolution target.
+//! - Earth rotation modelled: `v_rel = v_inertial − ω⊕ × r` (#87).
+//!   `ω⊕ = 7.292 115e-5 rad/s` about the ECI +Z axis. The atmosphere
+//!   co-rotates with the surface, so drag and lift forces are computed
+//!   against `v_rel`, not `v_inertial`. At an equatorial 32° azimuth
+//!   entry the velocity slip is ~470 m/s; the downrange component
+//!   propagates into the miss-distance.
 //! - **No** J2 oblateness: irrelevant on the ~7-minute entry profile.
 //!
 //! ## Sub-stepping
@@ -47,6 +50,11 @@ const R_EARTH: f64 = 6_371_000.0;
 
 /// Integrator sub-step (s). 20 sub-steps per 2-s SERVICER cycle.
 pub const SUB_STEP_S: f64 = 0.1;
+
+/// Earth sidereal rotation rate (rad/s). Re-exported from agc-core so
+/// the integrator, the AGC's drogue-deploy trigger, and the GHA chain
+/// all share one value.
+use agc_core::navigation::time::OMEGA_EARTH as OMEGA_EARTH_RAD_S;
 
 /// Apollo CM mass after CSM separation (kg). Mid-range of the 5500–6000 kg
 /// historical band.
@@ -155,24 +163,36 @@ impl EntryIntegrator {
     ) -> (Vec3, Vec3) {
         let r_mag = vec3_norm(position);
         let r_hat = vec3_scale(position, 1.0 / r_mag);
-        let v_mag = vec3_norm(velocity);
 
         // Gravity (used only to propagate the working copy; the AGC's
         // SERVICER applies its own gravity model).
         let g_mag = MU_EARTH / (r_mag * r_mag);
         let a_grav = vec3_scale(r_hat, -g_mag);
 
-        // Aerodynamic forces require non-zero velocity and a defined v_hat.
-        if v_mag < 1.0 {
+        // Earth-rotation-corrected velocity (#87): the atmosphere co-rotates
+        // with the surface at `ω⊕ = OMEGA_EARTH_RAD_S` about ECI +Z, so
+        // drag/lift act against `v_rel = v_inertial − ω × r`. Closed form
+        // for `ω = [0, 0, ω⊕]`: `ω × r = [−ω·r_y, +ω·r_x, 0]`.
+        let omega_cross_r = [
+            -OMEGA_EARTH_RAD_S * position[1],
+            OMEGA_EARTH_RAD_S * position[0],
+            0.0,
+        ];
+        let v_rel = vec3_sub(velocity, omega_cross_r);
+        let v_rel_mag = vec3_norm(v_rel);
+
+        // Aerodynamic forces require non-zero relative velocity.
+        if v_rel_mag < 1.0 {
             return (a_grav, [0.0; 3]);
         }
-        let v_hat = vec3_scale(velocity, 1.0 / v_mag);
+        let v_hat = vec3_scale(v_rel, 1.0 / v_rel_mag);
 
         let altitude = r_mag - R_EARTH;
         let rho = agc_core::navigation::atmosphere::density(altitude);
 
-        // Drag magnitude (m/s²): F/m = ½·ρ·v²·C_D·A / m
-        let drag_mag = 0.5 * rho * v_mag * v_mag * self.cd * self.ref_area_m2 / self.mass_kg;
+        // Drag magnitude (m/s²): F/m = ½·ρ·v_rel²·C_D·A / m
+        let drag_mag =
+            0.5 * rho * v_rel_mag * v_rel_mag * self.cd * self.ref_area_m2 / self.mass_kg;
         let a_drag = vec3_scale(v_hat, -drag_mag);
 
         // Lift direction frame:

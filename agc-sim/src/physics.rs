@@ -35,6 +35,12 @@ use agc_core::navigation::gravity::{MU_EARTH, MU_MOON};
 /// used for geocentric position. The 7 km difference materially changes
 /// drag at entry interface (factor ≈ 2.6× density per scale-height).
 pub const R_EARTH_ATMOSPHERE_M: f64 = 6_371_000.0;
+
+/// Earth sidereal rotation rate (rad/s) — atmospheric forces act against
+/// the velocity relative to the co-rotating air mass, not the inertial
+/// velocity (#87). Re-exported from agc-core so the integrator, the
+/// AGC's drogue-deploy trigger, and the GHA chain share one value.
+use agc_core::navigation::time::OMEGA_EARTH as OMEGA_EARTH_RAD_S;
 use agc_core::navigation::integration::{propagate_coast, soi_check};
 use agc_core::navigation::planetary::moon_position;
 use agc_core::navigation::state_vector::Frame;
@@ -371,17 +377,27 @@ pub fn aero_acceleration_inertial(
     }
     let r_hat = vscale(position_eci, 1.0 / r_mag);
 
-    let v_mag = norm(velocity_eci);
-    if v_mag < 1.0 {
+    // Earth-rotation-corrected velocity (#87): the atmosphere co-rotates
+    // with the surface at `ω⊕ = OMEGA_EARTH_RAD_S` about ECI +Z, so
+    // drag/lift act against `v_rel = v_inertial − ω × r`. Closed form
+    // for `ω = [0, 0, ω⊕]`: `ω × r = [−ω·r_y, +ω·r_x, 0]`.
+    let omega_cross_r = [
+        -OMEGA_EARTH_RAD_S * position_eci[1],
+        OMEGA_EARTH_RAD_S * position_eci[0],
+        0.0,
+    ];
+    let v_rel = vsub(velocity_eci, omega_cross_r);
+    let v_rel_mag = norm(v_rel);
+    if v_rel_mag < 1.0 {
         return [0.0; 3];
     }
-    let v_hat = vscale(velocity_eci, 1.0 / v_mag);
+    let v_hat = vscale(v_rel, 1.0 / v_rel_mag);
 
     let altitude = r_mag - R_EARTH_ATMOSPHERE_M;
     let rho = density(altitude);
 
-    // Drag magnitude (m/s²): F/m = ½·ρ·v²·C_D·A / m.
-    let drag_mag = 0.5 * rho * v_mag * v_mag * sc.cd * sc.ref_area_m2 / sc.mass_kg;
+    // Drag magnitude (m/s²): F/m = ½·ρ·v_rel²·C_D·A / m.
+    let drag_mag = 0.5 * rho * v_rel_mag * v_rel_mag * sc.cd * sc.ref_area_m2 / sc.mass_kg;
     let a_drag = vscale(v_hat, -drag_mag);
 
     // Lift frame: `up_hat` is r̂ projected perpendicular to v̂ (away from Earth);
