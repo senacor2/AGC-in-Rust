@@ -404,13 +404,26 @@ pub fn entry_servicer_exit(state: &mut crate::AgcState) {
         // MS-E6 drogue-deploy trigger: AGC `STEEROFF` at
         // REENTRY_CONTROL.agc:1142 — when V drops below VQUIT (~305 m/s),
         // P67 stops steering and commands the SECS to deploy the drogue.
+        //
+        // We compare the Earth-relative velocity (`v_rel = v − ω⊕ × r`)
+        // rather than the inertial velocity. The AGC's `V` was historically
+        // the inertial speed, but VQUIT (≈ 305 m/s) was tuned against a
+        // trajectory where the terminal phase is mostly vertical and
+        // `|v_inertial| ≈ |v_rel|`. With Earth rotation explicitly modelled
+        // in the integrator (#87), the 465 m/s eastward surface speed at
+        // the equator would keep `|v_inertial|` above VQUIT forever — even
+        // after the spacecraft has reached its terminal airspeed.
         if state.entry.phase == EntryPhase::Final && !state.entry.drogue_deployed {
-            let v_mag = libm::sqrt(
-                state.csm_state.velocity[0] * state.csm_state.velocity[0]
-                    + state.csm_state.velocity[1] * state.csm_state.velocity[1]
-                    + state.csm_state.velocity[2] * state.csm_state.velocity[2],
-            );
-            if v_mag < crate::guidance::entry_tables::VQUIT_MPS {
+            let r = state.csm_state.position;
+            let v = state.csm_state.velocity;
+            let omega = crate::navigation::time::OMEGA_EARTH;
+            // ω × r for ω = [0, 0, ω⊕]: (-ω·r_y, +ω·r_x, 0).
+            let v_rel_x = v[0] - (-omega * r[1]);
+            let v_rel_y = v[1] - (omega * r[0]);
+            let v_rel_z = v[2];
+            let v_rel_mag =
+                libm::sqrt(v_rel_x * v_rel_x + v_rel_y * v_rel_y + v_rel_z * v_rel_z);
+            if v_rel_mag < crate::guidance::entry_tables::VQUIT_MPS {
                 p67_deploy_drogue(state);
                 // Drogue is out; closed-loop entry guidance is done.
                 state.servicer_exit = None;
@@ -984,8 +997,11 @@ mod tests {
         let mut state = AgcState::new();
         state.entry.phase = EntryPhase::Final;
         state.servicer_exit = Some(entry_servicer_exit);
+        // Position on the ECI +Z axis so `ω⊕ × r = 0` and the trigger
+        // sees `|v_rel| = |v_inertial|` — keeps the assertion focused on
+        // the V < VQUIT check, not the Earth-rotation correction (#87).
+        state.csm_state.position = [0.0, 0.0, 6_500_000.0];
         // Velocity well below VQUIT (~305 m/s).
-        state.csm_state.position = [6_500_000.0, 0.0, 0.0];
         state.csm_state.velocity = [0.0, VQUIT_MPS * 0.5, 0.0];
         state.entry.sensed_acceleration_g = 0.5; // any drag — drogue trigger is V-based.
         assert!(!state.entry.drogue_deployed, "fixture");
