@@ -116,7 +116,13 @@ const BOOT_HILL_INDEX: u8 = 6;
 const EI_ALT_M: f64 = 121_920.0;
 const EI_SPEED_MPS: f64 = 11_040.0;
 const EI_FPA_DEG: f64 = -6.48;
-const MISS_DISTANCE_GATE_KM: f64 = 3_000.0;
+/// MS-T7 miss-distance gate (km). Tightened in #82 around the
+/// post-#87 achieved miss (~1658 km) with ~20 % headroom. Looser than
+/// `entry_e2e::MISS_DISTANCE_LUNAR_RETURN_KM` (200 km) because the
+/// MS-T7 entry IC accumulates error through the full TLI → LOI →
+/// lunar orbit → TEI → trans-earth coast chain rather than starting
+/// from the canonical `setup_state_lunar_return` IC.
+const MISS_DISTANCE_GATE_KM: f64 = 2_000.0;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

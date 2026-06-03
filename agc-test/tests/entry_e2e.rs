@@ -24,25 +24,30 @@ use agc_test::entry_scenario::{
     MAX_SCENARIO_DURATION_S,
 };
 
-/// Direct-LEO miss-distance threshold (km). The original MS-E7 exit
-/// criterion is ~25 nmi ≈ 46 km. The 1000 km gate is now the only
-/// active limit — #85 (GLIMITER scope), #86 (CONSTD divergence), and
-/// #87 (Earth rotation) have all landed.
+/// Direct-LEO miss-distance threshold (km). Tightened in #82 around the
+/// post-#87 achieved baseline (~680 km) with ~17 % headroom so floating-
+/// point noise and minor algorithm tweaks don't flip the test.
 ///
-/// Lunar-return achieves ~111 km miss (post-#87). Direct-LEO ~680 km.
-/// Apollo 8 actual splashdown miss was ~4.6 km. #82 will tighten both
-/// gates to match the achieved baselines.
-const MISS_DISTANCE_DIRECT_LEO_KM: f64 = 1_000.0;
+/// All three physical-model gaps identified by the orbital-mechanics
+/// review have landed: #85 (GLIMITER scope), #86 (CONSTD divergence),
+/// #87 (Earth-rotation correction in the integrators). Direct-LEO is a
+/// synthetic scenario (no historical Apollo direct-LEO entry exists),
+/// so the gate is sized for regression detection, not historical
+/// accuracy.
+const MISS_DISTANCE_DIRECT_LEO_KM: f64 = 800.0;
 
 /// Lunar-return miss-distance threshold (km). Lunar return is the
 /// harder trajectory: V ≈ 11 km/s super-circular, perigee well below
 /// the atmosphere, requiring the P65 skip-phase UPCONTRL feedback law
 /// to fly up out of the dense atmosphere and re-enter at a lower
-/// energy. Currently achieves ~111 km miss (post-#87).
+/// energy. Tightened in #82 around the post-#87 achieved baseline
+/// (~111 km) with ~80 % headroom.
 ///
-/// **3000 km** is still a wide gate; #82 will tighten it now that the
-/// physical model is in place.
-const MISS_DISTANCE_LUNAR_RETURN_KM: f64 = 3_000.0;
+/// Apollo 8 actual splashdown miss was ~4.6 km; the simulator is now
+/// within ~25 × historical accuracy. Tighter gates would over-constrain
+/// against the remaining simplifications (no J2, simplified DAP bank
+/// dynamics, exponential atmosphere).
+const MISS_DISTANCE_LUNAR_RETURN_KM: f64 = 200.0;
 
 /// `entry_direct_leo` — direct entry from a 200 km LEO trajectory.
 #[test]
