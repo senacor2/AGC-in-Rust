@@ -22,6 +22,12 @@ Aside from the `input` documents, practically all code and documentation has bee
 | `specs` | Module specifications generated and maintained by the analyst agent |
 | `transformation` | Documents to guide the transformation process. Initial version generated in the planning phase and maintained throughout the transformation |
 
+## Testing
+
+The integration test suite lives in `agc-test/tests/`. The functional-completeness gate is **`cargo test --test full_mission`**: a single end-to-end Apollo 8 walkthrough that chains all seven mission phases — TLI, trans-lunar coast (with MCC-2 and MCC-4), LOI, lunar orbit (eight revolutions with P22 landmark marks), TEI, trans-earth coast (with MCC-5), and entry — on the same `AgcState` and `SimHardware` instance. The test verifies AGC onboard state against the ground-truth oracle at every phase boundary and asserts the spacecraft reaches drogue deploy within 3000 km of the configured splashdown target. Runtime: well under a second on a modern host.
+
+Per-phase tests (`phase_tli.rs`, `phase_translunar.rs`, `phase_loi.rs`, `phase_lunar_orbit.rs`, `phase_tei.rs`, `phase_transearth.rs`, `phase_entry.rs`) exercise individual mission segments in isolation and should be the first place to look when a specific phase breaks.
+
 ## References
 
 * [Apollo Guidance Computer source code](https://github.com/chrislgarry/Apollo-11): Digitized source code listings for the AGC, edited to run in the VirtualAGC environment.
