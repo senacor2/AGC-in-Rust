@@ -202,3 +202,88 @@ pub fn sub_satellite_lat_lon(state: &AgcState) -> (f64, f64) {
     let lon = pos[1].atan2(pos[0]);
     (lat, lon)
 }
+
+/// Drive the V37 P61 → P62 → P63 sequence and coast through entry on the
+/// supplied `state` + `hw`. Asserts drogue deploys within `miss_km_tol` km of
+/// the target landing site already stored in `state.entry`.
+///
+/// Inverts the ownership compared to the inline driver in
+/// `agc-test/tests/phase_entry.rs::run_entry_phase`: here the caller owns
+/// `state` and `hw` so the entry phase can be chained after another mission
+/// phase (MS-T7 full mission walkthrough).
+pub fn run_entry_phase_scenario(
+    state: &mut AgcState,
+    hw: &mut agc_sim::SimHardware,
+    miss_km_tol: f64,
+) {
+    use agc_core::services::average_g::start_servicer;
+    use agc_core::services::v_n::Key;
+    use agc_sim::scenario::SimDuration;
+    use agc_sim::{run_scenario, ScenarioBuilder};
+
+    // ── Phase 1: V37 E61 → V37 E62 → V37 E63 ─────────────────────────────────
+    let phase1 = ScenarioBuilder::new("phase_entry/select_p61_p62_p63")
+        .comment("entry phase: V37 E61 → V37 E62 → V37 E63")
+        .keys(&[
+            Key::Verb,
+            Key::Digit(3),
+            Key::Digit(7),
+            Key::Entr,
+            Key::Digit(6),
+            Key::Digit(1),
+            Key::Entr,
+        ])
+        .expect_major_mode(61)
+        .keys(&[
+            Key::Verb,
+            Key::Digit(3),
+            Key::Digit(7),
+            Key::Entr,
+            Key::Digit(6),
+            Key::Digit(2),
+            Key::Entr,
+        ])
+        .expect_major_mode(62)
+        .keys(&[
+            Key::Verb,
+            Key::Digit(3),
+            Key::Digit(7),
+            Key::Entr,
+            Key::Digit(6),
+            Key::Digit(3),
+            Key::Entr,
+        ])
+        .expect_major_mode(63)
+        .build();
+    run_scenario(&phase1, state, hw);
+
+    assert_eq!(
+        state.entry.phase,
+        agc_core::programs::p61_p67::EntryPhase::PreEntry,
+        "init_p63 must leave entry phase = PreEntry"
+    );
+    assert!(
+        state.servicer_exit.is_some(),
+        "init_p63 must install entry_servicer_exit"
+    );
+
+    // ── Phase 2: SERVICER + atmosphere coast ─────────────────────────────────
+    state.csm_state.epoch = state.time;
+    start_servicer(state);
+
+    let phase2 = ScenarioBuilder::new("phase_entry/coast")
+        .comment("coast through entry — atmosphere + bank flow on")
+        .seed_ground_truth(state.csm_state)
+        .enable_atmosphere()
+        .advance_coast(SimDuration::seconds(MAX_SCENARIO_DURATION_S as u32))
+        .expect_drogue_within(miss_km_tol)
+        .build();
+    run_scenario(&phase2, state, hw);
+
+    assert_eq!(
+        state.entry.phase,
+        agc_core::programs::p61_p67::EntryPhase::Final,
+        "entry must end in Final phase"
+    );
+    assert_eq!(state.alarm.code, 0, "no AGC alarms during entry");
+}
