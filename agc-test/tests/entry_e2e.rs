@@ -12,7 +12,7 @@
 //! the same Rust pipeline with no risk of drift on initial conditions
 //! or integration sub-step.
 //!
-//! Stage A scope (this file):
+//! Scenarios:
 //! - `entry_direct_leo` — direct entry from a 200 km circular orbit.
 //! - `entry_lunar_return` — translunar-return entry per MS-E7b.
 //! - `#[ignore]` footprint regenerator over the FPA grid.
@@ -121,10 +121,10 @@ fn run_entry_scenario(name: &str, state: AgcState, miss_threshold_km: f64) {
 ///     -- --ignored --nocapture
 /// ```
 ///
-/// The committed Markdown table is the baseline; refinements landing
-/// in #32 / #33 / #34 (MS-E*b) should tighten the miss-distance
-/// column. After landing any such refinement, re-run this test and
-/// commit the updated table.
+/// The committed Markdown table is the production baseline now that
+/// #85 (GLIMITER scope), #86 (CONSTD divergence routing), #87 (Earth
+/// rotation), and #82 (gate tightening) have landed. Re-run after any
+/// future entry-guidance change and commit the updated table.
 #[test]
 #[ignore]
 fn regenerate_footprint_table() {
@@ -165,10 +165,12 @@ fn render_footprint_markdown(rows: &[(&str, f64, ScenarioResult)]) -> String {
          `setup_state_lunar_return`.\n\n",
     );
     s.push_str(
-        "This is the **stage-A** baseline. Miss distances are expected \
-         to tighten as MS-E3b (#32), MS-E4b (#33), and MS-E6b (#34) land \
-         their fixture-validated refinements. Re-run the sweep and \
-         commit an updated table after each landing.\n\n",
+        "Production baseline. The entry-guidance physics chain — \
+         GLIMITER scope (#85), CONSTD divergence routing (#86), and \
+         Earth-rotation correction (#87) — is in place. Miss-distance \
+         gates were tightened around these baselines in #82. Re-run \
+         this sweep after any future entry-guidance change and commit \
+         the updated table.\n\n",
     );
 
     // Split rows by scenario name into two tables for readability.
