@@ -25,38 +25,36 @@ use agc_test::entry_scenario::{
 };
 
 /// Direct-LEO miss-distance threshold (km). The original MS-E7 exit
-/// criterion is ~25 nmi ≈ 46 km. Stage A inherits the cumulative effect
-/// of every "stage A simplification" from the preceding milestones:
+/// criterion is ~25 nmi ≈ 46 km. The 1000 km gate accepts the cumulative
+/// effect of the remaining entry-guidance simplifications listed below.
 ///
-/// - MS-E3 / MS-E3b: DHOOK correction omitted (`GAMMAL = GAMMAL1`).
-/// - MS-E4 / MS-E4b: `F1 = FACTOR` gain compression set to 1; no
-///   DOWNCNTL or CONSTD branch.
-/// - MS-E6 / MS-E6b: PREDICT3's F1 = ∂Range/∂D and F2 = ∂Range/∂RDOT
-///   sensitivity terms approximated as zero; no GLIMITER deceleration
-///   limiter (the CM peaks at ~6 g without it).
-/// - MS-E7 stage A: no Earth-rotation correction (`v_rel = v_inertial`).
+/// Lunar-return achieves ~1656 km miss with the current code (post-#81
+/// FPA fix). Direct-LEO achieves ~730 km. Apollo 8 actual splashdown
+/// miss was ~4.6 km. The remaining gap is **NOT** from the MS-E3b /
+/// E4b / E6b simplifications listed in earlier versions of this comment
+/// (those have all been delivered) — see #85, #86, #87 for what actually
+/// remains:
 ///
-/// Each of those tightens by 100–200 km in their respective MS-E*b
-/// follow-ups. Stage A accepts up to **1000 km** miss; the assertion
-/// here is "the pipeline runs end-to-end without diverging", not
-/// "the AGC lands within nautical-mile accuracy" — that's the original
-/// MS-E7 exit criterion which the *b* milestones will earn back.
+/// - #85 — GLIMITER post-clamp only applied in `final_phase_step`, not in
+///   `compute_ld_command` (Entry / P64) or `upcontrol_step` (Skip / P65).
+///   This is the dominant remaining error (~500-800 km on lunar return).
+/// - #86 — CONSTD divergence routing not wired; `select_phase` still goes
+///   Entry → Ballistic on HUNTEST divergence.
+/// - #87 — Earth-rotation correction omitted in EntryIntegrator and the
+///   agc-sim aero model (`v_rel = v_inertial`).
+///
+/// #82 (entry gate tightening) is deferred until #85, #86, #87 land.
 const MISS_DISTANCE_DIRECT_LEO_KM: f64 = 1_000.0;
 
 /// Lunar-return miss-distance threshold (km). Lunar return is the
 /// harder trajectory: V ≈ 11 km/s super-circular, perigee well below
 /// the atmosphere, requiring the P65 skip-phase UPCONTRL feedback law
 /// to fly up out of the dense atmosphere and re-enter at a lower
-/// energy. Stage-A simplifications hit harder here than in direct LEO:
-/// - The Skip phase is exercised, and our `F1 = 1` simplification in
-///   `upcontrol_step` produces a SKIPPER feedback that's coarser than
-///   the AGC's gain-compressed form.
-/// - The trajectory hits peak deceleration far above GMAX/2 = 4 g
-///   (no GLIMITER deferred to MS-E6b means no L/D clamping there).
+/// energy. Currently achieves ~1656 km miss (post-#81).
 ///
 /// **3000 km** is "pipeline doesn't diverge / spacecraft lands
-/// somewhere on Earth". Tightens to ~250–500 km once MS-E3b/E4b/E6b
-/// land their fixture-validated refinements.
+/// somewhere on Earth". Tightens to ~500 km once #85 (GLIMITER scope),
+/// #86 (CONSTD wiring), and #87 (Earth rotation) land.
 const MISS_DISTANCE_LUNAR_RETURN_KM: f64 = 3_000.0;
 
 /// `entry_direct_leo` — direct entry from a 200 km LEO trajectory.
