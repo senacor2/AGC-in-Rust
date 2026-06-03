@@ -17,6 +17,7 @@ Work proceeds through a pipeline of specialized agents defined in `.claude/agent
 2. **architect** — designs the Rust architecture based on functional specs; uses `EnterPlanMode`/`ExitPlanMode`
 3. **developer** — implements Rust code following architect guidelines and analyst specs
 4. **tester** — writes Rust unit tests (per public interface) and system tests
+5. **debugger** - invoked when tests break or do not deliver the expected results. The developer may ask the debugger about the actual behaviour of the code.
 
 Each agent reads outputs from the prior stage. The analyst's functional specs are the primary input to the architect and developer.
 
