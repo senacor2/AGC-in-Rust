@@ -401,12 +401,15 @@ pub fn aero_acceleration_inertial(
     let sin_b = sc.bank_rad.sin();
     let lift_dir = vadd(vscale(up_hat, cos_b), vscale(right_hat, sin_b));
 
-    // Lift acceleration: drag magnitude × signed L/D commanded by AGC.
-    // `ld_command` from agc-core::guidance::entry is the absolute signed L/D
-    // (range ≈ ±LD_max ≈ ±0.30), NOT a fraction of `ld_hypersonic`. The
-    // EntryIntegrator reference at agc-test/src/entry_sim.rs:193 multiplies
-    // `drag_mag * ld_command` directly with no extra scaling.
-    let a_lift = vscale(lift_dir, drag_mag * sc.ld_signed);
+    // Apollo CSM has a fixed L/D magnitude (= `sc.ld_hypersonic`). The
+    // bank angle rotates the lift vector around the velocity axis; the
+    // vertical projection equals `ld_hypersonic·cos(bank)`. `ld_signed`
+    // is the signed vertical L/D (= `ld_hypersonic·cos(bank)` by
+    // construction in `resolve_roll`); using it multiplicatively here
+    // would double-count the sign and flip lift-down into lift-up for
+    // negative L/D commands (#86 CONSTD path).
+    let _ = sc.ld_signed;
+    let a_lift = vscale(lift_dir, drag_mag * sc.ld_hypersonic);
 
     vadd(a_drag, a_lift)
 }
@@ -873,13 +876,16 @@ mod tests {
     fn tc_phys_aero_bank_zero_lift_radial() {
         let mut sc = Spacecraft::new();
         sc.bank_rad = 0.0;
-        sc.ld_signed = sc.ld_hypersonic; // full lift up
+        sc.ld_signed = sc.ld_hypersonic; // bookkeeping; bank drives lift now
         let pos: Vec3 = [R_EARTH_ATMOSPHERE_M + 50_000.0, 0.0, 0.0];
         let vel: Vec3 = [0.0, 7_800.0, 0.0]; // tangential, perp to r̂
         let a_full = aero_acceleration_inertial(&sc, pos, vel);
 
-        // Subtract the drag (which is anti-velocity, along -Y) to isolate lift.
-        sc.ld_signed = 0.0;
+        // Subtract the drag (no-lift sphere = `ld_hypersonic = 0`) to
+        // isolate the lift component. Apollo CSM's fixed L/D = LAD model
+        // means lift no longer scales with `ld_signed` — the only way to
+        // get a "drag-only" reference is to zero out `ld_hypersonic`.
+        sc.ld_hypersonic = 0.0;
         let a_drag = aero_acceleration_inertial(&sc, pos, vel);
         let a_lift = [
             a_full[0] - a_drag[0],
