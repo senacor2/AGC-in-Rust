@@ -411,11 +411,14 @@ pub(crate) fn predict_range_table(state: &AgcState) -> f64 {
 /// `DLEWD = DLEWD_INIT`, `DIFFOLD = 0`.
 ///
 /// The returned `ld_command` is the new `LEWD` saturated to
-/// `[−LAD_NOMINAL, +LAD_NOMINAL]` to mirror the AGC `GLIMITER` / LIMITL/D
-/// post-clamp (line 1247) — the L/D physically cannot exceed the vehicle's
-/// nominal max.
+/// `[−LAD_NOMINAL, +LAD_NOMINAL]` (LIMITL/D, line 1271-1285) and then run
+/// through [`glimiter_ld`] (AGC `GLIMITER`, line 1247) so excessive drag
+/// forces full lift-up — mirroring the AGC's `STOREL/D → GLIMITER` flow.
 pub fn compute_ld_command(state: &AgcState) -> LdUpdate {
     let diff_km = state.entry.target_range_km - state.entry.predicted_range_km;
+    let d_g = state.entry.sensed_acceleration_g;
+    let rdot = state.entry.r_dot_mps;
+    let v = velocity_mps(state);
 
     let (lewd_prev, dlewd_prev, diffold) = if state.entry.hunt_initialized {
         (
@@ -450,8 +453,10 @@ pub fn compute_ld_command(state: &AgcState) -> LdUpdate {
     };
 
     let lewd_new_raw = lewd_prev + dlewd_clamped;
-    // GLIMITER/LIMITL/D post-clamp at line 1271–1285.
-    let ld_command = lewd_new_raw.clamp(-LAD_NOMINAL, LAD_NOMINAL);
+    // LIMITL/D post-clamp (line 1271–1285), then GLIMITER (line 1247) so
+    // a high-drag transient forces full lift-up even mid-HUNTEST.
+    let ld_clamped = lewd_new_raw.clamp(-LAD_NOMINAL, LAD_NOMINAL);
+    let ld_command = glimiter_ld(d_g, rdot, v, ld_clamped);
 
     LdUpdate {
         ld_command,
@@ -560,9 +565,12 @@ pub fn upcontrol_step(state: &AgcState) -> LdUpdate {
 
     let d_agc = d_g * G0_MPS2 / FPSS_805_MPS2;
 
-    // Branch 2: V > V₁ — DOWNCNTL (AGC lines 1061-1091).
+    // Branch 2: V > V₁ — DOWNCNTL (AGC lines 1061-1091). DOWNCNTL clamps
+    // to ±LAD internally; GLIMITER then enforces the deceleration cap
+    // (AGC `STOREL/D → GLIMITER`, line 1247).
     if v > s.v1_mps {
-        let ld_command = downcntl_ld(&s, v, rdot, d_agc);
+        let ld_raw = downcntl_ld(&s, v, rdot, d_agc);
+        let ld_command = glimiter_ld(d_g, rdot, v, ld_raw);
         return LdUpdate {
             ld_command,
             lewd_new: lewd_prev,
@@ -631,9 +639,12 @@ pub fn upcontrol_step(state: &AgcState) -> LdUpdate {
         raw_delta_ld
     };
 
-    // L/D = LEWD + ΔL/D, saturated to ±LAD (AGC `LIMITL/D`, line 1274).
+    // L/D = LEWD + ΔL/D, saturated to ±LAD (AGC `LIMITL/D`, line 1274),
+    // then GLIMITER (line 1247) so a high-drag transient forces full
+    // lift-up even on the nominal SKIPPER path.
     let ld_raw = lewd_prev + delta_ld;
-    let ld_command = ld_raw.clamp(-LAD_NOMINAL, LAD_NOMINAL);
+    let ld_clamped = ld_raw.clamp(-LAD_NOMINAL, LAD_NOMINAL);
+    let ld_command = glimiter_ld(d_g, rdot, v, ld_clamped);
 
     LdUpdate {
         ld_command,

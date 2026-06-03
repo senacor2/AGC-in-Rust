@@ -35,11 +35,14 @@ use agc_test::entry_scenario::{
 /// (those have all been delivered) — see #85, #86, #87 for what actually
 /// remains:
 ///
-/// - #85 — GLIMITER post-clamp only applied in `final_phase_step`, not in
-///   `compute_ld_command` (Entry / P64) or `upcontrol_step` (Skip / P65).
-///   This is the dominant remaining error (~500-800 km on lunar return).
+/// - #85 — GLIMITER post-clamp applied in `compute_ld_command` (P64) and
+///   `upcontrol_step` (P65). Correct per AGC source, but a phase-peak-g
+///   trace shows lunar-return peaks (9.4 g) occur in Ballistic / Final
+///   in the current trajectory because Entry/Skip are bypassed at HUNTEST
+///   divergence — so #85 alone does not move the miss-distance numbers.
 /// - #86 — CONSTD divergence routing not wired; `select_phase` still goes
-///   Entry → Ballistic on HUNTEST divergence.
+///   Entry → Ballistic on HUNTEST divergence (this is the dominant
+///   remaining error — Entry/Skip never execute the closed loop).
 /// - #87 — Earth-rotation correction omitted in EntryIntegrator and the
 ///   agc-sim aero model (`v_rel = v_inertial`).
 ///
