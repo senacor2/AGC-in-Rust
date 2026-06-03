@@ -658,6 +658,92 @@ pub fn upcontrol_step(state: &AgcState) -> LdUpdate {
     }
 }
 
+/// Run one CONSTD (constant-drag) closed-loop iteration and return the
+/// new vertical L/D command for the next 2-s SERVICER cycle.
+///
+/// Implements `REENTRY_CONTROL.agc:1036–1059`. Entered from `EntryPhase::
+/// Entry` when HUNTEST diverges (|range error| > `RANGE_ERR_THRESHOLD_KM`):
+/// the trajectory is well off the nominal corridor, so HUNTEST's range
+/// prediction can no longer be trusted and the AGC switches to a
+/// constant-drag reference profile.
+///
+/// ```text
+/// LEQ      = V² / VSAT² − 1                               (line 238 stored)
+/// DREF     = D0 = KA3 · LEQ + KA4                         (line 441-447)
+/// C/D0     = −4 / DREF                                    (line 451)
+/// RDOTREF  = −2·HS · DREF / V_n                            (line 1045)
+/// L/D      = LEQ · C/D0
+///            + K2D · (RDOT − RDOTREF)
+///            + K1D · (D − DREF)                            (CONSTD1, line 1053-1057)
+/// L/D      = clamp(L/D, −LAD, +LAD) → GLIMITER             (NEGTESTS path)
+/// ```
+///
+/// CONSTD does not iterate `LEWD` or the HUNTEST Newton state — the
+/// returned `LdUpdate` carries the previous `lewd_ref` / `factor` through
+/// unchanged so the controller can fall back to HUNTEST cleanly via
+/// `select_phase` once the range prediction recovers.
+pub fn constd_step(state: &AgcState) -> LdUpdate {
+    let v = velocity_mps(state);
+    let rdot = state.entry.r_dot_mps;
+    let d_g = state.entry.sensed_acceleration_g;
+    let d_agc = d_g * G0_MPS2 / FPSS_805_MPS2;
+
+    let v_n = v / (2.0 * VSAT_MPS);
+    let rdot_n = rdot / (2.0 * VSAT_MPS);
+    let leq = v_n * v_n * 4.0 - 1.0;
+
+    // DREF = D0 = KA3·LEQ + KA4 (AGC-normalised drag).
+    let dref_agc = KA3_AGC * leq + KA4_AGC;
+
+    // Pathological D0 → freeze: keeps the previous L/D and lets
+    // `select_phase` route us out next cycle.
+    let frozen = LdUpdate {
+        ld_command: state.entry.ld_command,
+        lewd_new: state.entry.lewd_ref,
+        dlewd_new: 0.0,
+        diffold_new_km: state.entry.diffold_km,
+        factor_new: state.entry.factor,
+    };
+    if dref_agc.abs() < 1e-9 {
+        return frozen;
+    }
+    let c_over_d0 = -4.0 / dref_agc;
+
+    // RDOTREF = −2·HS · D0 / V_n (line 1045). Use a small floor on V_n
+    // to avoid blowing up near terminal velocity.
+    let v_n_safe = v_n.max(1e-6);
+    let rdotref_n = -TWO_HS_AGC * dref_agc / v_n_safe;
+
+    // L/D = LEQ·C/D0 + K2D·(RDOT − RDOTREF) + K1D·(D − DREF).
+    //
+    // The AGC's chain ends with `SL 8D` (×256) at CONSTD1 line 1057. Our
+    // `K1D_AGC` and `K2D_AGC` already absorb that ×256 (see their `_AGC`
+    // doc comments — the post-SL8 physical gains). The bare `LEQ · C/D0`
+    // term is computed directly, so we keep it on the same physical scale
+    // by *not* multiplying by 256. Equivalently: this matches the
+    // AGC-stored intermediate `LEQ · C/D0_stored` interpreted with its
+    // own B-N scaling — small enough to act as a bias around the
+    // closed-loop K1D / K2D corrections rather than saturate them.
+    let ld_raw = leq * c_over_d0 / 256.0
+        + K2D_AGC * (rdot_n - rdotref_n)
+        + K1D_AGC * (d_agc - dref_agc);
+
+    let ld_clamped = ld_raw.clamp(-LAD_NOMINAL, LAD_NOMINAL);
+    let ld_command = glimiter_ld(d_g, rdot, v, ld_clamped);
+
+    LdUpdate {
+        ld_command,
+        // CONSTD does not iterate LEWD; carry the HUNTEST state through.
+        lewd_new: state.entry.lewd_ref,
+        dlewd_new: 0.0,
+        // Store the *current* HUNTEST DIFF so that if select_phase routes
+        // us back to Skip on convergence, UPCONTRL's first cycle has a
+        // sensible diffold reference.
+        diffold_new_km: state.entry.target_range_km - state.entry.predicted_range_km,
+        factor_new: state.entry.factor,
+    }
+}
+
 /// DOWNCNTL L/D command — REENTRY_CONTROL.agc:1061-1091 + CONSTD1 (line
 /// 1053-1059).
 ///
@@ -881,17 +967,30 @@ fn glimiter_ld(d_g: f64, rdot_mps: f64, v_mps: f64, ld_command: f64) -> f64 {
 ///
 /// **From `EntryPhase::Entry`** (HUNTEST iteration in progress):
 /// - `Some(Final)` once `V < VFINAL1` (REENTRY_CONTROL.agc:431).
-/// - `Some(Ballistic)` if `|range_error| > RANGE_ERR_THRESHOLD_KM`.
+/// - `Some(Constd)` if `|range_error| > RANGE_ERR_THRESHOLD_KM`
+///   (AGC `RANGER → DCONSTD`, line 1023). HUNTEST has diverged; keep
+///   the loop closed on a constant-drag reference.
 /// - `Some(Skip)` if `|range_error| < HUNTEST_CONVERGED_KM`
 ///   (AGC line 734 `GOTOUPSY` branch).
 /// - `None` otherwise.
+///
+/// **From `EntryPhase::Constd`** (constant-drag closed loop):
+/// - `Some(Final)` once `V < VFINAL1`.
+/// - `Some(Skip)` if `|range_error| < HUNTEST_CONVERGED_KM` (HUNTEST
+///   recovered — hand back to UPCONTRL).
+/// - `None` otherwise. **No low-drag → Ballistic exit**: the AGC's CONSTD
+///   keeps re-evaluating each cycle, accepting whatever L/D the
+///   closed-loop math produces. Letting CONSTD's first-cycle output
+///   freeze into Ballistic dramatically overshoots peak g (CONSTD's
+///   bias drives the vehicle into a full-lift-down dive).
 ///
 /// **From `EntryPhase::Skip`** (P65 UPCONTRL):
 /// - `Some(Final)` once `V < VFINAL1` *or* `V − VL < C18`
 ///   (AGC line 902 `VLTEST → PREFINAL`).
 /// - `Some(Ballistic)` if drag `D < Q7F_G` (AGC `KEP` routing at line 895
 ///   — above the sensible atmosphere, coast ballistically).
-/// - `Some(Ballistic)` if `|range_error| > RANGE_ERR_THRESHOLD_KM`.
+/// - `Some(Constd)` if `|range_error| > RANGE_ERR_THRESHOLD_KM`
+///   (UPCONTRL diverged, fall back to constant-drag closed loop).
 /// - `None` otherwise.
 ///
 /// **From `EntryPhase::Ballistic`** (P66): no automatic return to a
@@ -899,7 +998,7 @@ fn glimiter_ld(d_g: f64, rdot_mps: f64, v_mps: f64, ld_command: f64) -> f64 {
 pub fn select_phase(state: &AgcState) -> Option<EntryPhase> {
     let v = velocity_mps(state);
 
-    // Terminal-velocity transition applies in both Entry and Skip phases.
+    // Terminal-velocity transition applies to every closed-loop phase.
     if v < VFINAL1_MPS {
         return Some(EntryPhase::Final);
     }
@@ -908,11 +1007,20 @@ pub fn select_phase(state: &AgcState) -> Option<EntryPhase> {
 
     match state.entry.phase {
         EntryPhase::Entry => {
-            // HUNTEST divergence → P66 ballistic.
+            // HUNTEST divergence → CONSTD (AGC `RANGER → DCONSTD`).
+            // Previously routed straight to Ballistic, which killed the
+            // closed loop entirely — see #86.
             if range_err_km > RANGE_ERR_THRESHOLD_KM {
-                return Some(EntryPhase::Ballistic);
+                return Some(EntryPhase::Constd);
             }
             // HUNTEST convergence → P65 skip-out (UPCONTRL).
+            if range_err_km < HUNTEST_CONVERGED_KM {
+                return Some(EntryPhase::Skip);
+            }
+            None
+        }
+        EntryPhase::Constd => {
+            // HUNTEST recovered → hand back to UPCONTRL.
             if range_err_km < HUNTEST_CONVERGED_KM {
                 return Some(EntryPhase::Skip);
             }
@@ -935,9 +1043,10 @@ pub fn select_phase(state: &AgcState) -> Option<EntryPhase> {
             if state.entry.sensed_acceleration_g < Q7F_G {
                 return Some(EntryPhase::Ballistic);
             }
-            // Persistent divergence → P66 ballistic.
+            // UPCONTRL divergence → CONSTD (closed-loop fallback). Was
+            // previously Ballistic, which killed the loop — see #86.
             if range_err_km > RANGE_ERR_THRESHOLD_KM {
-                return Some(EntryPhase::Ballistic);
+                return Some(EntryPhase::Constd);
             }
             None
         }
@@ -1516,13 +1625,15 @@ mod tests {
         assert_eq!(select_phase(&state), None);
     }
 
-    /// TC-MSE3-SP-3: large divergence transitions to Ballistic.
+    /// TC-MSE3-SP-3: HUNTEST divergence transitions to CONSTD (constant-drag
+    /// closed loop) per `RANGER → DCONSTD`, AGC line 1023. Previously routed
+    /// straight to Ballistic, which killed the closed loop — see #86.
     #[test]
-    fn tc_mse3_sp_3_diverged_to_ballistic() {
+    fn tc_mse3_sp_3_diverged_to_constd() {
         let mut state = fixture(VFINAL1_MPS + 500.0);
         // Force a 1500-km range error — well above 500-km threshold.
         state.entry.target_range_km = state.entry.predicted_range_km + 1_500.0;
-        assert_eq!(select_phase(&state), Some(EntryPhase::Ballistic));
+        assert_eq!(select_phase(&state), Some(EntryPhase::Constd));
     }
 
     // ── crossrange helper ─────────────────────────────────────────────────────
@@ -1802,6 +1913,86 @@ mod tests {
         );
     }
 
+    /// TC-MSE86-CS-1 (#86): `constd_step` produces an L/D inside ±LAD_NOMINAL
+    /// at a typical CONSTD operating point. Establishes the basic invariant
+    /// that the constant-drag closed loop returns a saturatable command.
+    #[test]
+    fn tc_mse86_cs_1_produces_clamped_ld() {
+        let mut state = fixture(9_500.0);
+        state.entry.phase = EntryPhase::Constd;
+        state.entry.sensed_acceleration_g = 1.5;
+        state.entry.r_dot_mps = -300.0;
+        let upd = constd_step(&state);
+        assert!(
+            upd.ld_command.abs() <= LAD_NOMINAL + 1e-9,
+            "ld_command must be saturated, got {}",
+            upd.ld_command,
+        );
+    }
+
+    /// TC-MSE86-CS-2 (#86): `constd_step` carries `lewd_ref` and `factor`
+    /// through unchanged so HUNTEST can resume cleanly if `select_phase`
+    /// hands back to Skip.
+    #[test]
+    fn tc_mse86_cs_2_preserves_huntest_state() {
+        let mut state = fixture(9_500.0);
+        state.entry.phase = EntryPhase::Constd;
+        state.entry.sensed_acceleration_g = 1.0;
+        state.entry.r_dot_mps = -200.0;
+        state.entry.lewd_ref = 0.123;
+        state.entry.factor = 1.7;
+        let upd = constd_step(&state);
+        assert!((upd.lewd_new - 0.123).abs() < 1e-12);
+        assert!((upd.factor_new - 1.7).abs() < 1e-12);
+        assert_eq!(upd.dlewd_new, 0.0);
+    }
+
+    /// TC-MSE86-SP-1 (#86): from `Constd`, large range error keeps us in
+    /// CONSTD (waiting for HUNTEST to recover).
+    #[test]
+    fn tc_mse86_sp_1_constd_large_err_stays() {
+        let mut state = fixture(VFINAL1_MPS + 1_000.0);
+        state.entry.phase = EntryPhase::Constd;
+        state.entry.sensed_acceleration_g = 0.5;
+        state.entry.target_range_km = state.entry.predicted_range_km + 1_500.0;
+        assert_eq!(select_phase(&state), None);
+    }
+
+    /// TC-MSE86-SP-2 (#86): from `Constd`, range error inside HUNTEST
+    /// convergence band hands back to Skip (HUNTEST recovered).
+    #[test]
+    fn tc_mse86_sp_2_constd_recovery_to_skip() {
+        let mut state = fixture(VFINAL1_MPS + 1_000.0);
+        state.entry.phase = EntryPhase::Constd;
+        state.entry.sensed_acceleration_g = 0.5;
+        state.entry.target_range_km = state.entry.predicted_range_km;
+        assert_eq!(select_phase(&state), Some(EntryPhase::Skip));
+    }
+
+    /// TC-MSE86-SP-3 (#86): from `Constd`, low-drag (above the sensible
+    /// atmosphere) does **not** exit to Ballistic — CONSTD keeps running
+    /// each cycle. Letting CONSTD's first-cycle output freeze into
+    /// Ballistic overshoots peak g dramatically.
+    #[test]
+    fn tc_mse86_sp_3_constd_low_drag_stays() {
+        let mut state = fixture(VFINAL1_MPS + 1_000.0);
+        state.entry.phase = EntryPhase::Constd;
+        // Below Q7F_G threshold; range error still large (avoids
+        // recovery-to-Skip).
+        state.entry.sensed_acceleration_g = Q7F_G - 0.01;
+        state.entry.target_range_km = state.entry.predicted_range_km + 1_500.0;
+        assert_eq!(select_phase(&state), None);
+    }
+
+    /// TC-MSE86-SP-4 (#86): from `Constd`, `V < VFINAL1` short-circuits to
+    /// Final via the global terminal-velocity check.
+    #[test]
+    fn tc_mse86_sp_4_constd_terminal_v_to_final() {
+        let mut state = fixture(VFINAL1_MPS - 100.0);
+        state.entry.phase = EntryPhase::Constd;
+        assert_eq!(select_phase(&state), Some(EntryPhase::Final));
+    }
+
     /// TC-MSE4-UC-4: SKIPPER ld_command saturates to ±LAD on extreme errors.
     #[test]
     fn tc_mse4_uc_4_skipper_saturates() {
@@ -1853,16 +2044,17 @@ mod tests {
         assert_eq!(select_phase(&state), None);
     }
 
-    /// TC-MSE4-SP-3: in Skip, |range_err| > 500 km → Ballistic.
+    /// TC-MSE4-SP-3: in Skip, |range_err| > 500 km → CONSTD (closed-loop
+    /// fallback, #86). Previously routed straight to Ballistic.
     #[test]
-    fn tc_mse4_sp_3_skip_divergence_to_ballistic() {
+    fn tc_mse4_sp_3_skip_divergence_to_constd() {
         let mut state = fixture(VFINAL1_MPS + 1_000.0);
         state.entry.phase = EntryPhase::Skip;
         // Drag above Q7F_G so the assertion exercises the *range-error*
         // path, not the MS-E5 low-drag path.
         state.entry.sensed_acceleration_g = 0.5;
         state.entry.target_range_km = state.entry.predicted_range_km + 1_500.0;
-        assert_eq!(select_phase(&state), Some(EntryPhase::Ballistic));
+        assert_eq!(select_phase(&state), Some(EntryPhase::Constd));
     }
 
     // ── MS-E5 ballistic_step (P66) ────────────────────────────────────────────

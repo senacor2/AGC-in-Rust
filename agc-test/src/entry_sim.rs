@@ -60,6 +60,11 @@ pub const APOLLO_CM_AREA_M2: f64 = 12.0;
 /// value for the blunt CM geometry at Mach 20+.
 pub const APOLLO_CM_CD: f64 = 1.3;
 
+/// Apollo CSM L/D magnitude (dimensionless). The vehicle's lift coefficient
+/// is fixed; bank angle rotates the lift vector around the velocity axis.
+/// Matches `agc_core::guidance::entry_tables::LAD_NOMINAL = 0.30`.
+const LAD_LIFT: f64 = 0.30;
+
 /// 3DOF entry integrator state.
 #[derive(Clone, Copy, Debug)]
 pub struct EntryIntegrator {
@@ -189,8 +194,16 @@ impl EntryIntegrator {
         let cos_b = bank_rad.cos();
         let sin_b = bank_rad.sin();
         let lift_dir = vec3_add(vec3_scale(up_hat, cos_b), vec3_scale(right_hat, sin_b));
-        // Lift magnitude scales with drag and the commanded vertical L/D.
-        let a_lift = vec3_scale(lift_dir, drag_mag * ld_command);
+        // Apollo CSM has a fixed L/D magnitude (= LAD_NOMINAL). The bank
+        // angle rotates the lift vector around the velocity axis; the
+        // vertical projection equals `LAD·cos(bank)`. `ld_command` is the
+        // signed vertical L/D (= LAD·cos(bank) by construction in
+        // `resolve_roll`), so we use it ONLY through `lift_dir` and not
+        // multiplicatively — multiplying again would double-count the
+        // sign and flip lift-down into lift-up for negative L/D commands
+        // (#86 CONSTD path).
+        let _ = ld_command;
+        let a_lift = vec3_scale(lift_dir, drag_mag * LAD_LIFT);
 
         let a_sensed = vec3_add(a_drag, a_lift);
         let a_full = vec3_add(a_grav, a_sensed);

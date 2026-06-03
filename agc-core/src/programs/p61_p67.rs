@@ -85,6 +85,17 @@ pub enum EntryPhase {
     /// commanding `ΔL/D` from `(RDOT − RDOTREF)` and `(V − VREF)` errors.
     /// AGC source: `REENTRY_CONTROL.agc:875–1020`.
     Skip,
+    /// CONSTD — constant-drag closed-loop guidance.
+    ///
+    /// Entered from `EntryPhase::Entry` when HUNTEST diverges
+    /// (`|range_error| > entry_tables::RANGE_ERR_THRESHOLD_KM`). The
+    /// `guidance::entry::constd_step` function flies a constant-drag
+    /// reference profile `D0 = KA3·LEQ + KA4` with K1D / K2D feedback,
+    /// keeping the loop closed while HUNTEST is unrecoverable. AGC source:
+    /// `REENTRY_CONTROL.agc:1023` (`DCONSTD`). Exits to `Skip` once the
+    /// range error falls back inside `HUNTEST_CONVERGED_KM`, to `Final` at
+    /// `V < VFINAL1`, or to `Ballistic` if drag drops below `Q7F`.
+    Constd,
 }
 
 // ── EntryState ────────────────────────────────────────────────────────────────
@@ -346,9 +357,10 @@ pub fn entry_servicer_exit(state: &mut crate::AgcState) {
     // from there.
     p63_check_threshold(state);
 
-    // Closed-loop guidance once we are past 0.05g. Four flavours:
+    // Closed-loop guidance once we are past 0.05g. Five flavours:
     //   - EntryPhase::Entry     → MS-E3 HUNTEST Newton iteration.
     //   - EntryPhase::Skip      → MS-E4 UPCONTRL / SKIPPER feedback law.
+    //   - EntryPhase::Constd    → CONSTD constant-drag closed loop (#86).
     //   - EntryPhase::Ballistic → MS-E5 P66 — freeze L/D, hold attitude.
     //   - EntryPhase::Final     → MS-E6 PREDICT3 final-phase law.
     //
@@ -356,7 +368,11 @@ pub fn entry_servicer_exit(state: &mut crate::AgcState) {
     // then the per-phase L/D update, then resolve_roll, then select_phase.
     if matches!(
         state.entry.phase,
-        EntryPhase::Entry | EntryPhase::Skip | EntryPhase::Ballistic | EntryPhase::Final
+        EntryPhase::Entry
+            | EntryPhase::Skip
+            | EntryPhase::Constd
+            | EntryPhase::Ballistic
+            | EntryPhase::Final
     ) {
         use crate::guidance::entry;
 
@@ -365,6 +381,7 @@ pub fn entry_servicer_exit(state: &mut crate::AgcState) {
         let upd = match state.entry.phase {
             EntryPhase::Entry => entry::compute_ld_command(state),
             EntryPhase::Skip => entry::upcontrol_step(state),
+            EntryPhase::Constd => entry::constd_step(state),
             EntryPhase::Ballistic => entry::ballistic_step(state),
             EntryPhase::Final => entry::final_phase_step(state),
             _ => unreachable!(),
