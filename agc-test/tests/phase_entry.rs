@@ -27,11 +27,11 @@ use agc_test::entry_scenario::{
     run_entry_phase_scenario, setup_state_direct_leo, setup_state_lunar_return,
 };
 
-/// Direct-LEO miss-distance threshold (km) — matches `entry_e2e.rs:44`.
-const MISS_DISTANCE_DIRECT_LEO_KM: f64 = 1_000.0;
+/// Direct-LEO miss-distance threshold (km) — matches `entry_e2e.rs`.
+const MISS_DISTANCE_DIRECT_LEO_KM: f64 = 800.0;
 
-/// Lunar-return miss-distance threshold (km) — matches `entry_e2e.rs:60`.
-const MISS_DISTANCE_LUNAR_RETURN_KM: f64 = 3_000.0;
+/// Lunar-return miss-distance threshold (km) — matches `entry_e2e.rs`.
+const MISS_DISTANCE_LUNAR_RETURN_KM: f64 = 200.0;
 
 /// Thin wrapper that owns its `state` / `hw` and delegates to the shared
 /// driver in `agc-test::entry_scenario`. MS-T7 chains the entry phase after
