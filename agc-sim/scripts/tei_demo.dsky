@@ -1,0 +1,37 @@
+# TEI demo prep — seed Apollo 8 pre-TEI 111 km lunar parking orbit.
+#
+# This script ONLY places the CSM into the lunar parking orbit; the
+# crew steps (P30, N33 TIG, N81 ΔV, P40, PRO) are typed manually so
+# the demo audience can see them on the DSKY. See docs/tei_burn_demo.md
+# for the full sequence and explanation.
+#
+# Position: [+1848 km, 0, 0] in MCI → R_MOON (1737.4 km) + 111 km.
+# Velocity: [0, +1629 m/s, 0] → circular at that radius
+#           (√(MU_MOON / r) with r = 1.848e6 m).
+#
+# Load from dsky_sim with the '@' key. Script syntax:
+#   V=VERB  N=NOUN  E=ENTR  P=PRO  C=CLR  R=RSET  K=KEY REL
+#   0-9 digit, + / - sign, '#' line comment, whitespace ignored.
+
+# ── Step 1 — Six-word state-vector load (V71 P27 block update) ───────
+
+V 7 1 E         # V71 → P27 block update prompt
+0 1 E           # starting address = 1 (csm_state.position[0])
+0 6 E           # word count = 6
+
++ 0 1 8 4 8 E   # position[0] = 1848 km
++ 0 0 0 0 0 E   # position[1] = 0
++ 0 0 0 0 0 E   # position[2] = 0
++ 0 0 0 0 0 E   # velocity[0] = 0 m/s
++ 0 1 6 2 9 E   # velocity[1] = 1629 m/s (prograde, +Y)
++ 0 0 0 0 0 E   # velocity[2] = 0
+
+# ── Step 2 — Switch gravity body to Moon (V71 address 31) ────────────
+# Without this, the SERVICER would propagate the state vector under
+# Earth gravity at 1848 km from origin (well below R_Earth) — nonsense.
+# Address 31 is the gravity-body selector: 1 = Earth, 2 = Moon (#61).
+
+V 7 1 E         # V71 → P27 block update prompt
+3 1 E           # starting address = 31 (gravity body)
+0 1 E           # word count = 1
++ 2 E           # value = 2 → Frame::MoonInertial
