@@ -124,6 +124,13 @@ const EI_FPA_DEG: f64 = -6.48;
 /// from the canonical `setup_state_lunar_return` IC.
 const MISS_DISTANCE_GATE_KM: f64 = 2_000.0;
 
+/// Peak-g acceptance band for the MS-T7 entry phase (#83). Apollo 8 lunar-
+/// return entry IC (V = 11 040 m/s, FPA = −6.48°) with state vector
+/// arriving via the chained mission. Band slightly wider than the
+/// canonical `phase_entry::PEAK_G_BAND_LUNAR_RETURN` because the
+/// accumulated trajectory drift can shift the peak by ±0.5 g.
+const PEAK_G_BAND: (f64, f64) = (8.0, 13.0);
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /// Parking-orbit state vector at MET = `met_cs`. From `phase_tli.rs:102-112`.
@@ -1029,7 +1036,7 @@ fn tc_full_mission_apollo_8_end_to_end() {
     state.gha_epoch_rad = 0.0;
     state.csm_state.epoch = state.time;
 
-    run_entry_phase_scenario(&mut state, &mut hw, MISS_DISTANCE_GATE_KM);
+    run_entry_phase_scenario(&mut state, &mut hw, MISS_DISTANCE_GATE_KM, Some(PEAK_G_BAND));
 
     // ─────────────────────────────────────────────────────────────────────────
     // Final acceptance assertion (the functional-completeness gate)
