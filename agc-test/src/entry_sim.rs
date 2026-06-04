@@ -73,6 +73,62 @@ pub const APOLLO_CM_CD: f64 = 1.3;
 /// Matches `agc_core::guidance::entry_tables::LAD_NOMINAL = 0.30`.
 const LAD_LIFT: f64 = 0.30;
 
+/// Apollo CM heat-shield effective nose radius (m). Used in the
+/// Sutton–Graves stagnation-point heat-flux correlation. The CM forebody
+/// is a spherical cap with curvature radius ≈ 4.69 m; this matches the
+/// value cited in Detra & Hidalgo (1961) and Apollo entry-trajectory
+/// literature.
+const APOLLO_CM_NOSE_RADIUS_M: f64 = 4.69;
+
+/// Sutton–Graves stagnation-point heat-flux coefficient `K` for Earth
+/// air (kg^½ · m⁻¹). `q̇ = K · √(ρ / R_n) · v³` where `q̇` is in W/m²,
+/// `ρ` in kg/m³, `R_n` in m, and `v` in m/s. Sutton & Graves (NASA TR
+/// R-376, 1971) — Apollo-era reference constant.
+const SUTTON_GRAVES_K: f64 = 1.7415e-4;
+
+/// Diagnostics returned alongside the sensed Δv from
+/// [`EntryIntegrator::integrate_cycle_with_diag`].
+#[derive(Clone, Copy, Debug, Default)]
+pub struct IntegrationDiag {
+    /// Inertial sensed Δv accumulated over the cycle (m/s).
+    pub sensed_dv: Vec3,
+    /// Peak Sutton–Graves stagnation-point heat flux observed during the
+    /// cycle (W/m²). Sampled twice per RK2 sub-step.
+    pub peak_heat_flux_w_m2: f64,
+}
+
+/// Sutton–Graves stagnation-point heat flux for the Apollo CM at a given
+/// inertial state. Computes `q̇ = K · √(ρ / R_n) · v_rel³` (Sutton & Graves
+/// NASA TR R-376), where `v_rel` is the Earth-relative velocity (the
+/// atmosphere co-rotates with the surface, so heat-flux drives off the
+/// freestream velocity in the air-mass frame — same `v_rel` the drag and
+/// lift forces use in `acceleration`).
+///
+/// Returns 0 below the sensible atmosphere (ρ ≈ 0) or at near-zero
+/// relative velocity. Units: W/m². Divide by `1.0e6` for MW/m².
+pub fn heat_flux_w_m2(position: Vec3, velocity_eci: Vec3) -> f64 {
+    let r_mag = vec3_norm(position);
+    if r_mag < 1.0 {
+        return 0.0;
+    }
+    let omega_cross_r = [
+        -OMEGA_EARTH_RAD_S * position[1],
+        OMEGA_EARTH_RAD_S * position[0],
+        0.0,
+    ];
+    let v_rel = vec3_sub(velocity_eci, omega_cross_r);
+    let v_rel_mag = vec3_norm(v_rel);
+    if v_rel_mag < 1.0 {
+        return 0.0;
+    }
+    let altitude = r_mag - R_EARTH;
+    let rho = agc_core::navigation::atmosphere::density(altitude);
+    if rho <= 0.0 {
+        return 0.0;
+    }
+    SUTTON_GRAVES_K * (rho / APOLLO_CM_NOSE_RADIUS_M).sqrt() * v_rel_mag.powi(3)
+}
+
 /// 3DOF entry integrator state.
 #[derive(Clone, Copy, Debug)]
 pub struct EntryIntegrator {
@@ -123,9 +179,27 @@ impl EntryIntegrator {
         bank_rad: f64,
         dt_s: f64,
     ) -> Vec3 {
+        self.integrate_cycle_with_diag(position, velocity, ld_command, bank_rad, dt_s)
+            .sensed_dv
+    }
+
+    /// Same as [`integrate_cycle`] but also returns diagnostics from the
+    /// sub-step loop — currently the peak Sutton–Graves stagnation-point
+    /// heat flux observed (#96). Callers that need shape assertions on the
+    /// trajectory (peak g, peak heating) use this variant; callers that
+    /// only need sensed Δv keep the simpler [`integrate_cycle`].
+    pub fn integrate_cycle_with_diag(
+        &self,
+        position: Vec3,
+        velocity: Vec3,
+        ld_command: f64,
+        bank_rad: f64,
+        dt_s: f64,
+    ) -> IntegrationDiag {
         let mut pos = position;
         let mut vel = velocity;
         let mut sensed_dv: Vec3 = [0.0; 3];
+        let mut peak_heat_flux_w_m2 = 0.0_f64;
 
         let n_substeps = ((dt_s / SUB_STEP_S).round() as usize).max(1);
         let h = dt_s / n_substeps as f64;
@@ -134,10 +208,13 @@ impl EntryIntegrator {
             // RK2 midpoint: evaluate full accel at start, advance half-step,
             // evaluate again at midpoint, use midpoint accel for the full step.
             let (a_full_0, a_sensed_0) = self.acceleration(pos, vel, ld_command, bank_rad);
+            // Sample heat flux at the sub-step start point.
+            peak_heat_flux_w_m2 = peak_heat_flux_w_m2.max(heat_flux_w_m2(pos, vel));
             let pos_mid = vec3_add(pos, vec3_scale(vel, h * 0.5));
             let vel_mid = vec3_add(vel, vec3_scale(a_full_0, h * 0.5));
             let (a_full_mid, a_sensed_mid) =
                 self.acceleration(pos_mid, vel_mid, ld_command, bank_rad);
+            peak_heat_flux_w_m2 = peak_heat_flux_w_m2.max(heat_flux_w_m2(pos_mid, vel_mid));
 
             pos = vec3_add(pos, vec3_scale(vel_mid, h));
             vel = vec3_add(vel, vec3_scale(a_full_mid, h));
@@ -147,7 +224,10 @@ impl EntryIntegrator {
             sensed_dv = vec3_add(sensed_dv, vec3_scale(a_sensed_avg, h));
         }
 
-        sensed_dv
+        IntegrationDiag {
+            sensed_dv,
+            peak_heat_flux_w_m2,
+        }
     }
 
     /// Compute `(full_accel, sensed_accel)` at the given state. `full_accel`

@@ -301,6 +301,14 @@ pub enum Event {
     /// shape — e.g. ballistic rather than lifting — show up here even when
     /// the miss-distance gate accepts them).
     ExpectPeakGIn { min_g: f64, max_g: f64 },
+
+    /// Assert that the peak Sutton–Graves stagnation-point heat flux
+    /// (MW/m²) observed across atmosphere-on coast steps falls within
+    /// `[min_mw_m2, max_mw_m2]`. Companion to [`Event::ExpectPeakGIn`]
+    /// (#96) — peak heating and peak g together constrain both the
+    /// trajectory's lower-altitude leg (where heat flux peaks) and its
+    /// peak-deceleration regime.
+    ExpectPeakHeatingIn { min_mw_m2: f64, max_mw_m2: f64 },
 }
 
 // ── Scenario ──────────────────────────────────────────────────────────────────
@@ -713,6 +721,16 @@ impl ScenarioBuilder {
         self
     }
 
+    /// Assert peak Sutton–Graves stagnation-point heat flux (MW/m²)
+    /// observed across atmosphere-on coast steps falls in
+    /// `[min_mw_m2, max_mw_m2]`. Pairs with [`expect_peak_g_in`] as the
+    /// thermal companion of the peak-g trajectory-shape check (#96).
+    pub fn expect_peak_heating_in(mut self, min_mw_m2: f64, max_mw_m2: f64) -> Self {
+        self.events
+            .push(Event::ExpectPeakHeatingIn { min_mw_m2, max_mw_m2 });
+        self
+    }
+
     /// Consume the builder and produce a [`Scenario`].
     pub fn build(self) -> Scenario {
         Scenario {
@@ -820,6 +838,10 @@ struct RunContext {
     /// atmosphere-on coast steps in this run. Used by
     /// [`Event::ExpectPeakGIn`] to assert trajectory-shape bands (#83).
     peak_sensed_g: f64,
+    /// Peak Sutton–Graves stagnation-point heat flux (MW/m²) observed
+    /// across atmosphere-on coast steps. Sampled at the start of each
+    /// outer step. Used by [`Event::ExpectPeakHeatingIn`] (#96).
+    peak_heating_rate_mw_m2: f64,
 }
 
 // ── run_scenario ──────────────────────────────────────────────────────────────
@@ -857,6 +879,7 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
         truth_refsmmat: None,
         first_sighting: None,
         peak_sensed_g: 0.0,
+        peak_heating_rate_mw_m2: 0.0,
     };
 
     let tick_cs = scenario.tick_cs;
@@ -994,6 +1017,20 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
                         && state.entry.sensed_acceleration_g > ctx.peak_sensed_g
                     {
                         ctx.peak_sensed_g = state.entry.sensed_acceleration_g;
+                    }
+
+                    // Track peak Sutton–Graves heat flux (#96). Sampled at
+                    // the AGC's current `csm_state` — same input the aero
+                    // injection (step 1c) uses.
+                    if ctx.spacecraft.atmosphere_enabled {
+                        let q_w_m2 = crate::physics::heat_flux_w_m2(
+                            state.csm_state.position,
+                            state.csm_state.velocity,
+                        );
+                        let q_mw_m2 = q_w_m2 / 1.0e6;
+                        if q_mw_m2 > ctx.peak_heating_rate_mw_m2 {
+                            ctx.peak_heating_rate_mw_m2 = q_mw_m2;
+                        }
                     }
 
                     // Step 2: run coast-mode inner ticks for the full outer step.
@@ -1443,6 +1480,25 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
                     name,
                     &format!(
                         "ExpectPeakGIn OK: peak_g={peak_g:.2} ∈ [{min_g:.2}, {max_g:.2}] g"
+                    ),
+                );
+            }
+
+            // ── ExpectPeakHeatingIn ───────────────────────────────────────────
+            Event::ExpectPeakHeatingIn { min_mw_m2, max_mw_m2 } => {
+                let peak = ctx.peak_heating_rate_mw_m2;
+                if peak < min_mw_m2 || peak > max_mw_m2 {
+                    let prefix = fail_prefix(name, idx, "ExpectPeakHeatingIn", state.time.0);
+                    panic!(
+                        "{prefix}\n  peak Sutton–Graves heat flux = {peak:.2} MW/m² \
+                         outside [{min_mw_m2:.2}, {max_mw_m2:.2}] MW/m²"
+                    );
+                }
+                log_event(
+                    name,
+                    &format!(
+                        "ExpectPeakHeatingIn OK: peak_q={peak:.2} ∈ \
+                         [{min_mw_m2:.2}, {max_mw_m2:.2}] MW/m²"
                     ),
                 );
             }
@@ -2488,6 +2544,7 @@ mod tests {
             truth_refsmmat: None,
             first_sighting: None,
             peak_sensed_g: 0.0,
+            peak_heating_rate_mw_m2: 0.0,
         };
         // Simulate the event handler.
         ctx.spacecraft.attitude.q = [1.0, 0.0, 0.0, 0.0];
@@ -2546,6 +2603,7 @@ mod tests {
             truth_refsmmat: None,
             first_sighting: None,
             peak_sensed_g: 0.0,
+            peak_heating_rate_mw_m2: 0.0,
         };
         // Apply snap (mirrors the CommandAttitude event handler).
         ctx.spacecraft.attitude.q = q_snapped;

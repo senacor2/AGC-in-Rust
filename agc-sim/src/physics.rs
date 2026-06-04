@@ -41,6 +41,16 @@ pub const R_EARTH_ATMOSPHERE_M: f64 = 6_371_000.0;
 /// velocity (#87). Re-exported from agc-core so the integrator, the
 /// AGC's drogue-deploy trigger, and the GHA chain share one value.
 use agc_core::navigation::time::OMEGA_EARTH as OMEGA_EARTH_RAD_S;
+
+/// Sutton–Graves stagnation-point heat-flux coefficient `K` for Earth
+/// air (kg^½ · m⁻¹). `q̇ = K · √(ρ / R_n) · v³` where `q̇` is W/m². Same
+/// value as `agc_test::entry_sim::SUTTON_GRAVES_K`; the two integrators
+/// share their physics constants (#96).
+const SUTTON_GRAVES_K: f64 = 1.7415e-4;
+
+/// Apollo CM heat-shield effective nose radius (m). Matches
+/// `agc_test::entry_sim::APOLLO_CM_NOSE_RADIUS_M` (4.69 m).
+const APOLLO_CM_NOSE_RADIUS_M: f64 = 4.69;
 use agc_core::navigation::integration::{propagate_coast, soi_check};
 use agc_core::navigation::planetary::moon_position;
 use agc_core::navigation::state_vector::Frame;
@@ -366,6 +376,33 @@ impl Spacecraft {
 /// Bank convention: `bank_rad = 0` → lift directed along `r̂ ⊥ v̂` ("up", away
 /// from Earth). Positive bank rotates the lift vector toward `v̂ × r̂` (right of
 /// velocity).
+///
+/// Sutton–Graves stagnation-point heat flux for the Apollo CM at a given
+/// inertial state. Mirror of `agc_test::entry_sim::heat_flux_w_m2` — same
+/// formula, same constants (#96). Returns W/m².
+pub fn heat_flux_w_m2(position_eci: Vec3, velocity_eci: Vec3) -> f64 {
+    let r_mag = norm(position_eci);
+    if r_mag < 1.0 {
+        return 0.0;
+    }
+    let omega_cross_r = [
+        -OMEGA_EARTH_RAD_S * position_eci[1],
+        OMEGA_EARTH_RAD_S * position_eci[0],
+        0.0,
+    ];
+    let v_rel = vsub(velocity_eci, omega_cross_r);
+    let v_rel_mag = norm(v_rel);
+    if v_rel_mag < 1.0 {
+        return 0.0;
+    }
+    let altitude = r_mag - R_EARTH_ATMOSPHERE_M;
+    let rho = density(altitude);
+    if rho <= 0.0 {
+        return 0.0;
+    }
+    SUTTON_GRAVES_K * (rho / APOLLO_CM_NOSE_RADIUS_M).sqrt() * v_rel_mag.powi(3)
+}
+
 pub fn aero_acceleration_inertial(
     sc: &Spacecraft,
     position_eci: Vec3,

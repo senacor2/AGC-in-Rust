@@ -131,6 +131,12 @@ const MISS_DISTANCE_GATE_KM: f64 = 2_000.0;
 /// accumulated trajectory drift can shift the peak by ±0.5 g.
 const PEAK_G_BAND: (f64, f64) = (8.0, 13.0);
 
+/// Peak Sutton–Graves heat-flux band for the MS-T7 entry phase (#96,
+/// MW/m²). Slightly wider than the canonical lunar-return band because
+/// the accumulated trajectory drift across the full mission chain can
+/// shift the peak.
+const PEAK_HEAT_BAND: (f64, f64) = (1.2, 2.7);
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /// Parking-orbit state vector at MET = `met_cs`. From `phase_tli.rs:102-112`.
@@ -1036,7 +1042,13 @@ fn tc_full_mission_apollo_8_end_to_end() {
     state.gha_epoch_rad = 0.0;
     state.csm_state.epoch = state.time;
 
-    run_entry_phase_scenario(&mut state, &mut hw, MISS_DISTANCE_GATE_KM, Some(PEAK_G_BAND));
+    run_entry_phase_scenario(
+        &mut state,
+        &mut hw,
+        MISS_DISTANCE_GATE_KM,
+        Some(PEAK_G_BAND),
+        Some(PEAK_HEAT_BAND),
+    );
 
     // ─────────────────────────────────────────────────────────────────────────
     // Final acceptance assertion (the functional-completeness gate)

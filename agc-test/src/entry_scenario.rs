@@ -45,6 +45,9 @@ pub struct ScenarioResult {
     pub min_altitude_km: f64,
     /// Peak sensed-g recorded during the run.
     pub max_sensed_g: f64,
+    /// Peak Sutton–Graves stagnation-point heat flux observed during the
+    /// run (MW/m²). Apollo 8 actual was ~4.77 MW/m² (#96).
+    pub max_heating_rate_mw_m2: f64,
     /// Last 10 cycles of `(t, phase, sensed_g, alt_km)`. Useful in
     /// failure messages — `tests/entry_e2e.rs` formats it into the
     /// assertion text.
@@ -96,20 +99,22 @@ where
     let mut history: Vec<(f64, EntryPhase, f64, f64)> = Vec::new();
     let mut min_altitude_km = f64::INFINITY;
     let mut max_sensed_g = 0.0_f64;
+    let mut max_heat_flux_w_m2 = 0.0_f64;
     let mut total_cycles: u32 = 0;
 
     loop {
         let bank_rad = bank_source(&state);
         let ld_command = state.entry.ld_command;
 
-        let dv_inertial = integrator.integrate_cycle(
+        let diag = integrator.integrate_cycle_with_diag(
             state.csm_state.position,
             state.csm_state.velocity,
             ld_command,
             bank_rad,
             SERVICER_PERIOD_S,
         );
-        state.pipa_counts = pipa_pulses_for_dv(dv_inertial, &state.pipa_cal);
+        max_heat_flux_w_m2 = max_heat_flux_w_m2.max(diag.peak_heat_flux_w_m2);
+        state.pipa_counts = pipa_pulses_for_dv(diag.sensed_dv, &state.pipa_cal);
 
         servicer_task(&mut state);
         let _ = state.waitlist.pop_task();
@@ -154,6 +159,7 @@ where
         landed_lon_deg: landed_lon.to_degrees(),
         min_altitude_km,
         max_sensed_g,
+        max_heating_rate_mw_m2: max_heat_flux_w_m2 / 1.0e6,
         last_history,
         total_cycles,
     }
@@ -221,7 +227,9 @@ pub fn sub_satellite_lat_lon(state: &AgcState) -> (f64, f64) {
 /// supplied `state` + `hw`. Asserts drogue deploys within `miss_km_tol` km of
 /// the target landing site already stored in `state.entry`. If `peak_g_band`
 /// is supplied, also asserts the peak sensed g during the coast falls
-/// inside the given `(min_g, max_g)` band (#83 trajectory-shape check).
+/// inside the given `(min_g, max_g)` band (#83). If `peak_heat_band` is
+/// supplied, asserts the peak Sutton–Graves heat flux falls inside the
+/// given `(min_mw_m2, max_mw_m2)` band (#96).
 ///
 /// Inverts the ownership compared to the inline driver in
 /// `agc-test/tests/phase_entry.rs::run_entry_phase`: here the caller owns
@@ -232,6 +240,7 @@ pub fn run_entry_phase_scenario(
     hw: &mut agc_sim::SimHardware,
     miss_km_tol: f64,
     peak_g_band: Option<(f64, f64)>,
+    peak_heat_band: Option<(f64, f64)>,
 ) {
     use agc_core::services::average_g::start_servicer;
     use agc_core::services::v_n::Key;
@@ -296,6 +305,9 @@ pub fn run_entry_phase_scenario(
         .expect_drogue_within(miss_km_tol);
     if let Some((min_g, max_g)) = peak_g_band {
         phase2_builder = phase2_builder.expect_peak_g_in(min_g, max_g);
+    }
+    if let Some((min_q, max_q)) = peak_heat_band {
+        phase2_builder = phase2_builder.expect_peak_heating_in(min_q, max_q);
     }
     let phase2 = phase2_builder.build();
     run_scenario(&phase2, state, hw);
