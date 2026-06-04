@@ -33,13 +33,32 @@ const MISS_DISTANCE_DIRECT_LEO_KM: f64 = 800.0;
 /// Lunar-return miss-distance threshold (km) — matches `entry_e2e.rs`.
 const MISS_DISTANCE_LUNAR_RETURN_KM: f64 = 200.0;
 
+/// Peak-g acceptance band for `tc_phase_entry_direct_leo` (#83). Direct-LEO
+/// FPA = −6° / V = 7900 m/s currently peaks at ~9.1 g; band sized with
+/// ~25 % headroom to catch L/D-sign bugs and ballistic regressions.
+const PEAK_G_BAND_DIRECT_LEO: (f64, f64) = (7.0, 11.0);
+
+/// Peak-g acceptance band for `tc_phase_entry_lunar_return` (#83).
+/// Lunar-return FPA = −6.48° / V = 11 000 m/s currently peaks at ~10.4 g
+/// — higher than Apollo 8 actual (6.84 g) because the simulator runs a
+/// steeper trajectory shape than the historical one. Band sized around
+/// the achieved baseline; tighter bands towards Apollo 8 historical are
+/// blocked on trajectory-shape improvements (J2 oblateness, refined
+/// atmosphere model).
+const PEAK_G_BAND_LUNAR_RETURN: (f64, f64) = (8.5, 12.5);
+
 /// Thin wrapper that owns its `state` / `hw` and delegates to the shared
 /// driver in `agc-test::entry_scenario`. MS-T7 chains the entry phase after
 /// trans-earth coast by calling the same shared driver directly.
-fn run_entry_phase(_name: &'static str, seed: AgcState, miss_km_tol: f64) {
+fn run_entry_phase(
+    _name: &'static str,
+    seed: AgcState,
+    miss_km_tol: f64,
+    peak_g_band: (f64, f64),
+) {
     let mut state = seed;
     let mut hw = SimHardware::new();
-    run_entry_phase_scenario(&mut state, &mut hw, miss_km_tol);
+    run_entry_phase_scenario(&mut state, &mut hw, miss_km_tol, Some(peak_g_band));
 }
 
 #[test]
@@ -48,6 +67,7 @@ fn tc_phase_entry_direct_leo() {
         "phase_entry/direct_leo",
         setup_state_direct_leo(),
         MISS_DISTANCE_DIRECT_LEO_KM,
+        PEAK_G_BAND_DIRECT_LEO,
     );
 }
 
@@ -57,5 +77,6 @@ fn tc_phase_entry_lunar_return() {
         "phase_entry/lunar_return",
         setup_state_lunar_return(),
         MISS_DISTANCE_LUNAR_RETURN_KM,
+        PEAK_G_BAND_LUNAR_RETURN,
     );
 }

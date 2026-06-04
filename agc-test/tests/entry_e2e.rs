@@ -49,11 +49,27 @@ const MISS_DISTANCE_DIRECT_LEO_KM: f64 = 800.0;
 /// dynamics, exponential atmosphere).
 const MISS_DISTANCE_LUNAR_RETURN_KM: f64 = 200.0;
 
+/// Peak-g acceptance band for `entry_direct_leo` (#83). Synthetic direct
+/// LEO at FPA = −6° currently peaks at ~9.1 g; ~25 % headroom catches
+/// L/D-sign bugs and ballistic regressions.
+const PEAK_G_BAND_DIRECT_LEO: (f64, f64) = (7.0, 11.0);
+
+/// Peak-g acceptance band for `entry_lunar_return` (#83). Lunar return at
+/// FPA = −6.48° currently peaks at ~10.4 g — higher than Apollo 8 actual
+/// (6.84 g) because the simulator runs a steeper trajectory shape than
+/// the historical one.
+const PEAK_G_BAND_LUNAR_RETURN: (f64, f64) = (8.5, 12.5);
+
 /// `entry_direct_leo` — direct entry from a 200 km LEO trajectory.
 #[test]
 fn entry_direct_leo() {
     let state = setup_state_direct_leo();
-    run_entry_scenario("direct_leo", state, MISS_DISTANCE_DIRECT_LEO_KM);
+    run_entry_scenario(
+        "direct_leo",
+        state,
+        MISS_DISTANCE_DIRECT_LEO_KM,
+        PEAK_G_BAND_DIRECT_LEO,
+    );
 }
 
 /// `entry_lunar_return` — translunar-return entry from the documented
@@ -61,12 +77,22 @@ fn entry_direct_leo() {
 #[test]
 fn entry_lunar_return() {
     let state = setup_state_lunar_return();
-    run_entry_scenario("lunar_return", state, MISS_DISTANCE_LUNAR_RETURN_KM);
+    run_entry_scenario(
+        "lunar_return",
+        state,
+        MISS_DISTANCE_LUNAR_RETURN_KM,
+        PEAK_G_BAND_LUNAR_RETURN,
+    );
 }
 
 /// Run one complete entry scenario through the AGC + integrator and
-/// assert the miss-distance acceptance criterion.
-fn run_entry_scenario(name: &str, state: AgcState, miss_threshold_km: f64) {
+/// assert the miss-distance and peak-g acceptance criteria.
+fn run_entry_scenario(
+    name: &str,
+    state: AgcState,
+    miss_threshold_km: f64,
+    peak_g_band: (f64, f64),
+) {
     let r = simulate_to_drogue(state);
 
     assert!(
@@ -103,6 +129,17 @@ fn run_entry_scenario(name: &str, state: AgcState, miss_threshold_km: f64) {
         r.landed_lat_deg,
         r.landed_lon_deg,
         r.elapsed_s,
+    );
+
+    // #83: peak-g shape check — catches trajectory regressions (L/D-sign
+    // bug, ballistic entry, runaway lift) that the miss-distance gate
+    // alone may not see.
+    let (min_g, max_g) = peak_g_band;
+    eprintln!("[{name}] peak g = {:.2} (band [{min_g:.2}, {max_g:.2}])", r.max_sensed_g);
+    assert!(
+        (min_g..=max_g).contains(&r.max_sensed_g),
+        "[{name}] peak sensed g = {:.2} outside [{min_g:.2}, {max_g:.2}] g",
+        r.max_sensed_g,
     );
 }
 

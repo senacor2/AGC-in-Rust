@@ -219,7 +219,9 @@ pub fn sub_satellite_lat_lon(state: &AgcState) -> (f64, f64) {
 
 /// Drive the V37 P61 → P62 → P63 sequence and coast through entry on the
 /// supplied `state` + `hw`. Asserts drogue deploys within `miss_km_tol` km of
-/// the target landing site already stored in `state.entry`.
+/// the target landing site already stored in `state.entry`. If `peak_g_band`
+/// is supplied, also asserts the peak sensed g during the coast falls
+/// inside the given `(min_g, max_g)` band (#83 trajectory-shape check).
 ///
 /// Inverts the ownership compared to the inline driver in
 /// `agc-test/tests/phase_entry.rs::run_entry_phase`: here the caller owns
@@ -229,6 +231,7 @@ pub fn run_entry_phase_scenario(
     state: &mut AgcState,
     hw: &mut agc_sim::SimHardware,
     miss_km_tol: f64,
+    peak_g_band: Option<(f64, f64)>,
 ) {
     use agc_core::services::average_g::start_servicer;
     use agc_core::services::v_n::Key;
@@ -285,13 +288,16 @@ pub fn run_entry_phase_scenario(
     state.csm_state.epoch = state.time;
     start_servicer(state);
 
-    let phase2 = ScenarioBuilder::new("phase_entry/coast")
+    let mut phase2_builder = ScenarioBuilder::new("phase_entry/coast")
         .comment("coast through entry — atmosphere + bank flow on")
         .seed_ground_truth(state.csm_state)
         .enable_atmosphere()
         .advance_coast(SimDuration::seconds(MAX_SCENARIO_DURATION_S as u32))
-        .expect_drogue_within(miss_km_tol)
-        .build();
+        .expect_drogue_within(miss_km_tol);
+    if let Some((min_g, max_g)) = peak_g_band {
+        phase2_builder = phase2_builder.expect_peak_g_in(min_g, max_g);
+    }
+    let phase2 = phase2_builder.build();
     run_scenario(&phase2, state, hw);
 
     assert_eq!(

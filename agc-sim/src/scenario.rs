@@ -292,6 +292,15 @@ pub enum Event {
     /// point of `state.csm_state.position` vs
     /// `(state.entry.target_lat_rad, state.entry.target_lon_rad)`.
     ExpectDrogueWithin { miss_km_tol: f64 },
+
+    /// Assert that the peak `state.entry.sensed_acceleration_g` observed
+    /// across all atmosphere-on coast steps in this scenario falls within
+    /// `[min_g, max_g]`. Orbital-mechanics review #83 recommends this as
+    /// a second-axis trajectory-shape check (Apollo 8 historical peak g
+    /// was 6.84 g; entries that land near target on the wrong trajectory
+    /// shape — e.g. ballistic rather than lifting — show up here even when
+    /// the miss-distance gate accepts them).
+    ExpectPeakGIn { min_g: f64, max_g: f64 },
 }
 
 // ── Scenario ──────────────────────────────────────────────────────────────────
@@ -696,6 +705,14 @@ impl ScenarioBuilder {
         self
     }
 
+    /// Assert peak `state.entry.sensed_acceleration_g` observed across
+    /// atmosphere-on coast steps falls in `[min_g, max_g]`. Second-axis
+    /// trajectory-shape check (#83) — Apollo 8 historical was 6.84 g.
+    pub fn expect_peak_g_in(mut self, min_g: f64, max_g: f64) -> Self {
+        self.events.push(Event::ExpectPeakGIn { min_g, max_g });
+        self
+    }
+
     /// Consume the builder and produce a [`Scenario`].
     pub fn build(self) -> Scenario {
         Scenario {
@@ -799,6 +816,10 @@ struct RunContext {
     truth_refsmmat: Option<Mat3x3>,
     /// Buffered first star sighting, waiting for a second to complete a pair.
     first_sighting: Option<FirstSighting>,
+    /// Peak `state.entry.sensed_acceleration_g` observed across all
+    /// atmosphere-on coast steps in this run. Used by
+    /// [`Event::ExpectPeakGIn`] to assert trajectory-shape bands (#83).
+    peak_sensed_g: f64,
 }
 
 // ── run_scenario ──────────────────────────────────────────────────────────────
@@ -835,6 +856,7 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
         spacecraft: Spacecraft::new(),
         truth_refsmmat: None,
         first_sighting: None,
+        peak_sensed_g: 0.0,
     };
 
     let tick_cs = scenario.tick_cs;
@@ -963,6 +985,17 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
                             agc_test_pipa_pulses_for_dv(aero_dv, state.pipa_cal.scale);
                     }
 
+                    // Track peak sensed-g across atmosphere-on coast steps
+                    // for `Event::ExpectPeakGIn` (#83). Sampled here, before
+                    // the SERVICER inner-tick loop, captures the value from
+                    // the *previous* outer step's SERVICER fire; sampling
+                    // again after the loop captures this step's value.
+                    if ctx.spacecraft.atmosphere_enabled
+                        && state.entry.sensed_acceleration_g > ctx.peak_sensed_g
+                    {
+                        ctx.peak_sensed_g = state.entry.sensed_acceleration_g;
+                    }
+
                     // Step 2: run coast-mode inner ticks for the full outer step.
                     //
                     // We run `tick_cs`-sized inner ticks so the SERVICER fires at
@@ -977,6 +1010,12 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
                         waitlist.tick(state, hw);
                         t4.tick(state, hw);
                         inner_remaining = inner_remaining.saturating_sub(slice);
+                    }
+
+                    if ctx.spacecraft.atmosphere_enabled
+                        && state.entry.sensed_acceleration_g > ctx.peak_sensed_g
+                    {
+                        ctx.peak_sensed_g = state.entry.sensed_acceleration_g;
                     }
 
                     remaining_cs = remaining_cs.saturating_sub(outer_cs);
@@ -1387,6 +1426,23 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
                     name,
                     &format!(
                         "ExpectDrogueWithin OK: miss={miss_km:.1} km ≤ tol={miss_km_tol:.1} km"
+                    ),
+                );
+            }
+
+            // ── ExpectPeakGIn ─────────────────────────────────────────────────
+            Event::ExpectPeakGIn { min_g, max_g } => {
+                let peak_g = ctx.peak_sensed_g;
+                if peak_g < min_g || peak_g > max_g {
+                    let prefix = fail_prefix(name, idx, "ExpectPeakGIn", state.time.0);
+                    panic!(
+                        "{prefix}\n  peak sensed g = {peak_g:.2} outside [{min_g:.2}, {max_g:.2}] g"
+                    );
+                }
+                log_event(
+                    name,
+                    &format!(
+                        "ExpectPeakGIn OK: peak_g={peak_g:.2} ∈ [{min_g:.2}, {max_g:.2}] g"
                     ),
                 );
             }
@@ -2431,6 +2487,7 @@ mod tests {
             spacecraft: crate::physics::Spacecraft::new(),
             truth_refsmmat: None,
             first_sighting: None,
+            peak_sensed_g: 0.0,
         };
         // Simulate the event handler.
         ctx.spacecraft.attitude.q = [1.0, 0.0, 0.0, 0.0];
@@ -2488,6 +2545,7 @@ mod tests {
             spacecraft: crate::physics::Spacecraft::new(),
             truth_refsmmat: None,
             first_sighting: None,
+            peak_sensed_g: 0.0,
         };
         // Apply snap (mirrors the CommandAttitude event handler).
         ctx.spacecraft.attitude.q = q_snapped;
