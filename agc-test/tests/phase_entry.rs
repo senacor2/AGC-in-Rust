@@ -47,6 +47,19 @@ const PEAK_G_BAND_DIRECT_LEO: (f64, f64) = (7.0, 11.0);
 /// atmosphere model).
 const PEAK_G_BAND_LUNAR_RETURN: (f64, f64) = (8.5, 12.5);
 
+/// Peak Sutton–Graves heat-flux band for `tc_phase_entry_direct_leo`
+/// (#96, MW/m²). Direct LEO at FPA = −6° peaks at ~0.80 MW/m²; band
+/// sized with ~25 % headroom.
+const PEAK_HEAT_BAND_DIRECT_LEO: (f64, f64) = (0.5, 1.2);
+
+/// Peak Sutton–Graves heat-flux band for `tc_phase_entry_lunar_return`
+/// (#96, MW/m²). Lunar return at FPA = −6.48° peaks at ~1.88 MW/m² —
+/// well below Apollo 8 actual (~4.77 MW/m²) because the simulator's
+/// peak heating occurs at higher altitude / lower density than the
+/// historical trajectory. Tighter bands toward Apollo 8 historical
+/// are blocked on the same trajectory-shape improvements as #83.
+const PEAK_HEAT_BAND_LUNAR_RETURN: (f64, f64) = (1.3, 2.5);
+
 /// Thin wrapper that owns its `state` / `hw` and delegates to the shared
 /// driver in `agc-test::entry_scenario`. MS-T7 chains the entry phase after
 /// trans-earth coast by calling the same shared driver directly.
@@ -55,10 +68,17 @@ fn run_entry_phase(
     seed: AgcState,
     miss_km_tol: f64,
     peak_g_band: (f64, f64),
+    peak_heat_band: (f64, f64),
 ) {
     let mut state = seed;
     let mut hw = SimHardware::new();
-    run_entry_phase_scenario(&mut state, &mut hw, miss_km_tol, Some(peak_g_band));
+    run_entry_phase_scenario(
+        &mut state,
+        &mut hw,
+        miss_km_tol,
+        Some(peak_g_band),
+        Some(peak_heat_band),
+    );
 }
 
 #[test]
@@ -68,6 +88,7 @@ fn tc_phase_entry_direct_leo() {
         setup_state_direct_leo(),
         MISS_DISTANCE_DIRECT_LEO_KM,
         PEAK_G_BAND_DIRECT_LEO,
+        PEAK_HEAT_BAND_DIRECT_LEO,
     );
 }
 
@@ -78,5 +99,6 @@ fn tc_phase_entry_lunar_return() {
         setup_state_lunar_return(),
         MISS_DISTANCE_LUNAR_RETURN_KM,
         PEAK_G_BAND_LUNAR_RETURN,
+        PEAK_HEAT_BAND_LUNAR_RETURN,
     );
 }

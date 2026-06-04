@@ -60,6 +60,16 @@ const PEAK_G_BAND_DIRECT_LEO: (f64, f64) = (7.0, 11.0);
 /// the historical one.
 const PEAK_G_BAND_LUNAR_RETURN: (f64, f64) = (8.5, 12.5);
 
+/// Peak Sutton–Graves heat-flux band for `entry_direct_leo` (#96, MW/m²).
+/// Synthetic direct LEO at FPA = −6° peaks at ~0.80 MW/m²; ~25 % headroom.
+const PEAK_HEAT_BAND_DIRECT_LEO: (f64, f64) = (0.5, 1.2);
+
+/// Peak Sutton–Graves heat-flux band for `entry_lunar_return` (#96, MW/m²).
+/// Lunar return at FPA = −6.48° peaks at ~1.88 MW/m² — well below Apollo
+/// 8 actual (~4.77 MW/m²) because the simulator's peak heating occurs at
+/// higher altitude / lower density than the historical trajectory.
+const PEAK_HEAT_BAND_LUNAR_RETURN: (f64, f64) = (1.3, 2.5);
+
 /// `entry_direct_leo` — direct entry from a 200 km LEO trajectory.
 #[test]
 fn entry_direct_leo() {
@@ -69,6 +79,7 @@ fn entry_direct_leo() {
         state,
         MISS_DISTANCE_DIRECT_LEO_KM,
         PEAK_G_BAND_DIRECT_LEO,
+        PEAK_HEAT_BAND_DIRECT_LEO,
     );
 }
 
@@ -82,16 +93,18 @@ fn entry_lunar_return() {
         state,
         MISS_DISTANCE_LUNAR_RETURN_KM,
         PEAK_G_BAND_LUNAR_RETURN,
+        PEAK_HEAT_BAND_LUNAR_RETURN,
     );
 }
 
 /// Run one complete entry scenario through the AGC + integrator and
-/// assert the miss-distance and peak-g acceptance criteria.
+/// assert the miss-distance, peak-g, and peak-heating acceptance criteria.
 fn run_entry_scenario(
     name: &str,
     state: AgcState,
     miss_threshold_km: f64,
     peak_g_band: (f64, f64),
+    peak_heat_band: (f64, f64),
 ) {
     let r = simulate_to_drogue(state);
 
@@ -140,6 +153,20 @@ fn run_entry_scenario(
         (min_g..=max_g).contains(&r.max_sensed_g),
         "[{name}] peak sensed g = {:.2} outside [{min_g:.2}, {max_g:.2}] g",
         r.max_sensed_g,
+    );
+
+    // #96: peak Sutton–Graves stagnation-point heat flux. Pairs with the
+    // peak-g check above to constrain the trajectory's thermal shape.
+    let (min_q, max_q) = peak_heat_band;
+    eprintln!(
+        "[{name}] peak q̇ = {:.2} MW/m² (band [{min_q:.2}, {max_q:.2}])",
+        r.max_heating_rate_mw_m2,
+    );
+    assert!(
+        (min_q..=max_q).contains(&r.max_heating_rate_mw_m2),
+        "[{name}] peak Sutton–Graves heat flux = {:.2} MW/m² outside \
+         [{min_q:.2}, {max_q:.2}] MW/m²",
+        r.max_heating_rate_mw_m2,
     );
 }
 
@@ -219,20 +246,21 @@ fn render_footprint_markdown(rows: &[(&str, f64, ScenarioResult)]) -> String {
         };
         s.push_str(&format!("## {title}\n\n"));
         s.push_str(
-            "| FPA (°) | Drogue at | Drogue? | Miss (km) | Min alt (km) | Peak g | Final phase |\n",
+            "| FPA (°) | Drogue at | Drogue? | Miss (km) | Min alt (km) | Peak g | Peak q̇ (MW/m²) | Final phase |\n",
         );
-        s.push_str("|---|---|---|---|---|---|---|\n");
+        s.push_str("|---|---|---|---|---|---|---|---|\n");
 
         for (name, fpa, r) in rows.iter().filter(|(n, _, _)| *n == scenario) {
             let drogue_marker = if r.drogue_deployed { "✓" } else { "—" };
             s.push_str(&format!(
-                "| {:>+6.2} | {:>6.1} s | {} | {:>7.1} | {:>7.1} | {:>5.2} | {:?} |\n",
+                "| {:>+6.2} | {:>6.1} s | {} | {:>7.1} | {:>7.1} | {:>5.2} | {:>5.2} | {:?} |\n",
                 fpa,
                 r.elapsed_s,
                 drogue_marker,
                 r.miss_km,
                 r.min_altitude_km,
                 r.max_sensed_g,
+                r.max_heating_rate_mw_m2,
                 r.final_phase,
             ));
             // Silence the unused-binding warning when sweep grows.
