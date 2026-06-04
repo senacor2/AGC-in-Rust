@@ -569,6 +569,44 @@ fn draw_propulsion_panel<W: Write>(
 
 // ── Status line ──────────────────────────────────────────────────────────────
 
+/// Marker prefix `dsky_sim.rs::main` sets on `status` while the user is
+/// typing a script filename after pressing `@`. `draw_status` detects this
+/// prefix and switches to the wide-prompt layout (#59).
+const PROMPT_PREFIX: &str = "Script file: ";
+
+/// Width of the status row in characters. Matches the propulsion panel
+/// above it (`draw_propulsion_panel` spans 65 cols).
+const PROMPT_LINE_WIDTH: usize = 65;
+
+/// Characters of the buffer that fit on the first line, after the
+/// `"  Script file: "` label (2 leading spaces + 13-char prefix).
+const PROMPT_LINE_1_CONTENT: usize = PROMPT_LINE_WIDTH - PROMPT_PREFIX.len() - 2;
+
+/// Continuation marker on the second line when the buffer overflows line 1.
+const PROMPT_LINE_2_LABEL: &str = "  ↳ ";
+
+/// Characters of the buffer that fit on the second line.
+/// `PROMPT_LINE_2_LABEL` is "  ↳ " — 4 display columns in a monospace
+/// terminal (2 spaces + arrow + 1 space).
+const PROMPT_LINE_2_CONTENT: usize = PROMPT_LINE_WIDTH - 4;
+
+/// Split the user's typed filename buffer into two lines for the
+/// wide-prompt layout. Line 1 fits up to [`PROMPT_LINE_1_CONTENT`]
+/// characters; any overflow goes to line 2, itself truncated at
+/// [`PROMPT_LINE_2_CONTENT`].
+fn split_prompt_buffer(buf: &str) -> (String, String) {
+    if buf.len() <= PROMPT_LINE_1_CONTENT {
+        return (buf.to_string(), String::new());
+    }
+    let (a, rest) = buf.split_at(PROMPT_LINE_1_CONTENT);
+    let b = if rest.len() > PROMPT_LINE_2_CONTENT {
+        &rest[..PROMPT_LINE_2_CONTENT]
+    } else {
+        rest
+    };
+    (a.to_string(), b.to_string())
+}
+
 fn draw_status<W: Write>(
     out: &mut W,
     ox: u16,
@@ -576,6 +614,50 @@ fn draw_status<W: Write>(
     met_cs: u64,
     status: &str,
 ) -> io::Result<()> {
+    // While the user is typing a script filename (the `@`-prompt in
+    // dsky_sim.rs sets `status = "Script file: <buf>"`), we drop the MET
+    // prefix and repurpose the keys-hint line for the input field. The
+    // status row's natural width spans the propulsion panel (65 cols), so
+    // we can show ~50 chars on line 1 and wrap the rest onto line 2,
+    // accommodating filenames up to ~110 chars before another truncation
+    // would kick in (#59).
+    if let Some(buf) = status.strip_prefix(PROMPT_PREFIX) {
+        let (line_1, line_2) = split_prompt_buffer(buf);
+
+        queue!(out, SetForegroundColor(ACCENT))?;
+        queue!(out, MoveTo(ox, oy), Print(format!("  {}", PROMPT_PREFIX)))?;
+        queue!(out, SetForegroundColor(DIM))?;
+
+        // Line 1: prompt + first chunk + cursor (when there's no wrap),
+        // padded to clear stale text.
+        let cursor = if line_2.is_empty() { "_" } else { "" };
+        let l1 = format!("{}{}", line_1, cursor);
+        let l1_padded = format!("{:<width$}", l1, width = PROMPT_LINE_1_CONTENT);
+        queue!(out, Print(l1_padded))?;
+
+        // Line 2: continuation if the buffer overflowed line 1, otherwise
+        // the ENTER/ESC hint.
+        queue!(out, MoveTo(ox, oy + 1))?;
+        if line_2.is_empty() {
+            queue!(
+                out,
+                Print(format!(
+                    "{:<width$}",
+                    "  [ENTER=load  ESC=cancel]",
+                    width = PROMPT_LINE_WIDTH
+                ))
+            )?;
+        } else {
+            queue!(out, SetForegroundColor(ACCENT))?;
+            queue!(out, Print(PROMPT_LINE_2_LABEL))?;
+            queue!(out, SetForegroundColor(DIM))?;
+            let l2_padded =
+                format!("{:<width$}_", line_2, width = PROMPT_LINE_2_CONTENT - 1);
+            queue!(out, Print(l2_padded))?;
+        }
+        return Ok(());
+    }
+
     let total_s = met_cs / 100;
     let h = total_s / 3600;
     let m = (total_s % 3600) / 60;
@@ -686,5 +768,47 @@ mod tests {
     fn key_from_code_ignores_unbound() {
         assert_eq!(key_from_code(KeyCode::Char('x')), None);
         assert_eq!(key_from_code(KeyCode::Tab), None);
+    }
+
+    /// TC-#59-1: short filename fits on line 1, line 2 empty.
+    #[test]
+    fn split_prompt_buffer_short_fits_line_1() {
+        let (l1, l2) = split_prompt_buffer("scripts/v71.dsky");
+        assert_eq!(l1, "scripts/v71.dsky");
+        assert!(l2.is_empty());
+    }
+
+    /// TC-#59-2: filename at the line-1 capacity still fits with no wrap.
+    #[test]
+    fn split_prompt_buffer_at_line_1_capacity_no_wrap() {
+        let s: String = "a".repeat(PROMPT_LINE_1_CONTENT);
+        let (l1, l2) = split_prompt_buffer(&s);
+        assert_eq!(l1.len(), PROMPT_LINE_1_CONTENT);
+        assert!(l2.is_empty());
+    }
+
+    /// TC-#59-3: filename one longer than line-1 wraps; the leftover goes
+    /// onto line 2.
+    #[test]
+    fn split_prompt_buffer_overflows_to_line_2() {
+        let mut s = "a".repeat(PROMPT_LINE_1_CONTENT);
+        s.push('B');
+        let (l1, l2) = split_prompt_buffer(&s);
+        assert_eq!(l1.len(), PROMPT_LINE_1_CONTENT);
+        assert_eq!(l2, "B");
+    }
+
+    /// TC-#59-4: the user's reported case (`scripts/v71_reseed_sample.dsky`,
+    /// 30 chars) renders fully on line 1 with the new layout.
+    #[test]
+    fn split_prompt_buffer_reported_case_visible() {
+        let (l1, l2) = split_prompt_buffer("scripts/v71_reseed_sample.dsky");
+        assert_eq!(l1, "scripts/v71_reseed_sample.dsky");
+        assert!(l2.is_empty());
+        assert!(
+            l1.len() < PROMPT_LINE_1_CONTENT,
+            "user's example must fit on line 1; len={}, cap={PROMPT_LINE_1_CONTENT}",
+            l1.len()
+        );
     }
 }
