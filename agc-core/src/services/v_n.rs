@@ -1178,9 +1178,11 @@ fn v37_program_select(state: &mut crate::AgcState, noun: u8) {
 /// Spans the full uplink-reachable address space documented in
 /// `specs/uplink-plan.md` §5: CSM state (1–6), target state (7–12),
 /// `gha_epoch_rad` (13), REFSMMAT 3×3 row-major (14–22), gyro
-/// compensation (23–25), PIPA calibration (26–29), and an additive
-/// MET correction slot (30).
-const P27_MAX_ADDRESS: u8 = 30;
+/// compensation (23–25), PIPA calibration (26–29), additive MET
+/// correction (30), and CSM gravity-body selector (31). The selector
+/// was added with #61 to let uplink scripts seed a lunar-orbit state
+/// vector for the TEI demo.
+const P27_MAX_ADDRESS: u8 = 31;
 
 /// Major mode number for P27 (Update Liaison). The real CMC entered
 /// P27 implicitly when V70/V71/V72/V73 fired; we mirror that behaviour
@@ -1294,6 +1296,19 @@ fn p27_apply_word(state: &mut crate::AgcState, address: u8, value: i64) -> bool 
         30 => {
             state.time = Met(state.time.0.wrapping_add(value as u32));
         }
+        // Gravity-body / frame selector for the CSM state vector.
+        //   1 → `Frame::EarthInertial`
+        //   2 → `Frame::MoonInertial`
+        // Any other value raises OPR ERR (returned `false`). This lets a
+        // V71 uplink script seed a lunar-orbit state vector after the
+        // position / velocity words (which always reset frame to ECI),
+        // enabling demos like `docs/tei_burn_demo.md` where the SERVICER
+        // must propagate gravity around the Moon, not Earth.
+        31 => match value {
+            1 => state.csm_state.frame = Frame::EarthInertial,
+            2 => state.csm_state.frame = Frame::MoonInertial,
+            _ => return false,
+        },
         _ => return false,
     }
     true
@@ -2070,12 +2085,13 @@ mod tests {
     }
 
     /// TC-V71-5: Address > P27_MAX_ADDRESS is rejected. (MS-U3 raised
-    /// the limit from 6 to 30; this test rejects the new boundary + 1.)
+    /// the limit from 6 to 30; #61 raised it again to 31 for the gravity-
+    /// body selector. This test rejects the new boundary + 1.)
     #[test]
     fn tc_v71_5_address_out_of_range() {
         let mut state = AgcState::new();
         feed(&mut state, &[Key::Verb, d(7), d(1), Key::Entr]);
-        feed_number(&mut state, 31); // P27_MAX_ADDRESS = 30
+        feed_number(&mut state, 32); // P27_MAX_ADDRESS = 31
         feed_key(&mut state, Key::Entr);
 
         assert!(state.dsky.opr_err);
@@ -2087,9 +2103,9 @@ mod tests {
     fn tc_v71_6_address_count_overflow() {
         let mut state = AgcState::new();
         feed(&mut state, &[Key::Verb, d(7), d(1), Key::Entr]);
-        feed_number(&mut state, 29); // start near the top of the space
+        feed_number(&mut state, 30); // start near the top of the space
         feed_key(&mut state, Key::Entr);
-        feed_number(&mut state, 3); // 29 + 3 = 32 > 31 → reject
+        feed_number(&mut state, 3); // 30 + 3 = 33 > 32 → reject
         feed_key(&mut state, Key::Entr);
 
         assert!(state.dsky.opr_err);
@@ -3061,12 +3077,43 @@ mod tests {
     #[test]
     fn tc_vnd_u3_7_address_out_of_range_opr_err() {
         let mut state = AgcState::new();
-        // V71 ENTR 31 ENTR — address 31 > P27_MAX_ADDRESS.
+        // V71 ENTR 32 ENTR — address 32 > P27_MAX_ADDRESS (= 31 since #61).
         feed(&mut state, &[Key::Verb, d(7), d(1), Key::Entr]);
-        feed_number(&mut state, 31);
+        feed_number(&mut state, 32);
         feed_key(&mut state, Key::Entr);
         assert!(state.dsky.opr_err);
         assert_eq!(state.vn.phase, VnPhase::OprErr);
+    }
+
+    /// TC-VND-U3-8 (#61): V71 to address 31 with value 2 switches the
+    /// CSM state frame to MoonInertial; value 1 switches back to
+    /// EarthInertial. Anything else raises OPR ERR.
+    #[test]
+    fn tc_vnd_u3_8_frame_selector() {
+        use crate::navigation::state_vector::Frame;
+
+        let mut state = AgcState::new();
+        assert_eq!(state.csm_state.frame, Frame::EarthInertial);
+
+        // Switch to MoonInertial via V71 31 1 +2.
+        run_v71_block(&mut state, 31, &[2]);
+        assert_eq!(state.csm_state.frame, Frame::MoonInertial);
+
+        // Switch back to EarthInertial via V71 31 1 +1.
+        run_v71_block(&mut state, 31, &[1]);
+        assert_eq!(state.csm_state.frame, Frame::EarthInertial);
+
+        // Invalid value raises OPR ERR.
+        let mut state = AgcState::new();
+        feed(&mut state, &[Key::Verb, d(7), d(1), Key::Entr]);
+        feed_number(&mut state, 31);
+        feed_key(&mut state, Key::Entr);
+        feed_number(&mut state, 1);
+        feed_key(&mut state, Key::Entr);
+        feed_key(&mut state, Key::Plus);
+        feed_number(&mut state, 5); // invalid (not 1 or 2)
+        feed_key(&mut state, Key::Entr);
+        assert!(state.dsky.opr_err);
     }
 
     // ── MS-U4 — V72 single-address update ──────────────────────────────────
@@ -3108,7 +3155,7 @@ mod tests {
     fn tc_vnd_u4_2_v72_bad_address_opr_err() {
         let mut state = AgcState::new();
         feed(&mut state, &[Key::Verb, d(7), d(2), Key::Entr]);
-        feed_number(&mut state, 31); // > P27_MAX_ADDRESS
+        feed_number(&mut state, 32); // > P27_MAX_ADDRESS (31 since #61)
         feed_key(&mut state, Key::Entr);
         assert!(state.dsky.opr_err);
         assert_eq!(state.vn.phase, VnPhase::OprErr);

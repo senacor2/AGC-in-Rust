@@ -317,4 +317,55 @@ mod tests {
             state_ref.csm_state.position[0]
         );
     }
+
+    /// TC-SU-6 (#61): the TEI-demo prep script in
+    /// `agc-sim/scripts/tei_demo.dsky` parses without error and, when
+    /// pushed through `poll_uplink`, lands the CSM in lunar parking
+    /// orbit (~1848 km MCI, prograde 1629 m/s) with frame switched
+    /// to `MoonInertial`.
+    #[test]
+    fn tc_su_6_tei_demo_script_seeds_lunar_orbit() {
+        use agc_core::navigation::state_vector::Frame;
+
+        let script = include_str!("../scripts/tei_demo.dsky");
+        let mut state = AgcState::new();
+        let mut uplink = ScriptedUplink::new();
+        uplink
+            .load_script(script)
+            .expect("tei_demo.dsky must parse");
+        // Drain the uplink to completion — `poll_uplink` consumes one
+        // pending key per call.
+        for _ in 0..200 {
+            poll_uplink(&mut state, &mut uplink);
+        }
+
+        // Position: [+1 848 000 m, 0, 0].
+        assert!(
+            (state.csm_state.position[0] - 1_848_000.0).abs() < 1.0,
+            "expected pos[0] = 1 848 000 m, got {}",
+            state.csm_state.position[0]
+        );
+        assert!(state.csm_state.position[1].abs() < 1.0);
+        assert!(state.csm_state.position[2].abs() < 1.0);
+        // Velocity: [0, +1629, 0].
+        assert!(state.csm_state.velocity[0].abs() < 1.0e-6);
+        assert!(
+            (state.csm_state.velocity[1] - 1629.0).abs() < 1.0e-6,
+            "expected vel[1] = 1629 m/s, got {}",
+            state.csm_state.velocity[1]
+        );
+        assert!(state.csm_state.velocity[2].abs() < 1.0e-6);
+        // Frame switched to MoonInertial by the second V71 block.
+        assert_eq!(
+            state.csm_state.frame,
+            Frame::MoonInertial,
+            "tei_demo.dsky must end with state.csm_state.frame = MoonInertial",
+        );
+        // No OPR ERR raised during the load.
+        assert!(
+            !state.dsky.opr_err,
+            "tei_demo.dsky must not raise OPR ERR; vn.phase = {:?}",
+            state.vn.phase,
+        );
+    }
 }
