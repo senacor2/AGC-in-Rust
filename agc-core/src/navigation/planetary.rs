@@ -243,8 +243,42 @@ pub fn met_to_jd(t: Met) -> f64 {
 /// (1 year × 50.3 arcsec/yr × 384,400 km). This is acceptable for our accuracy
 /// target and the simplification is documented in the module header.
 pub fn moon_position(t: Met) -> Vec3 {
-    let jd = met_to_jd(t);
+    moon_position_at_jd(met_to_jd(t))
+}
 
+/// Moon inertial velocity in the AGC Mean of 1969.5 equatorial frame.
+///
+/// Returned components are in **metres per second** (ECI x, y, z).
+///
+/// Implemented as a central-difference of [`moon_position`] with a 1 second
+/// step. With the lunar jerk bounded by `v·ω² ≈ 10⁻⁸ m/s³`, the truncation
+/// error `(h²/6)·jerk` is on the order of nanometres per second, and `f64`
+/// round-off in differencing positions of magnitude `~4·10⁸ m` contributes
+/// at most ~10⁻⁷ m/s — both well inside the 1 m/s tolerance this function
+/// advertises against any reasonable finite-difference of `moon_position`.
+///
+/// Working in Julian-Day space (rather than `Met`) lets us evaluate at
+/// `epoch − 1 s` even when `epoch == Met(0)`, which the `u32`-backed
+/// `Met::from_seconds` cannot represent.
+pub fn moon_velocity(epoch: Met) -> Vec3 {
+    const H_SECONDS: f64 = 1.0;
+    const H_DAYS: f64 = H_SECONDS / 86_400.0;
+    let jd = met_to_jd(epoch);
+    let before = moon_position_at_jd(jd - H_DAYS);
+    let after = moon_position_at_jd(jd + H_DAYS);
+    [
+        (after[0] - before[0]) / (2.0 * H_SECONDS),
+        (after[1] - before[1]) / (2.0 * H_SECONDS),
+        (after[2] - before[2]) / (2.0 * H_SECONDS),
+    ]
+}
+
+/// Inner Meeus Chapter 47 series evaluator, parameterised on Julian Day.
+///
+/// Factored out of [`moon_position`] so [`moon_velocity`] can sample at
+/// `JD ± Δ` without round-tripping through `Met` (which is `u32` and so
+/// cannot represent times before MET = 0).
+fn moon_position_at_jd(jd: f64) -> Vec3 {
     // Julian centuries from J2000.0 (Meeus eq. 22.1).
     let t_c = (jd - 2_451_545.0) / 36_525.0;
     let t2 = t_c * t_c;
@@ -557,6 +591,72 @@ mod tests {
             (1_000.0..=10_000.0).contains(&disp_km),
             "1-hour displacement = {disp_km:.1} km, expected [1000, 10000] km"
         );
+    }
+
+    /// TC-MOON-9: `moon_velocity` agrees with an independent central-difference
+    /// of `moon_position` to within 1 m/s at several mission-window epochs.
+    ///
+    /// The reference uses h = 60 s (a much coarser step than the implementation's
+    /// 1 s), so this test exercises the consistency of the velocity wrapper
+    /// against a finite-difference computed by an outside caller. Lunar jerk
+    /// is small enough that both step sizes give the same answer to far better
+    /// than 1 m/s.
+    #[test]
+    fn tc_moon_9_velocity_matches_central_diff() {
+        // Reference central difference with h = 60 s.
+        fn ref_velocity(epoch: Met, h_s: f64) -> Vec3 {
+            let t = epoch.to_seconds();
+            let before = moon_position(Met::from_seconds(t - h_s));
+            let after = moon_position(Met::from_seconds(t + h_s));
+            [
+                (after[0] - before[0]) / (2.0 * h_s),
+                (after[1] - before[1]) / (2.0 * h_s),
+                (after[2] - before[2]) / (2.0 * h_s),
+            ]
+        }
+
+        // Skip MET=0: the u32-backed `Met` cannot represent t < 0, so a
+        // reference central difference there would degenerate to a forward
+        // difference. The implementation itself works at MET=0 (it uses JD
+        // space); this test only checks epochs where the reference is well
+        // defined.
+        let days = [1.0_f64, 4.0, 8.0, 15.0];
+        for day in days {
+            let epoch = Met::from_seconds(day * 86_400.0);
+            let v_impl = moon_velocity(epoch);
+            let v_ref = ref_velocity(epoch, 60.0);
+            for axis in 0..3 {
+                let diff = libm::fabs(v_impl[axis] - v_ref[axis]);
+                assert!(
+                    diff < 1.0,
+                    "TC-MOON-9 at t={day} d, axis={axis}: \
+                     v_impl={:.6} m/s, v_ref={:.6} m/s, diff={diff:.6} m/s",
+                    v_impl[axis],
+                    v_ref[axis]
+                );
+            }
+        }
+    }
+
+    /// TC-MOON-10: `moon_velocity` magnitude lies in the physically plausible
+    /// lunar orbital-speed band [0.9, 1.1] km/s at multiple epochs.
+    ///
+    /// The Moon's mean orbital speed is ~1.022 km/s; eccentricity and
+    /// perturbations give it a roughly ±100 m/s spread. Anything outside
+    /// this band points to a unit, sign, or frame bug in the implementation.
+    #[test]
+    fn tc_moon_10_velocity_magnitude_in_range() {
+        let days = [0.0_f64, 1.0, 4.0, 8.0, 15.0];
+        for day in days {
+            let epoch = Met::from_seconds(day * 86_400.0);
+            let v = moon_velocity(epoch);
+            let speed = libm::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+            assert!(
+                (900.0..=1_100.0).contains(&speed),
+                "TC-MOON-10 at t={day} d: |v_moon| = {speed:.1} m/s, \
+                 expected [900, 1100] m/s"
+            );
+        }
     }
 
     /// TC-MOON-8: Over one sidereal lunar period (≈27.3 days), the Moon returns
