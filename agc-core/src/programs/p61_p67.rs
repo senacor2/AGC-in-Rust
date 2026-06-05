@@ -264,6 +264,11 @@ pub fn init_p62(state: &mut crate::AgcState) -> JobPriority {
     dap_stop(state);
     state.dap_state.mode = DapMode::AttitudeHold;
 
+    // Stage the SECS CM/SM separation pyro discrete. Edge-triggered: the
+    // foreground scheduler's `process_secs_staging` will consume the flag
+    // on the next cycle and call `hw.secs().fire_csm_separation()`.
+    state.csm_separation_pending = true;
+
     set_display(state, P62_MAJOR_MODE, VERB_DISPLAY, 62);
     state.dsky.r[0] = 0.0;
     state.dsky.r[1] = 0.0;
@@ -543,6 +548,11 @@ mod tests {
             mode: TargetingMode::ExternalDeltaV,
         });
 
+        assert!(
+            !state.csm_separation_pending,
+            "fixture: SECS staging flag must start clear"
+        );
+
         init_p62(&mut state);
 
         assert_eq!(state.entry.phase, EntryPhase::Separation);
@@ -550,6 +560,10 @@ mod tests {
         assert_eq!(state.alarm.code, 0);
         assert!(state.pending_maneuver.is_none(), "stale ΔV must be cleared");
         assert_eq!(state.dap_state.mode, DapMode::AttitudeHold);
+        assert!(
+            state.csm_separation_pending,
+            "init_p62 must stage the SECS CM/SM separation pyro discrete"
+        );
     }
 
     /// TC-P62-2: `init_p62` from Idle raises alarm 231 but still advances.

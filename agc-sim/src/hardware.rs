@@ -87,13 +87,16 @@ pub struct SimTelemetry {
 }
 /// Simulated Sequential Events Control System pyro driver.
 ///
-/// `deploy_drogue` sets `drogue_fired = true` and counts calls (idempotent
-/// at the hardware level — but counting lets tests verify the AGC didn't
-/// keep re-issuing the command on subsequent cycles).
+/// Each pyro is modelled as a latched `*_fired` flag plus a call counter.
+/// The pyros are idempotent at the hardware level — counting just lets
+/// tests verify the AGC didn't keep re-issuing the command on subsequent
+/// cycles.
 #[derive(Default)]
 pub struct SimSecs {
     pub drogue_fired: bool,
     pub drogue_fire_count: u32,
+    pub csm_separation_fired: bool,
+    pub csm_separation_fire_count: u32,
 }
 
 // ── Trait implementations ─────────────────────────────────────────────────────
@@ -202,6 +205,10 @@ impl Secs for SimSecs {
     fn deploy_drogue(&mut self) {
         self.drogue_fired = true;
         self.drogue_fire_count = self.drogue_fire_count.saturating_add(1);
+    }
+    fn fire_csm_separation(&mut self) {
+        self.csm_separation_fired = true;
+        self.csm_separation_fire_count = self.csm_separation_fire_count.saturating_add(1);
     }
 }
 
@@ -516,12 +523,30 @@ mod tests {
         assert_eq!(hw.secs.drogue_fire_count, 2);
     }
 
-    /// TC-SECS-02: initial state is no-fire, count zero.
+    /// TC-SECS-02: initial state is no-fire, count zero (both pyros).
     #[test]
     fn tc_secs_02_initial_state() {
         let hw = SimHardware::new();
         assert!(!hw.secs.drogue_fired);
         assert_eq!(hw.secs.drogue_fire_count, 0);
+        assert!(!hw.secs.csm_separation_fired);
+        assert_eq!(hw.secs.csm_separation_fire_count, 0);
+    }
+
+    /// TC-SECS-03: `fire_csm_separation` sets the fired flag and bumps its
+    /// counter, mirroring the drogue path. Independent of `deploy_drogue`.
+    #[test]
+    fn tc_secs_03_fire_csm_separation_counts() {
+        let mut hw = SimHardware::new();
+        hw.secs().fire_csm_separation();
+        assert!(hw.secs.csm_separation_fired);
+        assert_eq!(hw.secs.csm_separation_fire_count, 1);
+        // Drogue must not have moved.
+        assert!(!hw.secs.drogue_fired);
+        assert_eq!(hw.secs.drogue_fire_count, 0);
+        // Re-firing keeps counting (idempotent at hardware level).
+        hw.secs().fire_csm_separation();
+        assert_eq!(hw.secs.csm_separation_fire_count, 2);
     }
 
     // ── Uplink (TC-UPLINK-01 through TC-UPLINK-03) ──────────────────────────

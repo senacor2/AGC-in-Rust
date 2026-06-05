@@ -16,4 +16,11 @@ pub trait Secs {
     /// Latch the drogue-deploy pyro discrete. Idempotent: calling more
     /// than once is a no-op on hardware once the pyros have fired.
     fn deploy_drogue(&mut self);
+
+    /// Latch the CM/SM separation pyro discrete. Fires the umbilical
+    /// guillotines and the spring-loaded pusher that pushes the Service
+    /// Module away from the Command Module at the start of the entry
+    /// sequence (P62). Idempotent: hardware ignores re-fires once the
+    /// pyros have already gone.
+    fn fire_csm_separation(&mut self);
 }

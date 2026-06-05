@@ -164,6 +164,14 @@ pub struct AgcState {
     /// flag `drogue_deployed` stays `true` for life-of-mission.
     pub drogue_deploy_pending: bool,
 
+    /// SECS CM/SM separation pyro discrete staged by `init_p62` for the
+    /// foreground SECS-staging step. Mirrors `drogue_deploy_pending`:
+    /// `init_p62` sets it `true`, the scheduler calls
+    /// `hw.secs().fire_csm_separation()` and resets the flag so the discrete
+    /// stays edge-triggered. There's no life-of-mission echo flag — once the
+    /// SM is gone, every subsequent program can assume it.
+    pub csm_separation_pending: bool,
+
     // ── Crew interface ───────────────────────────────────────────────────────
     pub dsky: DskyState,
 
@@ -318,6 +326,7 @@ impl AgcState {
             sps_gimbal_cmd: (0, 0),
             engine_thrusting: false,
             drogue_deploy_pending: false,
+            csm_separation_pending: false,
             dsky: DskyState {
                 prog: 0,
                 verb: 0,

@@ -270,13 +270,21 @@ fn process_engine_staging<H: AgcHardware>(state: &mut crate::AgcState, hw: &mut 
     }
 }
 
-/// Apply the SECS drogue-deploy discrete staged by `p67_deploy_drogue`.
+/// Apply any pending SECS pyro discretes.
 ///
-/// Edge-triggered: the staging flag is consumed (reset to `false`) once the
-/// HAL call has been made. The drogue pyro is one-shot, so subsequent calls
-/// are inert at the hardware level — but resetting the staging flag keeps
-/// the foreground loop from re-issuing redundant commands on every cycle.
+/// Edge-triggered: each staging flag is consumed (reset to `false`) once the
+/// HAL call has been made. The pyros are one-shot at the hardware level so
+/// re-firing is inert — resetting the staging flags just keeps the foreground
+/// loop from issuing redundant commands on every cycle.
+///
+/// Currently handles:
+/// - `drogue_deploy_pending`  → `Secs::deploy_drogue()`   (staged by P67)
+/// - `csm_separation_pending` → `Secs::fire_csm_separation()` (staged by P62)
 fn process_secs_staging<H: AgcHardware>(state: &mut crate::AgcState, hw: &mut H) {
+    if state.csm_separation_pending {
+        hw.secs().fire_csm_separation();
+        state.csm_separation_pending = false;
+    }
     if state.drogue_deploy_pending {
         hw.secs().deploy_drogue();
         state.drogue_deploy_pending = false;
