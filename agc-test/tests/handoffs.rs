@@ -22,7 +22,7 @@ use agc_core::guidance::targeting::{apply_external_delta_v, TargetingMode};
 use agc_core::math::linalg::{mxv, norm, transpose, unit, vadd, vscale, vsub};
 use agc_core::navigation::gravity::{R_EARTH, R_SOI_MOON};
 use agc_core::navigation::integration::{propagate_coast, soi_check, total_gravity};
-use agc_core::navigation::planetary::moon_position;
+use agc_core::navigation::planetary::{moon_position, moon_velocity};
 use agc_core::navigation::state_vector::Frame;
 use agc_core::navigation::StateVector;
 use agc_core::programs::p23::{Body, StarHorizonMark};
@@ -35,21 +35,6 @@ use agc_sim::SimHardware;
 use agc_sim::{run_scenario, DskyExpect, ScenarioBuilder};
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
-
-/// Central-difference estimate of the Moon's inertial velocity at `epoch`.
-///
-/// Mirrors the `advance_ground_truth` pattern in `agc-sim/src/physics.rs:285-296`.
-/// Eventually superseded by a dedicated `moon_velocity` function (GH #52).
-fn moon_velocity_central_diff(epoch: Met, delta_s: f64) -> Vec3 {
-    let t = epoch.to_seconds();
-    let before = moon_position(Met::from_seconds(t - delta_s));
-    let after = moon_position(Met::from_seconds(t + delta_s));
-    [
-        (after[0] - before[0]) / (2.0 * delta_s),
-        (after[1] - before[1]) / (2.0 * delta_s),
-        (after[2] - before[2]) / (2.0 * delta_s),
-    ]
-}
 
 /// Reference Euler step for a state vector under `total_gravity`. Used by the
 /// SOI tests as the "what would the trajectory be in pure two-body with no
@@ -442,7 +427,7 @@ fn tc_handoff_p23_marks_to_p30_targeting() {
 fn tc_handoff_soi_outbound_eci_to_mci() {
     let epoch = Met::from_seconds(0.0);
     let moon_pos_eci = moon_position(epoch);
-    let moon_vel_eci = moon_velocity_central_diff(epoch, 10.0);
+    let moon_vel_eci = moon_velocity(epoch);
 
     // Spacecraft 1 km outside the SOI on the Earth side of the Moon, moving
     // toward the Moon at 1500 m/s plus the Moon's own velocity.
@@ -480,7 +465,7 @@ fn tc_handoff_soi_outbound_eci_to_mci() {
     let dt = 2.0_f64;
     let propagated_eci_only = propagate_coast(sv_eci, dt, moon_pos_eci);
     let moon_pos_at_end = moon_position(propagated_eci_only.epoch);
-    let moon_vel_at_end = moon_velocity_central_diff(propagated_eci_only.epoch, 10.0);
+    let moon_vel_at_end = moon_velocity(propagated_eci_only.epoch);
     let propagated = soi_check(propagated_eci_only, moon_pos_at_end, moon_vel_at_end);
 
     // Frame must have flipped.
@@ -563,7 +548,7 @@ fn tc_handoff_soi_inbound_mci_to_eci() {
     let dt = 2.0_f64;
     let propagated_mci_only = propagate_coast(sv_mci, dt, moon_pos_eci);
     let moon_pos_at_end = moon_position(propagated_mci_only.epoch);
-    let moon_vel_at_end = moon_velocity_central_diff(propagated_mci_only.epoch, 10.0);
+    let moon_vel_at_end = moon_velocity(propagated_mci_only.epoch);
     let propagated = soi_check(propagated_mci_only, moon_pos_at_end, moon_vel_at_end);
 
     assert_eq!(

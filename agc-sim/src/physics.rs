@@ -52,10 +52,10 @@ const SUTTON_GRAVES_K: f64 = 1.7415e-4;
 /// `agc_test::entry_sim::APOLLO_CM_NOSE_RADIUS_M` (4.69 m).
 const APOLLO_CM_NOSE_RADIUS_M: f64 = 4.69;
 use agc_core::navigation::integration::{propagate_coast, soi_check};
-use agc_core::navigation::planetary::moon_position;
+use agc_core::navigation::planetary::{moon_position, moon_velocity};
 use agc_core::navigation::state_vector::Frame;
 use agc_core::navigation::StateVector;
-use agc_core::types::{Met, Vec3};
+use agc_core::types::Vec3;
 use agc_core::AgcState;
 
 /// Simulator truth attitude state for a spacecraft.
@@ -567,8 +567,6 @@ pub fn advance_ground_truth(sc: &mut Spacecraft, state: &mut StateVector, dt: f6
         return;
     }
 
-    let epoch_s = state.epoch.to_seconds();
-
     // Compute Moon position at the current epoch for the propagator.
     let moon_pos = moon_position(state.epoch);
 
@@ -592,18 +590,8 @@ pub fn advance_ground_truth(sc: &mut Spacecraft, state: &mut StateVector, dt: f6
     // self-consistent.
 
     // Compute Moon position and velocity at the new epoch for SOI check.
-    // Moon velocity is computed via central difference since moon_velocity
-    // does not yet exist in agc-core.
-    // TODO: replace with moon_velocity from #52 once it is implemented.
-    let delta_s = 10.0_f64;
     let moon_pos_new = moon_position(state.epoch);
-    let moon_pos_before = moon_position(Met::from_seconds((epoch_s + dt) - delta_s));
-    let moon_pos_after = moon_position(Met::from_seconds((epoch_s + dt) + delta_s));
-    let moon_vel = [
-        (moon_pos_after[0] - moon_pos_before[0]) / (2.0 * delta_s),
-        (moon_pos_after[1] - moon_pos_before[1]) / (2.0 * delta_s),
-        (moon_pos_after[2] - moon_pos_before[2]) / (2.0 * delta_s),
-    ];
+    let moon_vel = moon_velocity(state.epoch);
 
     // Run SOI check — may convert ECI ↔ MCI and update the frame.
     let checked = soi_check(*state, moon_pos_new, moon_vel);
@@ -625,6 +613,7 @@ pub fn advance_ground_truth(sc: &mut Spacecraft, state: &mut StateVector, dt: f6
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agc_core::types::Met;
 
     /// TC-PHYS-1: engine off ⇒ no Δv, no pulses.
     #[test]
