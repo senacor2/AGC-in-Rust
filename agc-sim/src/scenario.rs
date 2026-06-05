@@ -1187,6 +1187,7 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
                     &ctx.spacecraft.attitude,
                     &refsmmat,
                     state.gha_epoch_rad,
+                    state.time,
                 );
                 // Rotate los_platform back to inertial: REFSMMAT^T · los_platform.
                 // landmark_los_in_platform returns the sensor convention
@@ -1202,6 +1203,8 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
                 ];
 
                 // Compute landmark inertial position for the mark struct.
+                // The Moon branch goes through the shared `lunar_landmark_inertial_at`
+                // so the libration rotation matches the LOS path bit-for-bit (#56).
                 let lm_inertial: Vec3 = match table {
                     LandmarkTable::Earth => {
                         let entry = &LANDMARK_TABLE[index as usize];
@@ -1210,12 +1213,9 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
                     LandmarkTable::Moon => {
                         let entry =
                             &agc_core::navigation::landmarks::LUNAR_LANDMARK_TABLE[index as usize];
-                        let r = agc_core::navigation::landmarks::R_MOON_M + entry.alt_m;
-                        let cos_lat = entry.lat_rad.cos();
-                        let sin_lat = entry.lat_rad.sin();
-                        let cos_lon = entry.lon_rad.cos();
-                        let sin_lon = entry.lon_rad.sin();
-                        [r * cos_lat * cos_lon, r * cos_lat * sin_lon, r * sin_lat]
+                        agc_core::navigation::landmarks::lunar_landmark_inertial_at(
+                            entry, state.time,
+                        )
                     }
                 };
 

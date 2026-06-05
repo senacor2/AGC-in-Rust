@@ -4,6 +4,7 @@ pub mod gravity;
 pub mod integration;
 pub mod kalman;
 pub mod landmarks;
+pub mod lunar_libration;
 pub mod planetary;
 pub mod star_catalog;
 pub mod state_vector;
