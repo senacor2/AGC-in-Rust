@@ -25,7 +25,8 @@
 use crate::executive::restart::Phase;
 use crate::executive::{ScheduleResult, GROUP_2};
 use crate::math::linalg::mxv;
-use crate::navigation::integration::average_g_step;
+use crate::navigation::integration::{average_g_step, soi_check};
+use crate::navigation::planetary::{moon_position, moon_velocity};
 use crate::tables::alarm_codes::WAITLIST_OVERFLOW;
 use crate::types::Vec3;
 use crate::AgcState;
@@ -217,13 +218,10 @@ pub fn servicer_task(state: &mut AgcState) {
     // Step 6 — rotate to inertial frame via REFSMMAT.
     let delta_v_inertial: Vec3 = mxv(state.refsmmat, delta_v_platform);
 
-    // Step 7 — integrate the state vector.
-    // Moon position: use a simplified placeholder until navigation::planetary is
-    // implemented. The value [3.844e8, 0, 0] places the Moon at its mean distance
-    // on the X axis; the third-body perturbation is small at LEO/LLO so the
-    // approximation is adequate for initial validation.
-    // TODO: replace with navigation::planetary::moon_position(state.csm_state.epoch)
-    let moon_pos: Vec3 = [3.844e8, 0.0, 0.0];
+    // Step 7 — integrate the state vector under the gravity model evaluated
+    // with the real Meeus ephemeris (in the inertial frame matching
+    // `state.csm_state.frame`).
+    let moon_pos = moon_position(state.csm_state.epoch);
 
     let new_sv = average_g_step(state.csm_state, delta_v_inertial, 2.0, moon_pos);
 
@@ -232,6 +230,15 @@ pub fn servicer_task(state: &mut AgcState) {
     state.csm_state = new_sv;
     state.time = new_sv.epoch;
     state.restart.set_phase(GROUP_2, Phase(1)); // cycle complete
+
+    // Step 8b — sphere-of-influence boundary check (#51). Without this, the
+    // AGC's onboard frame stays `EarthInertial` through the lunar approach
+    // and back, which would break Lambert targeting at LOI and TEI handover.
+    // Ephemeris is re-evaluated at the post-integration epoch so the SOI
+    // geometry matches the just-integrated state.
+    let moon_pos_post = moon_position(state.csm_state.epoch);
+    let moon_vel_post = moon_velocity(state.csm_state.epoch);
+    state.csm_state = soi_check(state.csm_state, moon_pos_post, moon_vel_post);
 
     // Stage the delta-V this cycle for burn_servicer_exit (P40/P41 hook).
     state.servicer_last_dv_inertial = delta_v_inertial;
@@ -431,8 +438,8 @@ mod tests {
         start_servicer(&mut state);
         servicer_task(&mut state);
 
-        // With zero PIPA and moon_pos=[0,0,0] placeholder the integration is
-        // pure gravity. Verify the velocity is approximately g_x * dt.
+        // With zero PIPA the integration is pure gravity. Verify the velocity
+        // is approximately g_x * dt.
         let g0 = earth_gravity([r0, 0.0, 0.0]);
         // After 2s, velocity ≈ g0 * dt (trapezoidal, but g barely changes)
         let expected_vx = g0[0] * 2.0;
@@ -442,17 +449,19 @@ mod tests {
             0.1,
             "TC-AG-4: free-fall velocity[0]",
         );
-        // Y and Z should remain near zero.
+        // Y and Z should stay tiny — only the off-axis component of the
+        // third-body perturbation (~6·10⁻⁷ m/s² at lunar distance) deflects
+        // them, contributing at most ~10⁻⁶ m/s over the 2 s SERVICER cycle.
         assert_near(
             state.csm_state.velocity[1],
             0.0,
-            1e-6,
+            1e-5,
             "TC-AG-4: velocity[1]",
         );
         assert_near(
             state.csm_state.velocity[2],
             0.0,
-            1e-6,
+            1e-5,
             "TC-AG-4: velocity[2]",
         );
     }
@@ -588,5 +597,97 @@ mod tests {
             "alarm code must be 1211 (WAITLIST_OVERFLOW)"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");
+    }
+
+    // ── TC-AG-SOI: SERVICER flips csm_state.frame at the Moon SOI boundary ───
+
+    /// TC-AG-SOI (#51): One coast spanning the Moon's sphere of influence
+    /// flips `csm_state.frame` from `EarthInertial` to `MoonInertial` and
+    /// back, driven by the SERVICER alone (no `propagate_coast` call).
+    ///
+    /// Geometry: the spacecraft starts 100 m inside the SOI on the +X side
+    /// of the Moon and drifts outbound at 40 m/s relative to the Moon. The
+    /// two-cycle layout is chosen so the SOI test fires on each of two
+    /// successive `servicer_task` calls:
+    ///
+    /// - Cycle 1 ends 20 m inside the SOI in ECI → flips to MCI.
+    /// - Cycle 2 ends 60 m outside the SOI in MCI → flips back to ECI.
+    ///
+    /// Gravitational perturbations over the 2 s step are at most ~5 mm
+    /// in position and ~3 mm/s in velocity — three orders of magnitude
+    /// below the 20–60 m boundary margins, so the geometric reasoning
+    /// holds without re-tuning if the Meeus ephemeris is refined.
+    #[test]
+    fn tc_ag_soi_servicer_flips_frame_across_moon_sphere() {
+        use crate::navigation::gravity::R_SOI_MOON;
+
+        let mut state = AgcState::new();
+        state.pipa_cal = PipaCalibration::NOMINAL;
+        state.refsmmat = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        state.pipa_counts = [0, 0, 0]; // pure coast
+
+        let moon_p0 = moon_position(Met(0));
+        let moon_v0 = moon_velocity(Met(0));
+        let d: Vec3 = [1.0, 0.0, 0.0]; // outbound axis (any unit vector works)
+        const INITIAL_DEPTH_M: f64 = 100.0; // start 100 m inside the SOI
+        const V_OUT_M_S: f64 = 40.0; // outbound speed relative to the Moon
+
+        state.csm_state = StateVector {
+            position: [
+                moon_p0[0] + d[0] * (R_SOI_MOON - INITIAL_DEPTH_M),
+                moon_p0[1] + d[1] * (R_SOI_MOON - INITIAL_DEPTH_M),
+                moon_p0[2] + d[2] * (R_SOI_MOON - INITIAL_DEPTH_M),
+            ],
+            velocity: [
+                moon_v0[0] + d[0] * V_OUT_M_S,
+                moon_v0[1] + d[1] * V_OUT_M_S,
+                moon_v0[2] + d[2] * V_OUT_M_S,
+            ],
+            epoch: Met(0),
+            frame: Frame::EarthInertial,
+        };
+
+        start_servicer(&mut state);
+
+        // Cycle 1: spacecraft is still inside the SOI at the end of the
+        // step (≈ R_SOI − 20 m), so soi_check must flip ECI → MCI.
+        servicer_task(&mut state);
+        assert_eq!(
+            state.csm_state.frame,
+            Frame::MoonInertial,
+            "TC-AG-SOI: cycle 1 must flip frame to MoonInertial \
+             (position {:.3e} m, expected dist from Moon < R_SOI = {:.3e} m)",
+            state.csm_state.position[0],
+            R_SOI_MOON
+        );
+        // Sanity: in MCI, |position| equals the distance from the Moon.
+        let dist_mci_1 = libm::sqrt(
+            state.csm_state.position[0] * state.csm_state.position[0]
+                + state.csm_state.position[1] * state.csm_state.position[1]
+                + state.csm_state.position[2] * state.csm_state.position[2],
+        );
+        assert!(
+            dist_mci_1 < R_SOI_MOON,
+            "TC-AG-SOI: after cycle 1, |r_mci| = {dist_mci_1:.3e} m should be < R_SOI"
+        );
+
+        // Cycle 2: in MCI, outbound at ~40 m/s, the spacecraft now exits
+        // the SOI (≈ R_SOI + 60 m), so soi_check must flip MCI → ECI.
+        servicer_task(&mut state);
+        assert_eq!(
+            state.csm_state.frame,
+            Frame::EarthInertial,
+            "TC-AG-SOI: cycle 2 must flip frame back to EarthInertial"
+        );
+        // Sanity: in ECI, the spacecraft is now outside the Moon's SOI.
+        let moon_p_end = moon_position(state.csm_state.epoch);
+        let dx = state.csm_state.position[0] - moon_p_end[0];
+        let dy = state.csm_state.position[1] - moon_p_end[1];
+        let dz = state.csm_state.position[2] - moon_p_end[2];
+        let dist_eci_2 = libm::sqrt(dx * dx + dy * dy + dz * dz);
+        assert!(
+            dist_eci_2 > R_SOI_MOON,
+            "TC-AG-SOI: after cycle 2, |r − r_moon| = {dist_eci_2:.3e} m should be > R_SOI"
+        );
     }
 }
