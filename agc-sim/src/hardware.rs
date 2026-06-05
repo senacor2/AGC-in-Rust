@@ -52,6 +52,22 @@ pub struct SimImu {
 pub struct SimOptics {
     pub trunnion: CduAngle,
     pub shaft: CduAngle,
+    /// MARK button latched state. Set to `true` by the scenario runner
+    /// when a CDU-driven sighting fires; the sextant-interrupt handler
+    /// in `agc_core::control::sextant` resets it via `clear_mark` after
+    /// consuming the press, so one keystroke maps to one dispatch (#57).
+    pub mark_pressed: bool,
+}
+
+impl SimOptics {
+    /// Latch the optics CDU at the given shaft/trunnion angles and assert
+    /// the MARK edge. Mirrors the hardware behaviour of the crew pressing
+    /// MARK while the optics are pointed at a star or landmark.
+    pub fn press_mark(&mut self, shaft: CduAngle, trunnion: CduAngle) {
+        self.shaft = shaft;
+        self.trunnion = trunnion;
+        self.mark_pressed = true;
+    }
 }
 pub struct SimEngine {
     pub thrusting: bool,
@@ -128,7 +144,10 @@ impl Optics for SimOptics {
     }
     fn drive(&mut self, _trunnion: i16, _shaft: i16) {}
     fn mark_pressed(&self) -> bool {
-        false
+        self.mark_pressed
+    }
+    fn clear_mark(&mut self) {
+        self.mark_pressed = false;
     }
 }
 
@@ -223,6 +242,7 @@ impl SimHardware {
             optics: SimOptics {
                 trunnion: CduAngle(0),
                 shaft: CduAngle(0),
+                mark_pressed: false,
             },
             engine: SimEngine {
                 thrusting: false,

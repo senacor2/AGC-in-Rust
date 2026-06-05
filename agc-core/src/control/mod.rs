@@ -2,6 +2,7 @@ pub mod attitude;
 pub mod dap;
 pub mod imu_control;
 pub mod rcs_logic;
+pub mod sextant;
 pub mod tvc;
 
 pub use attitude::AttitudeError;

@@ -219,6 +219,18 @@ pub enum Event {
     /// Log a stub "not-yet-implemented" sighting event and continue.
     OpticsSighting { star_id: u8 },
 
+    /// Drive a star sighting through the CDU MARK pipeline (#57).
+    ///
+    /// Computes the body-frame LOS for `star_id` from the catalog + identity
+    /// attitude, inverts to shaft/trunnion CDU counts via
+    /// `control::sextant::cdu_from_los_body`, then calls
+    /// `SimOptics::press_mark` to assert the latched CDU + `mark_pressed`
+    /// hardware state. The handler immediately invokes
+    /// `control::sextant::consume_optics_mark` to consume the press and
+    /// dispatch to P51/P52 just like `OpticsSighting` does — only via the
+    /// hardware-driven path instead of the direct AGC entry point.
+    OpticsCduMark { star_id: u8 },
+
     /// Log a stub "not-yet-implemented" landmark sighting and continue.
     LandmarkSighting { table: LandmarkTable, index: u8 },
 
@@ -616,6 +628,13 @@ impl ScenarioBuilder {
     /// Push an optics sighting event (stub).
     pub fn optics_sighting(mut self, star_id: u8) -> Self {
         self.events.push(Event::OpticsSighting { star_id });
+        self
+    }
+
+    /// Push a CDU-driven star sighting event (#57). See
+    /// [`Event::OpticsCduMark`] for the closed-loop hardware path.
+    pub fn optics_cdu_mark(mut self, star_id: u8) -> Self {
+        self.events.push(Event::OpticsCduMark { star_id });
         self
     }
 
@@ -1169,6 +1188,79 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
                             star_inertial,
                             first.platform,
                             star_platform,
+                        );
+                    }
+                }
+            }
+
+            // ── OpticsCduMark (#57) ───────────────────────────────────────────
+            //
+            // Drives the same P52 pairing logic as `OpticsSighting` above,
+            // but routed through the optics HAL. Each event:
+            //   1. Computes the truth body-frame LOS for the star (identity
+            //      attitude assumption, matching the existing direct path).
+            //   2. Inverts that LOS to (shaft, trunnion) via `sextant`.
+            //   3. Calls `SimOptics::press_mark` to latch CDU + MARK.
+            //   4. Invokes `sextant::consume_optics_mark` to mimic SXTRUPT;
+            //      the consumed platform-frame LOS is what feeds P51/P52,
+            //      bit-equivalent to the direct path under identity attitude.
+            Event::OpticsCduMark { star_id } => {
+                let refsmmat = ctx
+                    .truth_refsmmat
+                    .expect("OpticsCduMark requires SeedTruthRefsmmat earlier in the scenario");
+                assert!(
+                    (1..=agc_core::navigation::star_catalog::CATALOG_SIZE).contains(&star_id),
+                    "OpticsCduMark: star_id {star_id} out of range 1..=37"
+                );
+                let star_inertial = STAR_CATALOG[(star_id - 1) as usize].direction;
+
+                // Identity attitude => body-frame LOS equals inertial LOS.
+                let los_body = star_inertial;
+                let (shaft, trunnion) =
+                    agc_core::control::sextant::cdu_from_los_body(los_body);
+
+                // Drive the hardware: latch CDU and assert MARK.
+                hw.optics.press_mark(shaft, trunnion);
+
+                // Consume the press through the sextant-interrupt handler.
+                let mark = agc_core::control::sextant::consume_optics_mark(hw, &refsmmat)
+                    .expect("consume_optics_mark must yield a mark when press_mark just fired");
+                assert!(
+                    !hw.optics.mark_pressed,
+                    "consume_optics_mark must clear the MARK edge"
+                );
+
+                log_event(
+                    name,
+                    &format!(
+                        "OpticsCduMark: star_id={star_id} via CDU shaft={:?}, trunnion={:?} \
+                         → platform LOS {:.4?}, buffering sighting",
+                        shaft, trunnion, mark.los_platform
+                    ),
+                );
+
+                match ctx.first_sighting.take() {
+                    None => {
+                        ctx.first_sighting = Some(FirstSighting {
+                            star_id,
+                            inertial: star_inertial,
+                            platform: mark.los_platform,
+                        });
+                    }
+                    Some(first) => {
+                        log_event(
+                            name,
+                            &format!(
+                                "OpticsCduMark: pairing star {} with star {} → p52_mark_align",
+                                first.star_id, star_id
+                            ),
+                        );
+                        p52_mark_align(
+                            state,
+                            first.inertial,
+                            star_inertial,
+                            first.platform,
+                            mark.los_platform,
                         );
                     }
                 }
@@ -2144,6 +2236,61 @@ mod tests {
             Met(500),
             "AdvanceCoast(5 s) must advance time to MET 500 cs"
         );
+    }
+
+    /// tc_scn_run_optics_cdu_mark_matches_direct_path
+    ///
+    /// Acceptance for #57: an `OpticsCduMark` pair must drive `p52_mark_align`
+    /// through the SimOptics `shaft_cdu`/`trunnion_cdu`/`mark_pressed` HAL
+    /// pipeline and produce the SAME REFSMMAT as the direct `OpticsSighting`
+    /// path, bit-for-bit (under the identity-attitude assumption documented
+    /// in `control::sextant`). This proves the closed-loop CDU pipeline is
+    /// wired end-to-end without regressing the existing direct path.
+    #[test]
+    fn tc_scn_run_optics_cdu_mark_matches_direct_path() {
+        let identity: Mat3x3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+
+        // Direct path — produces a REFSMMAT via the existing dispatch.
+        let scenario_direct = ScenarioBuilder::new("optics-direct")
+            .seed_truth_refsmmat(identity)
+            .optics_sighting(1)
+            .optics_sighting(16)
+            .build();
+        let mut state_direct = AgcState::new();
+        let mut hw_direct = SimHardware::new();
+        run_scenario(&scenario_direct, &mut state_direct, &mut hw_direct);
+
+        // CDU path — same stars, but routed through SimOptics::press_mark
+        // + sextant::consume_optics_mark before reaching p52_mark_align.
+        let scenario_cdu = ScenarioBuilder::new("optics-cdu")
+            .seed_truth_refsmmat(identity)
+            .optics_cdu_mark(1)
+            .optics_cdu_mark(16)
+            .build();
+        let mut state_cdu = AgcState::new();
+        let mut hw_cdu = SimHardware::new();
+        run_scenario(&scenario_cdu, &mut state_cdu, &mut hw_cdu);
+
+        // CDU pipeline must clear the MARK edge after each consume.
+        assert!(
+            !hw_cdu.optics.mark_pressed,
+            "TC-SCN-CDU: SimOptics::mark_pressed must be cleared after the second consume"
+        );
+
+        // Both paths converge on the same REFSMMAT. Tolerate the 1-LSB CDU
+        // quantisation error introduced by the encode→decode round trip
+        // (≈ 0.0055° on each axis, < 1e-4 on each matrix element).
+        for i in 0..3 {
+            for j in 0..3 {
+                let diff = (state_direct.refsmmat[i][j] - state_cdu.refsmmat[i][j]).abs();
+                assert!(
+                    diff < 1e-4,
+                    "TC-SCN-CDU REFSMMAT[{i}][{j}]: direct={}, cdu={}, diff={diff:.3e}",
+                    state_direct.refsmmat[i][j],
+                    state_cdu.refsmmat[i][j]
+                );
+            }
+        }
     }
 
     /// tc_scn_run_optics_sighting_does_not_panic
