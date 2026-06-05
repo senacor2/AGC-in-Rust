@@ -21,6 +21,24 @@ impl CduAngle {
     pub fn to_degrees(self) -> f64 {
         self.to_radians() * (180.0 / core::f64::consts::PI)
     }
+
+    /// Encode a radian angle as a `CduAngle`, wrapping at ±π just like the
+    /// hardware counter. Used by the sextant CDU pipeline to inject truth
+    /// angles into the sim hardware (see `control::sextant`).
+    pub fn from_radians(rad: f64) -> Self {
+        const SCALE: f64 = 65536.0 / core::f64::consts::TAU;
+        // Round to nearest count, then wrap into the signed i16 range.
+        let raw = libm::round(rad * SCALE);
+        let wrapped = libm::fmod(raw, 65536.0);
+        let centred = if wrapped >= 32768.0 {
+            wrapped - 65536.0
+        } else if wrapped < -32768.0 {
+            wrapped + 65536.0
+        } else {
+            wrapped
+        };
+        CduAngle(centred as i16)
+    }
 }
 
 impl core::fmt::Debug for CduAngle {
