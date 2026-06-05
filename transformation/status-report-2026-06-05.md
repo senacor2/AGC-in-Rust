@@ -8,7 +8,7 @@
 
 ## 1. Executive Summary
 
-The port implements **26 major-mode entry points** spanning P00–P67. Against the Comanche055 rope (~50 named major modes that have real operational content for the CM-only mission), this corresponds to roughly **50–55 %** of the CM-relevant program space. Programs covering the entire earth-to-moon-and-back flight profile (pre-launch initialisation, orbit insertion, cislunar navigation, rendezvous, targeting, maneuver execution, entry, and TEI contingency) are all present at varying depths. Lunar-landing-specific programs (P64 ballistic hold, P65 skip-out, P66 final roll — partial stubs exist) and all LM-side programs (P72–P78 family) are intentional gaps.
+The port implements **26 major-mode entry points** spanning P00–P67. Against the Comanche055 rope (~50 named major modes that have real operational content for the CM-only mission), this corresponds to roughly **50–55 %** of the CM-relevant program space. Programs covering the entire earth-to-moon-and-back flight profile (pre-launch initialisation, orbit insertion, cislunar navigation, rendezvous, targeting, maneuver execution, the full closed-loop entry guidance chain P61–P67 driven by HUNTEST / UPCONTRL / CONSTD / PREDICT3, and TEI contingency) are all present at the operational depth required by the integration tests. The remaining intentional gaps are LM-side programs (P72–P78 family).
 
 Colossus237 (Apollo 8) shares ~95 % of its program and routine set with Comanche055. The primary structural differences are: (a) Comanche055 adds the full LM rendezvous suite (P32–P35, P72–P75, P76–P78), which Apollo 8 did not carry operationally; (b) Comanche055 has the `LUNAR_LANDMARK_SELECTION_FOR_CM.agc` routine (R35/V79); (c) Colossus237 lacks the `TVCGEN3FILTERS.agc` module present in Comanche055, indicating incremental TVC improvements. The Rust port targets Comanche055; Colossus237 differences are largely academic for the current scope.
 
@@ -62,13 +62,13 @@ Key to Status column:
 | P52 | IMU realignment (realign to stored REFSMMAT) | Same | ✅ `programs/p51_p52.rs` | Calls `coarse_align_step` + `fine_align_torque`; platform-caged alarm |
 | P53 | External ΔV determination (P52 variant, post-sep check) | Same | ❌ Not ported — `P51-P53.agc`; measures IMU drift after separation |
 | P57 | (Not a standard major mode number) | — | ⚪ Not assigned |
-| P61 | Entry preparation (EMS init, predict GMAX/VPRED/GAMMAEI) | Same | 🟡 `programs/p61_p67.rs` | Phase enum and DSKY init wired; entry guidance math (lift-to-drag, skip) is stubbed |
-| P62 | CM/SM separation | Same | 🟡 `programs/p61_p67.rs` | Phase transition and `dap_stop` implemented; real sep-fire RCS commands deferred |
-| P63 | Pre-0.05g monitoring | Same | 🟡 `programs/p61_p67.rs` | Monitors `entry.sensed_acceleration_g` against ENTRY_THRESHOLD_G; closed-loop guidance not yet connected |
-| P64 | Closed-loop entry guidance (roll steering) | Same | 🟡 `programs/p61_p67.rs` | Phase-enum entry; roll-steering algorithm (HUNTEST, range-to-go) stubbed |
-| P65 | Up-control / skip-out (UPCONTRL) | Same | 🟡 `programs/p61_p67.rs` | EntryPhase::SkipOut assigned; actual skip trajectory math not implemented |
-| P66 | Ballistic hold (roll-command hold when guidance diverges) | Same | 🟡 `programs/p61_p67.rs` | EntryPhase::Ballistic assigned; DAP holds last roll command; MS-E5 will complete |
-| P67 | Final phase / drogue deployment detection | Same | ✅ `programs/p61_p67.rs` | Transitions EntryPhase to Final; DAP stopped |
+| P61 | Entry preparation (EMS init, predict GMAX/VPRED/GAMMAEI) | Same | ✅ `programs/p61_p67.rs` | Sets `EntryPhase::Preparation`, loads target-range display |
+| P62 | CM/SM separation | Same | 🟡 `programs/p61_p67.rs` | Phase transition, `dap_stop`, voids stale `pending_maneuver`; the physical sep-pyro RCS command is the only piece deferred (no Secs-style HAL trait for SM-sep yet) |
+| P63 | Pre-0.05g monitoring | Same | ✅ `programs/p61_p67.rs` | Installs `entry_servicer_exit` hook; SERVICER computes sensed-g each cycle, `p63_check_threshold` trips PreEntry → Entry at `ENTRY_THRESHOLD_G` and switches DAP to `EntryRoll(0.0)` |
+| P64 | Closed-loop entry guidance (roll steering) | Same | ✅ `programs/p61_p67.rs` + `guidance/entry.rs` | HUNTEST/INITROLL Newton iteration in `compute_ld_command`; GLIMITER L/D limiter (#85); CONSTD divergence routing (#86); Earth-rotation `v_rel` correction (#87); L/D → `resolve_roll` → `DapMode::EntryRoll`. Achieved 111 km miss on lunar return |
+| P65 | Up-control / skip-out (UPCONTRL) | Same | ✅ `guidance/entry.rs:upcontrol_step` | Full UPCONTRL feedback law with LIMITL/D clamp + GLIMITER (#85); `select_phase` routes Entry ↔ Skip on HUNTEST convergence |
+| P66 | Ballistic hold (roll-command hold when guidance diverges) | Same | ✅ `guidance/entry.rs:ballistic_step` | Roll-command freeze when `select_phase` decides Q7 drag exit; DAP retains `EntryRoll` |
+| P67 | Final phase / drogue deployment detection | Same | ✅ `programs/p61_p67.rs` + `guidance/entry.rs:final_phase_step` | PREDICT3 final-phase law; drogue trigger uses VQUIT = 305 m/s on `\|v_rel\|` (#87); Sutton–Graves stagnation-point heating monitored (#96) |
 | P70 | TLI targeting (burns from Earth orbit to trans-lunar trajectory) | Same | ❌ Not ported — `P37,P70.agc`; computes TLI burn from LEO parking orbit |
 | P72 | CSI targeting (LM active vehicle) | LM program | ⚪ LM-side rendezvous — CM port only (G1) |
 | P73 | CDH targeting (LM active) | LM program | ⚪ LM-side rendezvous (G1) |
@@ -78,7 +78,7 @@ Key to Status column:
 | P77 | (Not standard in Comanche055) | — | ⚪ Not assigned |
 | P78 | Stable-orbit rendezvous (LM active) | LM program | ⚪ LM-side rendezvous (G1) |
 
-**Programs summary:** 25 implemented (including ✅ and 🟡), 5 partial (P02/P61–P66), 9 out-of-scope LM/hardware programs, 6 CM-relevant gaps (P12, P35, P38, P39, P53, P70, P76).
+**Programs summary:** 25 implemented (✅), 2 partial (P02 gyrocompass loop unsimplified, P62 missing the physical sep-pyro HAL command), 9 out-of-scope LM/hardware programs, 6 CM-relevant gaps (P12, P35, P38, P39, P53, P70, P76).
 
 ---
 
@@ -346,7 +346,7 @@ Listed in descending value to the mission simulation / demonstration:
 
 3. **V82 full dispatch + R30 TFF.** V82 (`request_v50` + N44) is partially supported via `noun_display` N44, but: (a) V82 itself is not in `dispatch_verb_noun`, so crew must manually select V16N44; (b) the time-to-free-fall (TFF) at 300 kft is not computed. This is a high-visibility display used throughout the mission.
 
-4. **P64 closed-loop entry guidance (roll steering).** The entry phase state machine is wired (P61–P67), but the roll-angle algorithm (drag-modulated lift steering, range-to-go targeting) is stubbed. This is the most operationally dense entry math. Entry tests exist already — connecting the algorithm is the next step.
+4. **P62 SM-sep pyro command via a `Secs`-style HAL trait.** P62 currently does the state transition + `dap_stop` but does not fire the actual separation pyrotechnic — the hardware action doesn't exist as a HAL method yet. Mechanically small, but completes the only real gap in the entry chain (the closed-loop guidance, HUNTEST/UPCONTRL/CONSTD/PREDICT3, all shipped in #85/#86/#87/#96).
 
 5. **P76 — Target ΔV.** A crew-loadable program that integrates the LM state vector to a TIG and applies a ΔV. Needed for post-LOI rendezvous scenarios where the LM has fired independently. Straightforward to implement using the existing P30 and Kepler integration infrastructure.
 
