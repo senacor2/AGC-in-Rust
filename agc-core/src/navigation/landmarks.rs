@@ -15,6 +15,10 @@
 
 use core::f64::consts::PI;
 
+use crate::math::linalg::mxv;
+use crate::navigation::lunar_libration::moon_fixed_to_inertial;
+use crate::types::{Met, Vec3};
+
 /// Mean lunar radius (m).
 ///
 /// IAU 2015 value: 1,737.4 km.
@@ -48,6 +52,32 @@ impl LunarLandmarkEntry {
             alt_m,
         }
     }
+}
+
+/// Convert a lunar landmark entry to its Moon-fixed Cartesian (selenographic
+/// spherical → Cartesian, no orientation change). Units: metres.
+#[inline]
+fn lunar_landmark_body_fixed(entry: &LunarLandmarkEntry) -> Vec3 {
+    let r = R_MOON_M + entry.alt_m;
+    let cos_lat = libm::cos(entry.lat_rad);
+    let sin_lat = libm::sin(entry.lat_rad);
+    let cos_lon = libm::cos(entry.lon_rad);
+    let sin_lon = libm::sin(entry.lon_rad);
+    [r * cos_lat * cos_lon, r * cos_lat * sin_lon, r * sin_lat]
+}
+
+/// Inertial (MCI) position of a lunar landmark at the given epoch, with the
+/// IAU 2015 lunar libration model applied (#56).
+///
+/// Both the simulator's sextant-truth path (in `agc-sim`) and any AGC-side
+/// landmark predictor should go through this single function, so the
+/// libration treatment is consistent across the closed loop. Until #56 the
+/// caller-side code treated Moon-fixed coordinates as MCI directly, which
+/// biased the inertial landmark position by up to ~150 km over the lunation.
+pub fn lunar_landmark_inertial_at(entry: &LunarLandmarkEntry, epoch: Met) -> Vec3 {
+    let r_body = lunar_landmark_body_fixed(entry);
+    let m_b2i = moon_fixed_to_inertial(epoch);
+    mxv(m_b2i, r_body)
 }
 
 /// Compile-time lunar landmark table.
@@ -207,6 +237,32 @@ mod tests {
             marilyn.lat_rad > 0.02 && marilyn.lat_rad < 0.03,
             "Mount Marilyn lat_rad = {} not in (0.02, 0.03)",
             marilyn.lat_rad
+        );
+    }
+
+    /// tc_lm_libration_bias_on_real_landmark
+    ///
+    /// At the Apollo 11 launch epoch, the libration rotation moves Mount
+    /// Marilyn's inertial position by tens to hundreds of km relative to
+    /// the pre-#56 naive "Moon-fixed = MCI" assumption. This is the smoke
+    /// test that proves the rotation has the magnitude the issue calls out
+    /// (~150 km bias on landmark inertial position) and that the wiring
+    /// path through `lunar_landmark_inertial_at` reaches the libration
+    /// model — not just the body-fixed coordinate transform.
+    #[test]
+    fn tc_lm_libration_bias_on_real_landmark() {
+        let marilyn = &LUNAR_LANDMARK_TABLE[5];
+        let naive = lunar_landmark_body_fixed(marilyn);
+        let with_libration = lunar_landmark_inertial_at(marilyn, Met(0));
+        let dx = with_libration[0] - naive[0];
+        let dy = with_libration[1] - naive[1];
+        let dz = with_libration[2] - naive[2];
+        let bias_km = libm::sqrt(dx * dx + dy * dy + dz * dz) / 1_000.0;
+        assert!(
+            (50.0..=2_000.0).contains(&bias_km),
+            "TC-LM-LIB: libration bias on Mount Marilyn at MET 0 = {bias_km:.1} km, \
+             expected within (50, 2000) km — outside this range suggests the \
+             rotation is misapplied or the wiring is wrong."
         );
     }
 }

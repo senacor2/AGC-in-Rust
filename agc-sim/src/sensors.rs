@@ -27,13 +27,15 @@
 //! `landmark_los_in_platform` branches on [`LandmarkTable`]:
 //! - `Earth`: reads the Earth landmark table and calls `landmark_inertial_pos`.
 //! - `Moon`: reads `LUNAR_LANDMARK_TABLE`, converts Moon-fixed Cartesian to
-//!   inertial (libration deferred to GH #56; Moon-fixed ≡ MCI in MS-T3).
+//!   inertial using the IAU 2015 lunar-libration rotation at the given epoch
+//!   (resolved in GH #56 — prior to #56 the conversion was the identity, which
+//!   biased the inertial landmark position by up to ~150 km).
 
 use agc_core::math::linalg::{mxv, unit, vsub};
-use agc_core::navigation::landmarks::{LunarLandmarkEntry, LUNAR_LANDMARK_TABLE, R_MOON_M};
+use agc_core::navigation::landmarks::{lunar_landmark_inertial_at, LUNAR_LANDMARK_TABLE};
 use agc_core::navigation::star_catalog::STAR_CATALOG;
 use agc_core::programs::p22::{landmark_inertial_pos, LANDMARK_TABLE};
-use agc_core::types::{Mat3x3, Vec3};
+use agc_core::types::{Mat3x3, Met, Vec3};
 
 use crate::physics::Attitude;
 use crate::scenario::LandmarkTable;
@@ -74,6 +76,8 @@ pub fn star_los_in_platform(star_id: u8, _attitude: &Attitude, refsmmat: &Mat3x3
 /// - `refsmmat`: current REFSMMAT (inertial → platform).
 /// - `gha_epoch_rad`: Greenwich Hour Angle at GET = 0 (rad).  Used only for
 ///   Earth landmarks; ignored for Moon landmarks.
+/// - `epoch`: mission elapsed time at the sighting. Used for the lunar
+///   libration rotation (#56); ignored for Earth landmarks.
 ///
 /// # Returns
 /// Unit vector in the platform frame pointing from the CSM toward the landmark.
@@ -87,6 +91,7 @@ pub fn landmark_los_in_platform(
     _attitude: &Attitude,
     refsmmat: &Mat3x3,
     gha_epoch_rad: f64,
+    epoch: Met,
 ) -> Vec3 {
     let lm_inertial: Vec3 = match table {
         LandmarkTable::Earth => {
@@ -108,7 +113,7 @@ pub fn landmark_los_in_platform(
                 (1..=8).contains(&index),
                 "landmark_los_in_platform: Moon landmark index {index} out of range 1..=8"
             );
-            lunar_landmark_inertial(&LUNAR_LANDMARK_TABLE[index as usize])
+            lunar_landmark_inertial_at(&LUNAR_LANDMARK_TABLE[index as usize], epoch)
         }
     };
 
@@ -116,26 +121,6 @@ pub fn landmark_los_in_platform(
     let los_inertial = unit(vsub(lm_inertial, csm_pos_inertial));
     // Rotate to platform frame: REFSMMAT · los_inertial
     mxv(*refsmmat, los_inertial)
-}
-
-/// Convert a lunar landmark (selenographic) to a Moon-inertial Cartesian position.
-///
-/// In MS-T3 libration is deferred (GH #56), so Moon-fixed ≡ MCI.
-/// The transform is the standard spherical-to-Cartesian:
-///
-/// ```text
-/// r = R_MOON_M + alt_m
-/// x = r · cos(lat) · cos(lon)
-/// y = r · cos(lat) · sin(lon)
-/// z = r · sin(lat)
-/// ```
-fn lunar_landmark_inertial(entry: &LunarLandmarkEntry) -> Vec3 {
-    let r = R_MOON_M + entry.alt_m;
-    let cos_lat = entry.lat_rad.cos();
-    let sin_lat = entry.lat_rad.sin();
-    let cos_lon = entry.lon_rad.cos();
-    let sin_lon = entry.lon_rad.sin();
-    [r * cos_lat * cos_lon, r * cos_lat * sin_lon, r * sin_lat]
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -148,7 +133,7 @@ mod tests {
     use agc_core::math::linalg::mxv;
     use agc_core::navigation::landmarks::R_MOON_M;
     use agc_core::navigation::star_catalog::STAR_CATALOG;
-    use agc_core::types::{Mat3x3, Vec3};
+    use agc_core::types::{Mat3x3, Met, Vec3};
 
     const IDENTITY_REFSMMAT: Mat3x3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
@@ -227,6 +212,7 @@ mod tests {
             &attitude,
             &IDENTITY_REFSMMAT,
             0.0, // GHA = 0
+            Met(0),
         );
         let norm = (los[0] * los[0] + los[1] * los[1] + los[2] * los[2]).sqrt();
         assert!(
@@ -244,38 +230,57 @@ mod tests {
 
     /// tc_sens_landmark_moon_returns_unit_vector
     ///
-    /// For Mount Marilyn (lunar landmark index 5, near +40° lon), a CSM at
-    /// +Y from Moon center at LLO altitude (1_837_400 m), identity REFSMMAT:
-    /// the LOS must be a unit vector (norm == 1.0 within 1e-12).
-    /// Since the CSM is along +Y and Mount Marilyn is near +40° longitude
-    /// (roughly in the X-Y plane, positive X and positive Y), the LOS
-    /// should have a negative Y component (pointing from +Y CSM back toward
-    /// the landmark which is at smaller Y).
+    /// For Mount Marilyn (lunar landmark index 5), with a CSM at 100 km LLO
+    /// and identity REFSMMAT, the LOS in platform must be a unit vector.
+    /// The CSM is placed at the inertial position of the landmark plus a
+    /// 100 km radial offset, so the LOS points back along the radial: the
+    /// dot product with the inertial up-vector must be ≈ −1. This decouples
+    /// the test from the exact libration epoch — pre-#56 the landmark was
+    /// fixed in inertial space, so the CSM placement was fixed too.
     #[test]
     fn tc_sens_landmark_moon_returns_unit_vector() {
         let attitude = default_attitude();
-        // CSM at 100 km LLO on +Y axis from Moon center.
-        let csm_pos: Vec3 = [0.0, R_MOON_M + 100_000.0, 0.0];
+        let epoch = Met(0);
+
+        let entry = &agc_core::navigation::landmarks::LUNAR_LANDMARK_TABLE[5];
+        let lm_inertial =
+            agc_core::navigation::landmarks::lunar_landmark_inertial_at(entry, epoch);
+        let lm_norm =
+            f64::sqrt(lm_inertial[0].powi(2) + lm_inertial[1].powi(2) + lm_inertial[2].powi(2));
+        let up: Vec3 = [
+            lm_inertial[0] / lm_norm,
+            lm_inertial[1] / lm_norm,
+            lm_inertial[2] / lm_norm,
+        ];
+        // CSM = landmark + 100 km radially outward (still at LLO altitude).
+        let csm_pos: Vec3 = [
+            lm_inertial[0] + 100_000.0 * up[0],
+            lm_inertial[1] + 100_000.0 * up[1],
+            lm_inertial[2] + 100_000.0 * up[2],
+        ];
+
         let los = landmark_los_in_platform(
             LandmarkTable::Moon,
             5, // Mount Marilyn
             csm_pos,
             &attitude,
             &IDENTITY_REFSMMAT,
-            0.0, // GHA unused for Moon
+            0.0,   // GHA unused for Moon
+            epoch, // applies the IAU 2015 libration rotation
         );
-        let norm = (los[0] * los[0] + los[1] * los[1] + los[2] * los[2]).sqrt();
+
+        let norm = f64::sqrt(los[0] * los[0] + los[1] * los[1] + los[2] * los[2]);
         assert!(
             (norm - 1.0).abs() < 1e-12,
             "LOS to Moon landmark must be unit vector; norm = {norm}"
         );
-        // Mount Marilyn is at ~40° east longitude, so its inertial Cartesian has
-        // x = R·cos(lat)·cos(lon) ≈ positive, y = R·cos(lat)·sin(lon) ≈ positive.
-        // CSM is at a larger +Y, so los[1] (Y component) should be negative.
+        // CSM sits directly above the landmark along the radial, so the LOS
+        // back to the landmark equals −up.
+        let dot = los[0] * up[0] + los[1] * up[1] + los[2] * up[2];
         assert!(
-            los[1] < 0.0,
-            "LOS Y component should be negative (CSM at +Y, landmark at smaller Y), got {}",
-            los[1]
+            (dot + 1.0).abs() < 1e-9,
+            "LOS·up should equal −1 when CSM is radially above the landmark; got {dot}"
         );
+        let _ = R_MOON_M; // ensure the still-shared import stays referenced
     }
 }
