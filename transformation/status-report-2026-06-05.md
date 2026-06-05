@@ -89,9 +89,9 @@ R-routines are reusable subroutines called by multiple P-programs. They do not h
 | R# | Comanche055 purpose | Status in port | Notes |
 |----|---------------------|----------------|-------|
 | R02 | IMU status check (called by P40, P20, P51) | ⚪ Hardware-only path (G5) — IMU fault detection requires real CDU hardware |
-| R21 | Rendezvous sighting mark routine (V57) | ❌ Not ported — optical mark from sextant into P20 Kalman; V57 dispatch in `v_n.rs` raises OPR ERR |
+| R21 | Rendezvous sighting mark routine (V57) | 🟡 `programs/p20.rs:p20_incorporate_sextant_mark` + `control/sextant.rs:consume_optics_mark` — sextant HAL mark pipeline and Kalman update implemented; V57 verb dispatch not wired in `dispatch_verb_noun` (verified via `programs/p20.rs:570`, `control/sextant.rs:128`) |
 | R22 | Rendezvous tracking data processor (radar marks) | 🟡 `programs/p20.rs` — `p20_incorporate_mark` ingests range/range-rate; R22 auto-ranging and transponder-lock logic not modelled |
-| R23 | Rendezvous backup sighting (V54) | ❌ Not ported |
+| R23 | Rendezvous backup sighting (V54) | ❌ Not ported — R23 is a distinct rendezvous-specific backup-sighting routine; `p23_incorporate_star_horizon_mark` in `programs/p23.rs` serves cislunar nav (P23), not R23's rendezvous role; V54 dispatch not wired |
 | R30 | Orbital parameters display (V82 → N44) | 🟡 `services/v_n.rs` `noun_display` N44 — apogee/perigee/half-period computed; `time_to_periapsis` (TFF) and `DELRSPL` splash prediction not connected |
 | R31 | Rendezvous parameter display No. 1 (V83) | ❌ Not ported — `R31.agc`; displays CDH/TPI timing parameters |
 | R34 | Rendezvous parameter display No. 2 (V85) | ❌ Not ported |
@@ -150,7 +150,7 @@ Additional routines embedded in service modules (not discrete `.rs` files but di
 | V33 | Proceed without DSKY input | ❌ Not in dispatch (same as PRO for non-V50 context) |
 | V34 | Terminate function → P00 | ✅ `v_n.rs:v34_terminate` |
 | V35 | Test lights (lamp test) | ✅ `v_n.rs:v35_lamp_test` |
-| V36 | Request fresh start | ❌ Not wired — would call `fresh_start::init` |
+| V36 | Request fresh start | 🟡 Capability present via `services/fresh_start.rs:fresh_start` (also reachable via V37E00E); direct V36 dispatch not in `dispatch_verb_noun` or `verb_takes_no_noun` (verified via `services/v_n.rs:920`) |
 | V37 | Change major mode | ✅ `v_n.rs:v37_program_select` — special keystroke path V37 ENTR MM ENTR |
 
 ### Extended Verbs (V40 – V99)
@@ -163,7 +163,7 @@ Additional routines embedded in service modules (not discrete `.rs` files but di
 | V43 | Load IMU attitude error meters | ❌ Hardware path (G5) |
 | V44 | Set surface flag | ❌ Flag register path |
 | V45 | Reset surface flag | ❌ Flag register path |
-| V46 | Establish G+C control (start SERVICER) | ❌ Not wired — `start_servicer` exists but no V46 dispatch |
+| V46 | Establish G+C control (start SERVICER) | 🟡 Capability present — `services/average_g.rs:start_servicer` (line 126) starts the SERVICER; DAP deadband and jet-config fields exist in `control/dap.rs`; direct V46 dispatch not in `dispatch_verb_noun` (verified via `services/v_n.rs:933`) |
 | V47 | Move LM state vector into CM state vector | ❌ LM-related (G1) |
 | V48 | Request DAP data load (R03) | ❌ R03 not implemented |
 | V49 | Request crew-defined maneuver (R62) | ❌ R62 not implemented |
@@ -174,7 +174,7 @@ Additional routines embedded in service modules (not discrete `.rs` files but di
 | V54 | Request R23 (rendezvous backup sighting) | ❌ R23 not ported |
 | V55 | Increment AGC time (decimal) | ❌ V73 covers additive time correction; V55 not wired |
 | V56 | Terminate tracking (P20 + P25) | ❌ Not wired |
-| V57 | Request rendezvous sighting (R21) | ❌ R21 not ported |
+| V57 | Request rendezvous sighting (R21) | 🟡 Underlying mark pipeline exists (`programs/p20.rs:p20_incorporate_sextant_mark`, `control/sextant.rs:consume_optics_mark`); V57 dispatch not in `dispatch_verb_noun` (verified via `services/v_n.rs:933`) |
 | V58 | Reset stick flag | ❌ |
 | V59 | Please calibrate | ❌ IMU calibration extended verb (G5) |
 | V60 | Set astronaut total attitude to present (N17) | ❌ Attitude monitoring verb |
@@ -185,7 +185,7 @@ Additional routines embedded in service modules (not discrete `.rs` files but di
 | V65 | Optical verification of pre-launch alignment | ⚪ Pre-launch hardware (G5) |
 | V66 | Vehicles attached — move this vehicle state to other | ❌ LM-related (G1) |
 | V68 | CSM stroke test ON | ⚪ Hardware test (G6) |
-| V69 | Cause restart | ❌ Not wired — `fresh_start::init` would handle |
+| V69 | Cause restart | 🟡 Restart infrastructure implemented in `services/fresh_start.rs` (restart group dispatch, BKPSRAM restore); direct V69 dispatch not in `dispatch_verb_noun`; FRESH START reachable via V37E00E (verified via `services/v_n.rs:933`) |
 | V70 | Update liftoff time (HMS) | ✅ `v_n.rs:v70_liftoff_time_update` — P27Time state machine |
 | V71 | Universal update — block address (P27) | ✅ `v_n.rs:v71_p27_block_update` — full address space 1–31 |
 | V72 | Universal update — single address | ✅ `v_n.rs:v72_single_address_update` |
@@ -209,15 +209,15 @@ Additional routines embedded in service modules (not discrete `.rs` files but di
 | V90 | Request rendezvous out-of-plane display (R36) | ❌ R36 not ported |
 | V91 | Display bank sum | ⚪ Diagnostic (G7) |
 | V92 | Operate IMU performance test (P07) | ⚪ IMU hardware test (G6) |
-| V93 | Enable W-matrix initialisation | ❌ Kalman cold-start — relevant to P20/P22 |
-| V94 | Perform cislunar attitude maneuver (P23) | ❌ P23 auto-maneuver path |
-| V95 | No update of either state vector (P20/P22) | ❌ Kalman freeze option |
-| V96 | Terminate integration and go to P00 | ❌ Shortcut to P00 stopping integration |
+| V93 | Enable W-matrix initialisation | 🟡 W-matrix reset implemented as `programs/p22.rs:p22_rectify_w_matrix` (line 528); direct V93 dispatch not wired in `dispatch_verb_noun` (verified via `services/v_n.rs:933`) |
+| V94 | Perform cislunar attitude maneuver (P23) | ❌ P23 auto-maneuver path not wired; P23 mark pipeline implemented but programmatic maneuver initiation via V94 not dispatched |
+| V95 | No update of either state vector (P20/P22) | ❌ Kalman freeze option — no freeze flag in P20/P22 nav state |
+| V96 | Terminate integration and go to P00 | 🟡 Equivalent capability implemented as V34 (`v_n.rs:v34_terminate`); direct V96 dispatch not wired (verified via `services/v_n.rs:933`) |
 | V97 | Perform engine fail procedure | ❌ Contingency verb |
 | V98 | Enable TLI | ❌ P15/TLI arming |
 | V99 | Please enable engine (SPS ARM crew ACK) | ✅ Used as `NOUN_ENGINE_ARM = 99` in P40 V50N99 flow |
 
-**Verb summary:** V06, V16, V21–V23, V25, V34, V35, V37, V50, V70–V73, V99-as-noun = **13 verbs fully wired**. V24, V32, V33, V36, V46, V56, V69 = **7 closeable non-hardware gaps**. Extended verbs V40–V68 (hardware) and V74–V98 (telemetry/rendezvous) are partial to gap.
+**Verb summary:** V06, V16, V21–V23, V25, V34, V35, V37, V50, V70–V73, V99-as-noun = **13 verbs fully wired**. V24, V32, V33 = **3 pure dispatch gaps**. V36, V46, V57, V69, V93, V96 = **6 verbs where capability is present but not crew-accessible by that verb number** (🟡). Extended verbs V40–V45, V47–V49, V51, V53–V56, V58–V63 (hardware/rendezvous) and V75–V81, V83–V86, V89–V90, V94–V95, V97–V98 = remaining gaps.
 
 ---
 
@@ -236,7 +236,7 @@ Only nouns wired in `noun_display` or `noun_commit` are listed as implemented. A
 | N11 | TIG of CSI (HMS) | ✅ `noun_commit` — `commit_hms_to_pending_tig` |
 | N13 | TIG of CDH (HMS) | ✅ `noun_commit` — `commit_hms_to_pending_tig` |
 | N16 | Time of event (HMS) | ✅ `noun_commit` — `commit_hms_to_pending_tig` |
-| N17 | Astronaut total attitude (CPHIX, 3 deg) | ❌ Not in `noun_display` |
+| N17 | Liftoff time (HMS, uplinked via V70) | ✅ `noun_display` — `time_to_hms(state.liftoff_time.0)` at `services/v_n.rs:1007` |
 | N18 | Auto maneuver ball angles (THETAD) | ✅ `noun_commit:noun_18_commit_attitude` |
 | N20 | ICDU angles | ❌ |
 | N21 | PIPAs (pulse count display) | ❌ |
@@ -274,12 +274,12 @@ Only nouns wired in `noun_display` or `noun_commit` are listed as implemented. A
 | N60 | Gmax/Vpred/γEI | ❌ |
 | N61 | Impact latitude/longitude/heads-up | ❌ |
 | N62 | Inertial vel/time from TIG/accum ΔV | ✅ `noun_display` — |V|, elapsed centiseconds since TIG, `norm(accumulated_dv_inertial)` |
-| N63 | RTGO/VIO/TFE | ❌ |
-| N64 | Drag accel/Vmagi/range-to-splash | ❌ |
+| N63 | RTGO/VIO/TFE | 🟡 RTGO = `entry.target_range_km` computed; VIO (velocity at EI) not stored in `AgcState`; noun display arm missing (verified via `services/v_n.rs:991` and `programs/p61_p67.rs:EntryState`) |
+| N64 | Drag accel/Vmagi/range-to-splash | 🟡 Data present: `entry.sensed_acceleration_g`, `norm(csm_state.velocity)`, `entry.target_range_km`; noun display arm missing in `noun_display` (verified via `programs/p61_p67.rs:EntryState`) |
 | N65 | Sampled AGC time (HMS) | ✅ `noun_display:time_to_hms(state.time)` |
-| N66 | Roll command/cross-range error/down-range error | ❌ |
-| N67 | Range-to-target/lat/lon | ❌ |
-| N68 | Roll command/Vmagi/Rdot | ❌ |
+| N66 | Roll command/cross-range error/down-range error | 🟡 Data present: `entry.roll_command_rad`, `entry.crossrange_km`, `entry.downrange_error_km`; noun display arm missing (verified via `programs/p61_p67.rs:EntryState`, `guidance/entry.rs:crossrange_km`) |
+| N67 | Range-to-target/lat/lon | 🟡 Data present: `entry.target_range_km`, `entry.target_lat_rad`, `entry.target_lon_rad`; noun display arm missing (verified via `programs/p61_p67.rs:EntryState`) |
+| N68 | Roll command/Vmagi/Rdot | 🟡 Data present: `entry.roll_command_rad`, `norm(csm_state.velocity)`, `entry.r_dot_mps`; noun display arm missing (verified via `programs/p61_p67.rs:EntryState`) |
 | N69 | Beta/DL/VL | ❌ |
 | N70 | Star code/landmark/horizon | ✅ `noun_commit:noun_70_commit_star_code` + `noun_display` (pass-through) |
 | N72 | Landmark lat/lon/alt | ✅ `noun_commit:noun_72_commit_landmark` |
@@ -288,7 +288,7 @@ Only nouns wired in `noun_display` or `noun_commit` are listed as implemented. A
 | N80 | TIG/cutoff, Vg, accum ΔV (high-res P burn display) | ❌ |
 | N81 | ΔV (LV), 3 components | ✅ `noun_commit:noun_81_commit_dv_lvlh` |
 | N82 | ΔV (LV) alternate | ❌ |
-| N83 | ΔV (body frame) | ❌ As noun — P47 writes R-regs directly |
+| N83 | ΔV (body frame) | 🟡 P47 writes R-regs directly each SERVICER cycle; `burn.accumulated_dv_inertial` present; no `noun_display` arm for N83 and no inertial→body rotation applied via noun path (verified via `programs/p47.rs`) |
 | N84 | ΔV (other vehicle) | ❌ |
 | N85 | Vg (body) | ❌ |
 | N86 | ΔV (LV) high-res | ❌ |
@@ -299,7 +299,7 @@ Only nouns wired in `noun_display` or `noun_commit` are listed as implemented. A
 | N97–N98 | System test inputs/results | ⚪ System test (G6) |
 | N99 | RMS position/velocity/option | ❌ Navigation quality display |
 
-**Nouns wired in port: N11, N13, N16, N18, N24, N31–N39, N40, N43 (stub), N44 (partial), N54, N62, N65, N70, N72, N81, N89 = approximately 22 nouns fully or partially active out of ~60 operationally relevant nouns in Comanche055.**
+**Nouns wired in port: N11, N13, N16, N17, N18, N24, N31–N39, N40, N43 (stub), N44 (partial), N54, N62, N65, N70, N72, N81, N89 = approximately 23 nouns fully or partially active out of ~60 operationally relevant nouns in Comanche055. Entry-guidance state nouns N63, N64, N66, N67, N68 have all underlying data computed but lack `noun_display` arms (5 additional 🟡 entries).**
 
 ---
 
@@ -350,8 +350,8 @@ Listed in descending value to the mission simulation / demonstration:
 
 5. **P76 — Target ΔV.** A crew-loadable program that integrates the LM state vector to a TIG and applies a ΔV. Needed for post-LOI rendezvous scenarios where the LM has fired independently. Straightforward to implement using the existing P30 and Kepler integration infrastructure.
 
-6. **V32 / V33 / V36 verbs.** Recycle (V32), Proceed without DSKY input (V33), and Fresh Start (V36) are low-complexity but operationally important. V33 is the non-V50 PRO equivalent that many programs use for phase advancement.
+6. **V32 / V33 / V36 verbs.** Recycle (V32), Proceed without DSKY input (V33), and Fresh Start (V36) are low-complexity but operationally important. V33 is the non-V50 PRO equivalent that many programs use for phase advancement. V36 only needs a one-line dispatch arm calling `fresh_start::fresh_start`.
 
 7. **R31 / R34 rendezvous parameter displays (V83, V85).** Crew used these heavily during the rendezvous approach to monitor CDH/TPI timing parameters. The targeting math is already implemented; these routines are primarily DSKY display wiring.
 
-8. **Noun N44 TFF and N62/N63/N64 entry displays.** Complete the entry guidance display chain (time-to-free-fall, range-to-splash, drag deceleration). The entry tests added by #96 (Sutton–Graves heating) demonstrate that the physics is already present; the display nouns just need to be connected to the entry state fields.
+8. **Entry display nouns N63 / N64 / N66 / N67 / N68.** Complete the entry guidance display chain (range-to-go, drag deceleration, roll command, cross-range). All underlying data fields (`entry.target_range_km`, `entry.sensed_acceleration_g`, `entry.roll_command_rad`, `entry.crossrange_km`, `entry.downrange_error_km`, `entry.r_dot_mps`, `entry.target_lat_rad`, `entry.target_lon_rad`) are already computed each SERVICER cycle; adding these nouns is purely wiring `noun_display` arms.
