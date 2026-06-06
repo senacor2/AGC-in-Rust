@@ -13,6 +13,7 @@ pub enum Msg {
     RcsFireCm { jets: u16 },
     RcsQuenchAll,
     SecsDeployDrogue,
+    SecsFireCsmSeparation,
     TelemetryWord { word: u16 },
     AgcHeartbeat { mission_time_cs: u32 },
     // bridge → AGC
@@ -42,6 +43,7 @@ impl Msg {
             Msg::RcsFireCm { .. } => 0x41,
             Msg::RcsQuenchAll => 0x42,
             Msg::SecsDeployDrogue => 0x43,
+            Msg::SecsFireCsmSeparation => 0x44,
             Msg::TelemetryWord { .. } => 0x4A,
             Msg::AgcHeartbeat { .. } => 0x70,
             Msg::DskyKey { .. } => 0x80,
@@ -97,6 +99,7 @@ impl Msg {
             }
             Msg::RcsQuenchAll => {}
             Msg::SecsDeployDrogue => {}
+            Msg::SecsFireCsmSeparation => {}
             Msg::TelemetryWord { word } => {
                 out[0..2].copy_from_slice(&word.to_le_bytes());
             }
@@ -198,6 +201,10 @@ impl Msg {
                 check_len(payload, 0)?;
                 Msg::SecsDeployDrogue
             }
+            0x44 => {
+                check_len(payload, 0)?;
+                Msg::SecsFireCsmSeparation
+            }
             0x4A => {
                 check_len(payload, 2)?;
                 Msg::TelemetryWord {
@@ -281,6 +288,7 @@ impl Msg {
             Msg::RcsFireCm { .. } => 2,
             Msg::RcsQuenchAll => 0,
             Msg::SecsDeployDrogue => 0,
+            Msg::SecsFireCsmSeparation => 0,
             Msg::TelemetryWord { .. } => 2,
             Msg::AgcHeartbeat { .. } => 4,
             Msg::DskyKey { .. } => 2,
