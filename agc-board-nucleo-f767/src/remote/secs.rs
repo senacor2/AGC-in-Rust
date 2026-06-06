@@ -1,4 +1,4 @@
-//! Remote SECS: drogue-deploy discrete forwarded over the link.
+//! Remote SECS: pyrotechnic discretes forwarded over the link.
 
 use agc_core::hal::secs::Secs;
 use agc_protocol::Msg;
@@ -14,6 +14,14 @@ impl Secs for RemoteSecs {
             let seq = bridge.tx_seq;
             bridge.tx_seq = bridge.tx_seq.wrapping_add(1);
             link.send(&Msg::SecsDeployDrogue, seq);
+        });
+    }
+
+    fn fire_csm_separation(&mut self) {
+        with_bridge_and_link(|link, bridge| {
+            let seq = bridge.tx_seq;
+            bridge.tx_seq = bridge.tx_seq.wrapping_add(1);
+            link.send(&Msg::SecsFireCsmSeparation, seq);
         });
     }
 }
