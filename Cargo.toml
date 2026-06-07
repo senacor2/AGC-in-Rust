@@ -1,5 +1,15 @@
 [workspace]
 members = ["agc-core", "agc-sim", "agc-test", "agc-protocol", "agc-board-nucleo-f767", "agc-imu-platform", "agc-bridge-pico"]
+# Board binary crates are excluded from the default build set because each
+# pulls in its own `critical-section` impl feature (cortex-m's
+# `critical-section-single-core` → `restore-state-u8`; rp2040-hal's
+# `critical-section-impl` → `restore-state-bool`). When both are in the same
+# build graph, Cargo unifies the features on the shared `critical-section`
+# crate and the `compile_error!` in its source fires (issue #102). Build the
+# boards with `-p agc-board-nucleo-f767 --target thumbv7em-none-eabihf` or
+# `-p agc-bridge-pico --target thumbv6m-none-eabi` (resolver v2 isolates
+# feature resolution for `-p`).
+default-members = ["agc-core", "agc-sim", "agc-test", "agc-protocol", "agc-imu-platform"]
 resolver = "2"
 
 [profile.release]
