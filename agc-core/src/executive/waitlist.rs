@@ -196,25 +196,20 @@ impl Waitlist {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::sync::atomic::{AtomicU8, Ordering};
 
-    static CALL_LOG: AtomicU8 = AtomicU8::new(0);
+    // Tests record which tasks ran in `state.flagwords[0]`, a scratch field
+    // that is per-test-local because every test constructs its own AgcState.
+    // Do NOT introduce a `static` counter here: parallel `cargo test` runs
+    // would race on it (see issue #103).
 
     fn task_f(state: &mut crate::AgcState) {
-        let _ = state;
-        CALL_LOG.fetch_add(1, Ordering::Relaxed);
+        state.flagwords[0] += 1;
     }
     fn task_g(state: &mut crate::AgcState) {
-        let _ = state;
-        CALL_LOG.fetch_add(10, Ordering::Relaxed);
+        state.flagwords[0] += 10;
     }
     fn task_h(state: &mut crate::AgcState) {
-        let _ = state;
-        CALL_LOG.fetch_add(100, Ordering::Relaxed);
-    }
-
-    fn reset_log() {
-        CALL_LOG.store(0, Ordering::Relaxed);
+        state.flagwords[0] += 100;
     }
 
     // TC-SC-1: schedule into empty list
@@ -279,20 +274,18 @@ mod tests {
     // TC-DS-1: dispatch single entry
     #[test]
     fn tc_ds_1_dispatch_single() {
-        reset_log();
         let mut wl = Waitlist::new();
         wl.schedule(50, task_f);
         let mut state = crate::AgcState::new();
         let next = wl.dispatch(&mut state);
         assert_eq!(next, None); // list empty after dispatch
         assert_eq!(wl.len(), 0);
-        assert_eq!(CALL_LOG.load(Ordering::Relaxed), 1); // task_f called
+        assert_eq!(state.flagwords[0], 1); // task_f called
     }
 
     // TC-DS-2: dispatch with follow-on task
     #[test]
     fn tc_ds_2_dispatch_with_followon() {
-        reset_log();
         let mut wl = Waitlist::new();
         wl.schedule(50, task_f);
         wl.schedule(150, task_g); // deltas: [50, 100]
@@ -300,7 +293,7 @@ mod tests {
         let next = wl.dispatch(&mut state);
         assert_eq!(next, Some(100)); // g's delta for TIME3 reload
         assert_eq!(wl.len(), 1);
-        assert_eq!(CALL_LOG.load(Ordering::Relaxed), 1); // task_f called
+        assert_eq!(state.flagwords[0], 1); // task_f called, task_g still pending
     }
 
     // TC-DS-3: dispatch on empty list
