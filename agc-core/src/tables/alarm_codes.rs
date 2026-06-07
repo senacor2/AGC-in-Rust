@@ -26,3 +26,23 @@ pub const INVALID_ORBIT: u16 = 0o404;
 /// overran). Mission Control is expected to send RSET before retrying.
 /// AGC convention: octal 1106.
 pub const UPLINK_TOO_FAST: u16 = 0o1106;
+
+// ── P22 (Orbital Navigation / Landmark Tracking) ──────────────────────────────
+//
+// AGC source: alarms raised by the P22 measurement-incorporation pipeline.
+// p20/p21/p23 still define local duplicates of FRAME_MISMATCH and NO_CSM_SV
+// pending a follow-up sweep — see PR #114 description.
+
+/// CSM state-vector frame is not a navigation frame (only `StableMember`
+/// triggers this; both ECI and MCI are valid for landmark tracking).
+pub const FRAME_MISMATCH: u16 = 0o00400;
+/// No valid CSM state vector (epoch == 0). Raised at P22 init.
+pub const NO_CSM_SV: u16 = 0o01420;
+/// P22 W-matrix diagonal went negative (loss of positive definiteness).
+pub const CSM_W_OVERFLOW: u16 = 0o01421;
+/// Five consecutive landmark marks rejected by the 3-sigma gate (P22).
+pub const LANDMARK_REJECT: u16 = 0o01422;
+/// Landmark index out of range (0 or > 8) supplied to P22.
+pub const BAD_LANDMARK_INDEX: u16 = 0o01424;
+/// CSM-to-landmark slant range below the safety floor (P22).
+pub const LANDMARK_RANGE_ZERO: u16 = 0o01425;
