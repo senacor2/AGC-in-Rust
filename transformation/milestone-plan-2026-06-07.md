@@ -119,6 +119,19 @@ These are ❌ rows in the status report, but each one breaks the Apollo-8 narrat
 - Work: a `services/alarm.rs:poodoo()` that aborts the active program, raises 1410-class alarm, schedules `fresh_start::partial_restart` and goes to P00; `gotopooh()` is the milder variant.
 - Acceptance: unit test — induced alarm in P22 ends in P00 with restart group consistent with the restart spec.
 
+### M-B.6 N08 alarm data and N09 alarm codes — diagnostic nouns
+- Status-report rows: N08 ❌, N09 ❌ (§5). Both are octal-display diagnostic nouns crewed via `V05N08` / `V05N09` (and `V16` for snapshot).
+- Together with M-B.5 these are the crew-visible side of the alarm chain. Apollo 8 saw real PROG alarms in cislunar; without N09 the crew cannot read out which codes fired, and without N08 ground cannot tell *where* the alarm was raised.
+- Work:
+  1. **`AlarmState` extension.** Today `services/alarm.rs` keeps `code` (most recent) and `code2` (previous). Add a third slot `code1` ("first" / oldest in the FIFO window) and shift on `raise`. Add `adres: u16` (call-site / module id), `bbank: u16` (kept 0 in this port — there are no banks; reserved for fidelity), and `ercount: u16` (alarm/restart counter, incremented by both `raise` and `services::fresh_start::restart`).
+  2. **N09 display arm.** Add `noun_display` arm returning `(code1, code2, code)` as three octal registers (all-octal noun, no scaling).
+  3. **N08 display arm.** Add `noun_display` arm returning `(adres, bbank, ercount)` as three octal registers.
+  4. **Capture call-site at raise time.** Extend `AlarmState::raise(code, adres)` so each call passes a small `u16` site tag (one tag per program/service that raises alarms — e.g. `P22_MEAS`, `P40_BURN`, `AVG_G`, `UPLINK`). Tags live alongside the existing alarm-code constants in `tables/alarm_codes.rs` (per `feedback_alarm_codes.md`).
+- Acceptance:
+  - Unit test on `AlarmState`: three successive `raise` calls leave `code1`, `code2`, `code` populated with the oldest, middle, newest values and `ercount == 3`.
+  - DSKY scenario: induce an `EXEC_OVERFLOW` (1202), then key `V05N09` — R1/R2/R3 show `00000 / 00000 / 01202` (octal). Issue a second alarm → R3 shows the new code, R2 shows 1202, R1 still 00000.
+  - DSKY scenario: induce an alarm from inside P22, key `V05N08` — `adres` shows the P22 site tag, `ercount` matches the alarm/restart count.
+
 ---
 
 ## 5. Milestone C — Fidelity, hardening, validation
@@ -194,7 +207,7 @@ The current branch `feature/62-sm-sep-pyro` (M-A.1) is already in progress and s
 3. **M-D** lights wiring — independent of A.2/A.3 and immediately user-visible in agc-sim demos; can run in parallel.
 4. **M-A.4** + **M-A.5** R30/N44 TFF and N43.
 5. **M-B.1** P70 TLI targeting — the largest narrative gap.
-6. **M-B.2–B.5** in parallel; small.
+6. **M-B.2–B.5** in parallel; small. **M-B.6** (N08/N09) ships together with — or right after — M-B.5: the AlarmState extension is shared, and the crew-visible alarm read-out only makes sense once POODOO/GOTOPOOH is in place.
 7. **M-C** in priority order (KALCMANU first, then downlink format, then P02 loop).
 
 ---

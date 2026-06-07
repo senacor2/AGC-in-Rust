@@ -270,6 +270,9 @@ pub fn run_entry_phase_scenario(
             Key::Entr,
         ])
         .expect_major_mode(62)
+        // P62 must have staged the SECS CM/SM separation pyro discrete
+        // and the do_tick pump must have consumed the flag exactly once.
+        .expect_csm_separation_fire_count(1)
         .keys(&[
             Key::Verb,
             Key::Digit(3),
@@ -280,6 +283,9 @@ pub fn run_entry_phase_scenario(
             Key::Entr,
         ])
         .expect_major_mode(63)
+        // After advancing to P63 the SECS pyro count must still be 1 —
+        // the staging flag is one-shot, not re-armed by P63.
+        .expect_csm_separation_fire_count(1)
         .build();
     run_scenario(&phase1, state, hw);
 
