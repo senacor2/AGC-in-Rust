@@ -49,10 +49,11 @@ typically during the coast phase.
 ### 1.2 P22 — Orbital Navigation (Landmark Tracking)
 
 P22 is the **navigation counterpart of P20** but for the CSM's own state vector (not the
-target's). Instead of radar marks on the LM, it uses **sextant sightings of Earth
-landmarks** at known Earth-fixed positions. Each sighting constrains the CSM's inertial
-position and, after sufficient marks from different landmarks or different orbital
-positions, converges the CSM state vector to improved accuracy.
+target's). Instead of radar marks on the LM, it uses **sextant sightings of surface
+landmarks** at known body-fixed positions — Earth landmarks while the CSM frame is
+`EarthInertial`, lunar landmarks while it is `MoonInertial`. Each sighting constrains
+the CSM's inertial position and, after sufficient marks from different landmarks or
+different orbital positions, converges the CSM state vector to improved accuracy.
 
 The measurement model and scalar Kalman filter algorithm are **identical to those in P20**.
 The difference is that the sensitivity vector `b` is computed with respect to the **CSM
@@ -206,32 +207,45 @@ placement; P21 and P22 implementations access it as `state.gha_epoch_rad` or
 pub const OMEGA_EARTH: f64 = 7.292_115_085_5e-5; // rad/s
 ```
 
-### 3.4 Landmark table
+### 3.4 Landmark tables
 
-P22 requires a table of known Earth landmarks, each identified by an index keyed by the
-crew when initiating a sighting. The landmark entry provides the Earth-fixed Cartesian
-position (or equivalently, geocentric lat/lon/alt). This table is a compile-time constant
-array in `programs/p22.rs` for the Rust port (the original AGC stored it in fixed memory
-and allowed partial ground-uplinking; uplink support is deferred):
+P22 requires a table of known landmarks, each identified by an index keyed by the
+crew when initiating a sighting. The landmark entry provides body-fixed Cartesian
+coordinates (or equivalently, lat/lon/alt in the body-fixed frame). Two tables live
+in `programs/p22.rs` for the Rust port; the original AGC stored Earth landmarks in
+fixed memory and allowed partial ground-uplinking, and selenographic lunar landmarks
+came in entirely via uplink (uplink support for either table is deferred):
 
 ```rust
-/// A single landmark entry: Earth-fixed geodetic coordinates.
+/// A single landmark entry. Body-agnostic: the lat/lon/alt are interpreted in
+/// the body-fixed frame of whichever table the entry belongs to.
 #[derive(Clone, Copy, Debug)]
 pub struct LandmarkEntry {
-    /// Geocentric latitude (rad).  Positive north.
+    /// Body-fixed latitude (rad). Positive north.
     pub lat_rad: f64,
-    /// Longitude east of the IERS reference meridian (rad).
+    /// Body-fixed longitude (rad). Positive east of the reference meridian
+    /// (IERS for Earth, IAU prime for the Moon).
     pub lon_rad: f64,
-    /// Altitude above the spherical Earth surface (m).
+    /// Altitude above the body's spherical reference radius (m).
     pub alt_m: f64,
 }
 
-/// Pre-loaded landmark table.  Index 0 is unused (landmarks are 1-indexed on the DSKY).
-/// The table is fixed at compile time; uplink support is a future extension.
-pub const LANDMARK_TABLE: [LandmarkEntry; 9] = [ /* see §9 for test values */ ... ];
+/// Earth landmark table (geocentric, IERS meridian, sphere of radius `R_EARTH`).
+/// Used when `csm_state.frame == EarthInertial`.
+pub const LANDMARK_TABLE: [LandmarkEntry; 9] = [ /* §9 fixtures */ ... ];
+
+/// Lunar landmark table (selenographic, IAU prime meridian, sphere of radius
+/// `R_MOON_M`). Used when `csm_state.frame == MoonInertial`. The Moon-fixed →
+/// MCI rotation is applied at sighting time via `lunar_landmark_inertial_at`
+/// (IAU 2015 libration model, #56).
+pub const LUNAR_LANDMARK_TABLE: [LandmarkEntry; 9] = [ /* §9 fixtures */ ... ];
 ```
 
-The size (8 landmarks + 1 unused slot) matches the original Comanche055 allocation.
+Both tables are 1-indexed (slot 0 is an unused sentinel) for parity with the DSKY
+landmark-index entry convention. The size (8 entries + 1 unused slot) matches the
+original Comanche055 Earth-table allocation; the lunar table is a Rust-port
+addition and includes the Apollo 8 crew-coined landmarks (Mount Marilyn, Boot
+Hill, Sidewinder Rille) alongside IAU/USGS gazetteer entries.
 
 ---
 
@@ -386,13 +400,15 @@ pub fn p22_cycle_task(state: &mut AgcState)
 /// component from the sextant.
 ///
 /// # Arguments
-/// - `mark`: decoded sextant observation of an Earth landmark (see §5).
+/// - `mark`: decoded sextant observation of a landmark (Earth or lunar; see §5).
 ///
 /// # Preconditions
 /// - `state.csm_nav.tracking_active == true`.  If false, the mark is silently
 ///   discarded (consistent with P20 behaviour when `tracking_active == false`).
-/// - `mark.landmark_inertial` must have been populated by `landmark_inertial_pos`
-///   before this function is called (the caller converts Earth-fixed to inertial).
+/// - `mark.landmark_inertial` must have been populated by the caller using the
+///   table-appropriate helper before this call: `landmark_inertial_pos` for
+///   Earth landmarks (Earth-fixed → ECI via GHA), `lunar_landmark_inertial_at`
+///   for lunar landmarks (Moon-fixed → MCI via the IAU 2015 libration rotation).
 ///
 /// # Post-conditions (mark accepted)
 /// - `state.csm_state.pos` and `state.csm_state.vel` updated by the Kalman gain.
@@ -491,13 +507,16 @@ pub const MIN_LANDMARK_RANGE_M: f64 = 1_000.0; // safety floor only; in practice
 ### 5.1 `LandmarkMark` (P22 only)
 
 ```rust
-/// A single sextant sighting of an Earth landmark, decoded by the sextant HAL handler.
+/// A single sextant sighting of a landmark, decoded by the sextant HAL handler.
 ///
 /// The sextant handler converts shaft and trunnion CDU angles into a body-frame LOS
-/// unit vector; the IMU REFSMMAT then rotates this to the inertial frame.  The
-/// landmark's Earth-fixed coordinates are looked up from `LANDMARK_TABLE` using
-/// `landmark_index`, and `landmark_inertial_pos` is called to compute the landmark's
-/// inertial position at `time`.  Both results are packaged into this struct before
+/// unit vector; the IMU REFSMMAT then rotates this to the inertial frame. The
+/// landmark's body-fixed coordinates are looked up from the table appropriate to
+/// `csm_state.frame` (`LANDMARK_TABLE` for ECI, `LUNAR_LANDMARK_TABLE` for MCI)
+/// using `landmark_index`, and either `landmark_inertial_pos` (Earth, GHA
+/// rotation) or `lunar_landmark_inertial_at` (Moon, IAU 2015 libration
+/// rotation) is called to compute the landmark's inertial position at `time`.
+/// Both results are packaged into this struct before
 /// `p22_incorporate_landmark_mark` is called.
 ///
 /// Structurally similar to `SextantMark` (P20) but carries the landmark reference
@@ -511,14 +530,16 @@ pub struct LandmarkMark {
     /// Index into `LANDMARK_TABLE` (1-indexed; 0 is invalid).
     pub landmark_index: u8,
 
-    /// Inertial position of the landmark at `time` (m, ECI).
-    /// Pre-computed by `landmark_inertial_pos` before this struct is delivered
-    /// to `p22_incorporate_landmark_mark`.
+    /// Inertial position of the landmark at `time` (m), in the active inertial
+    /// frame (ECI for Earth landmarks, MCI for lunar landmarks). Pre-computed
+    /// by the caller (via `landmark_inertial_pos` or `lunar_landmark_inertial_at`)
+    /// before this struct is delivered to `p22_incorporate_landmark_mark`.
     pub landmark_inertial: Vec3,
 
-    /// LOS unit vector from the CSM to the landmark, in the **inertial frame** (ECI).
-    /// Magnitude must be 1.0 ± 1e-6.
-    /// Derived from the sextant shaft/trunnion angles rotated by REFSMMAT.
+    /// LOS unit vector from the CSM to the landmark, in the active inertial
+    /// frame (ECI for Earth landmarks, MCI for lunar landmarks). Magnitude must
+    /// be 1.0 ± 1e-6. Derived from the sextant shaft/trunnion angles rotated
+    /// by REFSMMAT.
     pub los_inertial: Vec3,
 
     /// Which scalar component of the LOS unit vector is the observation for this mark.
@@ -809,7 +830,7 @@ within the same session implicitly reference the same landmark until the crew ch
 | (h) W-matrix Δt > 3600 s | `p22_cycle_task` | Cap Δt; call `p22_rectify_w_matrix`. Same as P20 §7 / edge case (g). |
 | (i) Multiple marks on the same landmark in rapid succession (< 1 s apart) | `p22_incorporate_landmark_mark` | Each mark is processed independently. Consecutive marks from the same landmark provide redundant (but not independent) constraints; the filter will still accept them. No duplicate-detection logic is required; the 3-sigma gate provides adequate protection. |
 | (j) Landmark behind the Earth (below horizon) | Caller responsibility | `p22_incorporate_landmark_mark` does not check visibility; it is the sextant HAL's responsibility to flag invalid sightings before delivering a mark. If a mark does arrive for an invisible landmark the residual will be large and the 3-sigma gate will reject it. |
-| (k) SOI transition (ECI ↔ MCI frame change) | `p22_cycle_task`, `p22_incorporate_landmark_mark` | P22 checks `state.csm_state.frame` at the top of each cycle. If the frame is MCI, landmark positions must be expressed in MCI; `landmark_inertial_pos` uses ECI coordinates only. Raise alarm 00400 (frame mismatch) and set `tracking_active = false` if frame is not ECI. Lunar-orbit landmark tracking is out of scope for this phase. |
+| (k) CSM state-vector frame | `p22_init`, `p22_cycle_task`, `p22_incorporate_landmark_mark` | P22 accepts both `EarthInertial` (ECI) and `MoonInertial` (MCI). ECI uses `LANDMARK_TABLE` + `landmark_inertial_pos` (GHA-rotated Earth landmarks); MCI uses `LUNAR_LANDMARK_TABLE` + `lunar_landmark_inertial_at` (Moon-fixed → MCI through the IAU 2015 libration rotation, #56). The caller selects the table when constructing the `LandmarkMark`; `p22_incorporate_landmark_mark` itself is frame-agnostic — it operates on the pre-computed inertial position. Only `Frame::StableMember` is rejected: raise alarm 00400 (`FRAME_MISMATCH`) and set `tracking_active = false`. SOI crossings while P22 is active leave the W-matrix in the old frame (not retagged); a follow-up issue tracks frame-tagging the covariance. |
 
 ---
 

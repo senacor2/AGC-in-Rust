@@ -24,13 +24,18 @@
 
 use crate::executive::job::JobPriority;
 use crate::executive::waitlist::ScheduleResult;
-use crate::math::linalg::{norm, unit};
+use crate::math::linalg::{mxv, norm, unit};
 use crate::navigation::kalman::UpdateOutcome;
+use crate::navigation::lunar_libration::moon_fixed_to_inertial;
 use crate::navigation::state_vector::{earth_fixed_to_inertial, Frame};
 use crate::navigation::time::OMEGA_EARTH;
 use crate::programs::p20::LosComponent;
 use crate::programs::p21::{p21_compute_ground_track, R_EARTH};
-use crate::types::Vec3;
+use crate::tables::alarm_codes::{
+    BAD_LANDMARK_INDEX, CSM_W_OVERFLOW, FRAME_MISMATCH, LANDMARK_RANGE_ZERO, LANDMARK_REJECT,
+    NO_CSM_SV, WAITLIST_OVERFLOW,
+};
+use crate::types::{Met, Vec3};
 use crate::AgcState;
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -81,34 +86,6 @@ pub const MIN_LANDMARK_RANGE_M: f64 = 1_000.0;
 /// Maximum Δt for process-noise growth before W-matrix re-initialisation (s).
 /// Cap at 3600 s; same as P20.
 const MAX_PROCESS_NOISE_DT_S: f64 = 3600.0;
-
-// ── Alarm codes ─────────────────────────────────────────────────────────────────
-
-/// Alarm 01420 (octal): no valid CSM state vector (epoch == 0).
-const ALARM_NO_CSM_SV: u16 = 0o01420;
-
-/// Alarm 01421 (octal): W-matrix diagonal entry went negative (loss of positive definiteness).
-const ALARM_CSM_W_OVERFLOW: u16 = 0o01421;
-
-/// Alarm 01422 (octal): five consecutive landmark marks rejected by 3-sigma gate.
-const ALARM_LANDMARK_REJECT: u16 = 0o01422;
-
-/// Alarm 01424 (octal): landmark index out of range (0 or > 8).
-const ALARM_BAD_LANDMARK_INDEX: u16 = 0o01424;
-
-/// Alarm 01425 (octal): CSM-to-landmark range below MIN_LANDMARK_RANGE_M.
-const ALARM_LANDMARK_RANGE_ZERO: u16 = 0o01425;
-
-/// Alarm 00400 (octal): CSM state vector frame is not supported by P22 (not ECI or MCI).
-///
-/// Raised when `csm_state.frame == Frame::StableMember`, which is an invalid
-/// navigation state.  EarthInertial (ECI) and MoonInertial (MCI) are both
-/// supported: ECI enables Earth landmark tracking, MCI enables lunar landmark
-/// tracking via the [`agc_core::navigation::landmarks`] table.
-const ALARM_FRAME_MISMATCH: u16 = 0o00400;
-
-/// Alarm 1211: Waitlist full (standard AGC waitlist-overflow alarm).
-const ALARM_WAITLIST_FULL: u16 = 1211;
 
 // ── Navigation state ───────────────────────────────────────────────────────────
 
@@ -207,19 +184,38 @@ pub struct LandmarkMark {
     pub component: LosComponent,
 }
 
-// ── Landmark table ─────────────────────────────────────────────────────────────
+// ── Landmark tables ────────────────────────────────────────────────────────────
 
-/// A single landmark entry: Earth-fixed geodetic coordinates.
+/// A single landmark entry.
+///
+/// Body-agnostic: the latitude/longitude are interpreted in the body-fixed frame
+/// of whichever table the entry belongs to (geocentric for `LANDMARK_TABLE`,
+/// selenographic for `LUNAR_LANDMARK_TABLE`). `alt_m` is height above the body's
+/// spherical reference radius.
 ///
 /// Spec: p21_p22-spec.md §3.4
 #[derive(Clone, Copy, Debug)]
 pub struct LandmarkEntry {
-    /// Geocentric latitude (rad). Positive north.
+    /// Body-fixed latitude (rad). Positive north.
     pub lat_rad: f64,
-    /// Longitude east of the IERS reference meridian (rad).
+    /// Body-fixed longitude (rad). Positive east of the reference meridian
+    /// (IERS for Earth, IAU prime for the Moon).
     pub lon_rad: f64,
-    /// Altitude above the spherical Earth surface (m).
+    /// Altitude above the body's spherical reference radius (m).
     pub alt_m: f64,
+}
+
+impl LandmarkEntry {
+    /// Construct from degrees; evaluated at compile time via inline arithmetic.
+    /// Convenient for the lunar table whose canonical coordinates come from the
+    /// IAU/USGS lunar gazetteer in degrees.
+    pub const fn from_deg(lat_deg: f64, lon_deg: f64, alt_m: f64) -> Self {
+        Self {
+            lat_rad: lat_deg * core::f64::consts::PI / 180.0,
+            lon_rad: lon_deg * core::f64::consts::PI / 180.0,
+            alt_m,
+        }
+    }
 }
 
 /// Pre-loaded landmark table. Index 0 is unused (landmarks are 1-indexed on the DSKY).
@@ -295,6 +291,73 @@ pub const LANDMARK_TABLE: [LandmarkEntry; 9] = [
     },
 ];
 
+/// Mean lunar radius (m).
+///
+/// IAU 2015 value: 1,737.4 km. Used to convert selenographic (lat, lon, alt)
+/// into Moon-fixed Cartesian coordinates for the lunar landmark table.
+pub const R_MOON_M: f64 = 1_737_400.0;
+
+/// Pre-loaded lunar landmark table. Index 0 is unused (landmarks are 1-indexed
+/// on the DSKY, parallel to the Earth `LANDMARK_TABLE`).
+///
+/// Coordinates are selenographic (Moon-fixed): latitude positive north,
+/// longitude positive east of the IAU prime meridian. Sources are the
+/// IAU/USGS Lunar Gazetteer of Planetary Nomenclature and the NASSP Apollo
+/// scenario landmark tables; the Apollo 8 crew-coined nicknames (Mount
+/// Marilyn / Boot Hill / Sidewinder Rille) come from NASSP.
+///
+/// AGC source: the real rope loaded selenographic landmarks via uplink rather
+/// than a fixed ROM table; this compile-time constant is a Rust-port choice
+/// for parity with `LANDMARK_TABLE`.
+pub const LUNAR_LANDMARK_TABLE: [LandmarkEntry; 9] = [
+    // Index 0 — unused (DSKY is 1-indexed, parity with Earth table).
+    LandmarkEntry {
+        lat_rad: 0.0,
+        lon_rad: 0.0,
+        alt_m: 0.0,
+    },
+    // Index 1 — Tycho crater.                  IAU/USGS: −43.31°, −11.36°.
+    LandmarkEntry::from_deg(-43.31, -11.36, 0.0),
+    // Index 2 — Copernicus crater.             IAU/USGS:  +9.62°, −20.08°.
+    LandmarkEntry::from_deg(9.62, -20.08, 0.0),
+    // Index 3 — Censorinus crater.             IAU/USGS:  −0.40°, +32.69°.
+    LandmarkEntry::from_deg(-0.40, 32.69, 0.0),
+    // Index 4 — Maskelyne F ("Wash Basin").    IAU; NASSP scenario landmark.
+    LandmarkEntry::from_deg(1.40, 35.05, 0.0),
+    // Index 5 — Mount Marilyn (Apollo 8 crew). NASSP Apollo 8 scenario.
+    LandmarkEntry::from_deg(1.23, 40.01, 0.0),
+    // Index 6 — Boot Hill (Apollo 8 crew).     NASSP Apollo 8 scenario.
+    LandmarkEntry::from_deg(0.59, 30.25, 0.0),
+    // Index 7 — Sidewinder Rille (Apollo 8).   NASSP Apollo 8 scenario.
+    LandmarkEntry::from_deg(0.05, 28.08, 0.0),
+    // Index 8 — Aristarchus crater.            IAU/USGS: +23.70°, −47.50°.
+    LandmarkEntry::from_deg(23.70, -47.50, 0.0),
+];
+
+/// Convert a lunar landmark entry to its Moon-fixed Cartesian (selenographic
+/// spherical → Cartesian, no orientation change). Units: metres.
+#[inline]
+fn lunar_landmark_body_fixed(entry: &LandmarkEntry) -> Vec3 {
+    let r = R_MOON_M + entry.alt_m;
+    let cos_lat = libm::cos(entry.lat_rad);
+    let sin_lat = libm::sin(entry.lat_rad);
+    let cos_lon = libm::cos(entry.lon_rad);
+    let sin_lon = libm::sin(entry.lon_rad);
+    [r * cos_lat * cos_lon, r * cos_lat * sin_lon, r * sin_lat]
+}
+
+/// Inertial (MCI) position of a lunar landmark at the given epoch, with the
+/// IAU 2015 lunar libration model applied (#56).
+///
+/// Both the simulator's sextant-truth path (in `agc-sim`) and any AGC-side
+/// landmark predictor should go through this single function, so the
+/// libration treatment is consistent across the closed loop.
+pub fn lunar_landmark_inertial_at(entry: &LandmarkEntry, epoch: Met) -> Vec3 {
+    let r_body = lunar_landmark_body_fixed(entry);
+    let m_b2i = moon_fixed_to_inertial(epoch);
+    mxv(m_b2i, r_body)
+}
+
 // ── Entry point ────────────────────────────────────────────────────────────────
 
 /// Entry point for P22 (Orbital Navigation / Landmark Tracking).
@@ -331,7 +394,7 @@ pub fn p22_init(state: &mut AgcState) -> JobPriority {
     match state.csm_state.frame {
         Frame::EarthInertial | Frame::MoonInertial => {}
         Frame::StableMember => {
-            state.alarm.code = ALARM_FRAME_MISMATCH;
+            state.alarm.code = FRAME_MISMATCH;
             state.alarm.lit = true;
             state.csm_nav.tracking_active = false;
             return P22_PRIORITY;
@@ -340,7 +403,7 @@ pub fn p22_init(state: &mut AgcState) -> JobPriority {
 
     // Precondition: non-zero CSM epoch (sanity check for initialised state vector).
     if state.csm_state.epoch.to_seconds() == 0.0 {
-        state.alarm.code = ALARM_NO_CSM_SV;
+        state.alarm.code = NO_CSM_SV;
         state.alarm.lit = true;
         state.csm_nav.tracking_active = false;
         return P22_PRIORITY;
@@ -362,7 +425,7 @@ pub fn p22_init(state: &mut AgcState) -> JobPriority {
 
     // Install the periodic nav-cycle hook via the Waitlist.
     if state.waitlist.schedule(P22_CYCLE_CS_U16, p22_cycle_task) == ScheduleResult::Full {
-        state.alarm.code = ALARM_WAITLIST_FULL;
+        state.alarm.code = WAITLIST_OVERFLOW;
         state.alarm.lit = true;
     }
 
@@ -396,7 +459,7 @@ pub fn p22_cycle_task(state: &mut AgcState) {
     match state.csm_state.frame {
         Frame::EarthInertial | Frame::MoonInertial => {}
         Frame::StableMember => {
-            state.alarm.code = ALARM_FRAME_MISMATCH;
+            state.alarm.code = FRAME_MISMATCH;
             state.alarm.lit = true;
             state.csm_nav.tracking_active = false;
             reschedule_if_active(state);
@@ -455,7 +518,7 @@ pub fn p22_incorporate_landmark_mark(state: &mut AgcState, mark: LandmarkMark) {
 
     // Edge case (g): landmark index out of range.
     if mark.landmark_index == 0 || mark.landmark_index > 8 {
-        state.alarm.code = ALARM_BAD_LANDMARK_INDEX;
+        state.alarm.code = BAD_LANDMARK_INDEX;
         state.alarm.lit = true;
         return;
     }
@@ -473,7 +536,7 @@ pub fn p22_incorporate_landmark_mark(state: &mut AgcState, mark: LandmarkMark) {
 
     // Edge case: range too small (safety floor).
     if rng < MIN_LANDMARK_RANGE_M {
-        state.alarm.code = ALARM_LANDMARK_RANGE_ZERO;
+        state.alarm.code = LANDMARK_RANGE_ZERO;
         state.alarm.lit = true;
         return;
     }
@@ -632,7 +695,7 @@ fn p22_scalar_update(
     }
 
     if outcome == UpdateOutcome::AcceptedWOverflow {
-        state.alarm.code = ALARM_CSM_W_OVERFLOW;
+        state.alarm.code = CSM_W_OVERFLOW;
         state.alarm.lit = true;
         p22_rectify_w_matrix(state);
         return UpdateOutcome::Accepted;
@@ -649,7 +712,7 @@ fn p22_scalar_update(
 /// Spec: p21_p22-spec.md §8.2; edge case (f)
 fn check_consecutive_rejects(state: &mut AgcState) {
     if state.csm_nav.consecutive_reject_count >= 5 {
-        state.alarm.code = ALARM_LANDMARK_REJECT;
+        state.alarm.code = LANDMARK_REJECT;
         state.alarm.lit = true;
         state.csm_nav.tracking_active = false;
     }
@@ -661,7 +724,7 @@ fn reschedule_if_active(state: &mut AgcState) {
         return;
     }
     if state.waitlist.schedule(P22_CYCLE_CS_U16, p22_cycle_task) == ScheduleResult::Full {
-        state.alarm.code = ALARM_WAITLIST_FULL;
+        state.alarm.code = WAITLIST_OVERFLOW;
         state.alarm.lit = true;
     }
 }
@@ -831,7 +894,7 @@ mod tests {
     #[test]
     fn tc_p22_3_perfect_mark_reduces_w_no_position_change() {
         // CSM at (7_000_000, 0, 0) — 629 km altitude on X-axis.
-        // Epoch must be non-zero so p22_init does not raise ALARM_NO_CSM_SV.
+        // Epoch must be non-zero so p22_init does not raise NO_CSM_SV.
         // Set gha_epoch_rad = -OMEGA_EARTH * 1000 so the GHA at GET=1000 is
         // exactly zero, keeping the nadir landmark aligned with the +X axis.
         let mut state = make_state_with_csm_at([7_000_000.0, 0.0, 0.0], [0.0, 7500.0, 0.0], 1000.0);
@@ -893,7 +956,7 @@ mod tests {
     #[test]
     fn tc_p22_4_nonzero_residual_updates_state() {
         // CSM estimated position has a 500 m Y-error (true CSM would be at [7_000_000, 0, 0]).
-        // Epoch must be non-zero so p22_init does not raise ALARM_NO_CSM_SV.
+        // Epoch must be non-zero so p22_init does not raise NO_CSM_SV.
         let mut state =
             make_state_with_csm_at([7_000_000.0, 500.0, 0.0], [0.0, 7500.0, 0.0], 1000.0);
         p22_init(&mut state);
@@ -941,7 +1004,7 @@ mod tests {
     #[test]
     fn tc_p22_5_outlier_mark_rejected() {
         // Same geometry as TC-P22-3: CSM at (7_000_000, 0, 0), nadir landmark.
-        // Epoch must be non-zero so p22_init does not raise ALARM_NO_CSM_SV.
+        // Epoch must be non-zero so p22_init does not raise NO_CSM_SV.
         let mut state = make_state_with_csm_at([7_000_000.0, 0.0, 0.0], [0.0, 7500.0, 0.0], 1000.0);
         p22_init(&mut state);
 
@@ -997,7 +1060,7 @@ mod tests {
     /// to 5, raise alarm 01422, and set tracking_active = false.
     #[test]
     fn tc_p22_6_five_rejects_alarm_01422() {
-        // Epoch must be non-zero so p22_init does not raise ALARM_NO_CSM_SV.
+        // Epoch must be non-zero so p22_init does not raise NO_CSM_SV.
         let mut state = make_state_with_csm_at([7_000_000.0, 0.0, 0.0], [0.0, 7500.0, 0.0], 1000.0);
         p22_init(&mut state);
 
@@ -1026,7 +1089,7 @@ mod tests {
         );
         assert_eq!(state.csm_nav.reject_count, 5, "reject_count must be 5");
         assert_eq!(
-            state.alarm.code, ALARM_LANDMARK_REJECT,
+            state.alarm.code, LANDMARK_REJECT,
             "alarm code must be 01422"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");
@@ -1180,5 +1243,102 @@ mod tests {
                 .unwrap_or(false)
         });
         assert!(found, "p22_cycle_task must be re-scheduled in the Waitlist");
+    }
+
+    // ── TC-LLM-*: lunar landmark table sanity checks ─────────────────────────
+    //
+    // The Apollo 8 crew named indices 5/6/7 (Mount Marilyn, Boot Hill,
+    // Sidewinder Rille); the others are IAU/USGS gazetteer entries. Tests
+    // assert structure and table-level invariants, not the names — the
+    // `LandmarkEntry` struct itself is name-less.
+
+    /// TC-LLM-1: the lunar table is 9 entries (index 0 sentinel + 1..=8 real).
+    #[test]
+    fn tc_llm_1_table_length_is_9() {
+        assert_eq!(LUNAR_LANDMARK_TABLE.len(), 9);
+    }
+
+    /// TC-LLM-2: index 0 is the unused sentinel — all coordinates 0.
+    #[test]
+    fn tc_llm_2_index_zero_is_zero() {
+        let entry = &LUNAR_LANDMARK_TABLE[0];
+        assert_eq!(entry.lat_rad, 0.0, "lunar index 0 lat_rad must be 0");
+        assert_eq!(entry.lon_rad, 0.0, "lunar index 0 lon_rad must be 0");
+        assert_eq!(entry.alt_m, 0.0, "lunar index 0 alt_m must be 0");
+    }
+
+    /// TC-LLM-3: every named entry has finite, in-range coordinates.
+    #[test]
+    fn tc_llm_3_entries_have_finite_coords() {
+        use core::f64::consts::PI;
+        for (i, entry) in LUNAR_LANDMARK_TABLE.iter().enumerate().skip(1).take(8) {
+            assert!(entry.lat_rad.is_finite(), "lunar index {i} lat_rad not finite");
+            assert!(entry.lon_rad.is_finite(), "lunar index {i} lon_rad not finite");
+            assert!(entry.alt_m.is_finite(), "lunar index {i} alt_m not finite");
+            assert!(
+                entry.lat_rad.abs() <= PI / 2.0,
+                "lunar index {i} lat_rad = {} exceeds PI/2",
+                entry.lat_rad
+            );
+            assert!(
+                entry.lon_rad.abs() <= PI,
+                "lunar index {i} lon_rad = {} exceeds PI",
+                entry.lon_rad
+            );
+        }
+    }
+
+    /// TC-LLM-4: spot-checks on well-known landmarks pin coordinates by index
+    /// (not by name — the entry has no name field). Bounds are loose (~3°) to
+    /// catch sign errors / wrong hemispheres without being brittle to small
+    /// source revisions.
+    ///
+    /// - index 1 (Tycho):         lat_rad ∈ (-0.78, -0.74)  ≈ -45° to -42°
+    /// - index 2 (Copernicus):    lon_rad ∈ (-0.36, -0.34)  ≈ -21° to -19°
+    /// - index 5 (Mount Marilyn): lat_rad ∈ ( 0.02,  0.03)  ≈ +1.1° to +1.7°
+    #[test]
+    fn tc_llm_4_spot_check_coordinates() {
+        let tycho = &LUNAR_LANDMARK_TABLE[1];
+        assert!(
+            tycho.lat_rad > -0.78 && tycho.lat_rad < -0.74,
+            "Tycho (index 1) lat_rad = {} not in (-0.78, -0.74)",
+            tycho.lat_rad
+        );
+
+        let copernicus = &LUNAR_LANDMARK_TABLE[2];
+        assert!(
+            copernicus.lon_rad > -0.36 && copernicus.lon_rad < -0.34,
+            "Copernicus (index 2) lon_rad = {} not in (-0.36, -0.34)",
+            copernicus.lon_rad
+        );
+
+        let marilyn = &LUNAR_LANDMARK_TABLE[5];
+        assert!(
+            marilyn.lat_rad > 0.02 && marilyn.lat_rad < 0.03,
+            "Mount Marilyn (index 5) lat_rad = {} not in (0.02, 0.03)",
+            marilyn.lat_rad
+        );
+    }
+
+    /// TC-LLM-5: the libration rotation actually fires when computing the
+    /// inertial position of a real landmark. Compares the naive body-fixed
+    /// vector against the librated inertial vector at an Apollo-era epoch
+    /// and demands a non-trivial offset (#56). Bound is intentionally wide;
+    /// the precise magnitude is the libration model's concern.
+    #[test]
+    fn tc_llm_5_libration_offset_is_meaningful() {
+        let marilyn = &LUNAR_LANDMARK_TABLE[5];
+        let naive = lunar_landmark_body_fixed(marilyn);
+        let with_libration = lunar_landmark_inertial_at(marilyn, Met(0));
+        let dx = with_libration[0] - naive[0];
+        let dy = with_libration[1] - naive[1];
+        let dz = with_libration[2] - naive[2];
+        let bias_km = libm::sqrt(dx * dx + dy * dy + dz * dz) / 1_000.0;
+        assert!(
+            (50.0..=2_000.0).contains(&bias_km),
+            "TC-LLM-5: libration bias on Mount Marilyn at MET 0 = {bias_km:.1} km, \
+             expected within (50, 2000) km — outside this range suggests the \
+             rotation is misapplied or the wiring is wrong."
+        );
     }
 }

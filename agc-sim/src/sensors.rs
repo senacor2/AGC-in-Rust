@@ -32,9 +32,10 @@
 //!   biased the inertial landmark position by up to ~150 km).
 
 use agc_core::math::linalg::{mxv, unit, vsub};
-use agc_core::navigation::landmarks::{lunar_landmark_inertial_at, LUNAR_LANDMARK_TABLE};
 use agc_core::navigation::star_catalog::STAR_CATALOG;
-use agc_core::programs::p22::{landmark_inertial_pos, LANDMARK_TABLE};
+use agc_core::programs::p22::{
+    landmark_inertial_pos, lunar_landmark_inertial_at, LANDMARK_TABLE, LUNAR_LANDMARK_TABLE,
+};
 use agc_core::types::{Mat3x3, Met, Vec3};
 
 use crate::physics::Attitude;
@@ -131,8 +132,8 @@ mod tests {
     use crate::physics::Attitude;
     use crate::scenario::LandmarkTable;
     use agc_core::math::linalg::mxv;
-    use agc_core::navigation::landmarks::R_MOON_M;
     use agc_core::navigation::star_catalog::STAR_CATALOG;
+    use agc_core::programs::p22::R_MOON_M;
     use agc_core::types::{Mat3x3, Met, Vec3};
 
     const IDENTITY_REFSMMAT: Mat3x3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
@@ -242,9 +243,8 @@ mod tests {
         let attitude = default_attitude();
         let epoch = Met(0);
 
-        let entry = &agc_core::navigation::landmarks::LUNAR_LANDMARK_TABLE[5];
-        let lm_inertial =
-            agc_core::navigation::landmarks::lunar_landmark_inertial_at(entry, epoch);
+        let entry = &agc_core::programs::p22::LUNAR_LANDMARK_TABLE[5];
+        let lm_inertial = agc_core::programs::p22::lunar_landmark_inertial_at(entry, epoch);
         let lm_norm =
             f64::sqrt(lm_inertial[0].powi(2) + lm_inertial[1].powi(2) + lm_inertial[2].powi(2));
         let up: Vec3 = [

@@ -1304,10 +1304,8 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
                     }
                     LandmarkTable::Moon => {
                         let entry =
-                            &agc_core::navigation::landmarks::LUNAR_LANDMARK_TABLE[index as usize];
-                        agc_core::navigation::landmarks::lunar_landmark_inertial_at(
-                            entry, state.time,
-                        )
+                            &agc_core::programs::p22::LUNAR_LANDMARK_TABLE[index as usize];
+                        agc_core::programs::p22::lunar_landmark_inertial_at(entry, state.time)
                     }
                 };
 
