@@ -14,7 +14,7 @@ pub mod uplink;
 
 pub use hardware::SimHardware;
 pub use physics::{Attitude, GravityBody};
-pub use runtime::bridge_dap_to_commanded_q;
+pub use runtime::{bridge_dap_to_commanded_q, pump_secs_to_hw};
 pub use scenario::{
     run_scenario, DskyExpect, Event, LandmarkTable, Scenario, ScenarioBuilder, SeedStateSpec,
     SimDuration,

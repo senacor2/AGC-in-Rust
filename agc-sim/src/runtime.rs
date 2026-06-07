@@ -13,10 +13,10 @@
 //!
 //! - [`pump_pipa_into_state`] — drain `SimImu::pipa` into
 //!   `AgcState::pipa_counts` (the foreground PIPA accumulator).
-//! - [`pump_engine_to_hw`] / [`pump_rcs_to_hw`] — mirror staging fields
-//!   to the simulated hardware, the same translation
-//!   `process_engine_staging` / `process_rcs_staging` perform on the
-//!   bare-metal scheduler.
+//! - [`pump_engine_to_hw`] / [`pump_rcs_to_hw`] / [`pump_secs_to_hw`] —
+//!   mirror staging fields to the simulated hardware, the same translation
+//!   `process_engine_staging` / `process_rcs_staging` / `process_secs_staging`
+//!   perform on the bare-metal scheduler.
 //! - [`WaitlistPump`] — dispatches waitlist tasks at their mission-time
 //!   deadlines, reading PIPA/CDU before each task to mirror what
 //!   `Executive::run` does on T3RUPT.
@@ -29,7 +29,7 @@
 //! from its render-loop tick.
 
 use agc_core::control::DapMode;
-use agc_core::hal::{AgcHardware, Engine, Imu, Rcs};
+use agc_core::hal::{AgcHardware, Engine, Imu, Rcs, Secs};
 use agc_core::math::linalg::mxm;
 use agc_core::math::quaternion::quat_from_mat3x3;
 use agc_core::types::Met;
@@ -79,6 +79,29 @@ pub fn pump_rcs_to_hw(state: &mut AgcState, hw: &mut SimHardware) {
         // beyond `quench_all`, so the dispatch is sufficient for visuals.
         state.rcs_commanded_jets = 0;
         state.rcs_commanded_pulse_cs = 0;
+    }
+}
+
+/// Mirror of `process_secs_staging` from the bare-metal scheduler:
+/// consume the SECS pyro staging flags and call the corresponding HAL
+/// methods exactly once per stage. The flags are edge-triggered —
+/// `init_p62` sets `csm_separation_pending`, `init_p67` sets
+/// `drogue_deploy_pending`, and this pump resets them after the HAL
+/// call so the foreground loop does not keep re-issuing the discrete.
+///
+/// Without this pump the scenario runner's `do_tick` leaves the staging
+/// flags raised forever and the simulated SECS never observes the
+/// command — `SimSecs::csm_separation_fired` stays `false` even though
+/// P62 advanced. See `agc_core::executive::scheduler::process_secs_staging`
+/// for the bare-metal twin.
+pub fn pump_secs_to_hw(state: &mut AgcState, hw: &mut SimHardware) {
+    if state.csm_separation_pending {
+        hw.secs().fire_csm_separation();
+        state.csm_separation_pending = false;
+    }
+    if state.drogue_deploy_pending {
+        hw.secs().deploy_drogue();
+        state.drogue_deploy_pending = false;
     }
 }
 
@@ -544,6 +567,70 @@ mod tests {
     fn _imports_ok() {
         // Keep the Rcs import alive even if pump_rcs_to_hw is unused in tests.
         let _: fn(&mut AgcState, &mut SimHardware) = pump_rcs_to_hw;
+    }
+
+    /// TC-PUMP-SECS-1: `init_p62` stages the CM/SM separation pyro,
+    /// `pump_secs_to_hw` consumes the flag exactly once, and subsequent
+    /// pump cycles must not re-fire the pyro. This is the unit-level
+    /// "exactly once" check that backs the end-to-end SM-sep assertion in
+    /// `phase_entry` (issue #124 acceptance criterion).
+    #[test]
+    fn tc_pump_secs_1_csm_separation_fires_exactly_once() {
+        use agc_core::programs::p61_p67::{init_p61, init_p62};
+
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+
+        // Walk to P62 from preparation — init_p62 must stage the pyro.
+        init_p61(&mut state);
+        init_p62(&mut state);
+        assert!(
+            state.csm_separation_pending,
+            "init_p62 must raise the CM/SM separation staging flag"
+        );
+        assert_eq!(
+            hw.secs.csm_separation_fire_count, 0,
+            "fixture: no HAL call yet"
+        );
+
+        // One pump cycle drives the discrete through the HAL.
+        pump_secs_to_hw(&mut state, &mut hw);
+        assert!(
+            !state.csm_separation_pending,
+            "pump must consume the staging flag"
+        );
+        assert_eq!(
+            hw.secs.csm_separation_fire_count, 1,
+            "pyro must fire exactly once after one pump cycle"
+        );
+
+        // Many subsequent pump cycles must NOT re-fire — the pyro is
+        // one-shot and `init_p62` must not re-stage it.
+        for _ in 0..50 {
+            pump_secs_to_hw(&mut state, &mut hw);
+        }
+        assert_eq!(
+            hw.secs.csm_separation_fire_count, 1,
+            "pyro must remain at exactly one firing across 50 pump cycles"
+        );
+    }
+
+    /// TC-PUMP-SECS-2: `pump_secs_to_hw` is a no-op when nothing is
+    /// staged. Guards against accidental edge-triggering on the empty
+    /// path (which would fire the pyro on every cycle).
+    #[test]
+    fn tc_pump_secs_2_no_staging_is_noop() {
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+
+        assert!(!state.csm_separation_pending);
+        assert!(!state.drogue_deploy_pending);
+
+        for _ in 0..10 {
+            pump_secs_to_hw(&mut state, &mut hw);
+        }
+        assert_eq!(hw.secs.csm_separation_fire_count, 0);
+        assert_eq!(hw.secs.drogue_fire_count, 0);
     }
 
     /// TC-DAP-PUMP-1: dap_step fires at the 100 ms cadence once the DAP

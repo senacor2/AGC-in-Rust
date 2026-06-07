@@ -67,7 +67,8 @@ use agc_core::AgcState;
 
 use crate::physics::{advance_ground_truth, GravityBody, Spacecraft};
 use crate::runtime::{
-    pump_engine_to_hw, pump_pipa_into_state, pump_rcs_to_hw, DapPump, T4Pump, WaitlistPump,
+    pump_engine_to_hw, pump_pipa_into_state, pump_rcs_to_hw, pump_secs_to_hw, DapPump, T4Pump,
+    WaitlistPump,
 };
 use crate::sensors::{landmark_los_in_platform, star_los_in_platform};
 use crate::SimHardware;
@@ -321,6 +322,17 @@ pub enum Event {
     /// trajectory's lower-altitude leg (where heat flux peaks) and its
     /// peak-deceleration regime.
     ExpectPeakHeatingIn { min_mw_m2: f64, max_mw_m2: f64 },
+
+    /// Assert that the simulated SECS observed `count` CM/SM separation
+    /// pyro firings to date.
+    ///
+    /// Reads `SimSecs::csm_separation_fire_count`. The pyro is staged
+    /// edge-triggered by `init_p62` and consumed exactly once per stage
+    /// by [`crate::runtime::pump_secs_to_hw`]; asserting `count == 1`
+    /// after V37 E62 plus one tick verifies the end-to-end wiring, and
+    /// re-asserting `count == 1` after many subsequent ticks verifies
+    /// the staging flag is not re-raised (the pyro is one-shot).
+    ExpectCsmSeparationFireCount(u32),
 }
 
 // ── Scenario ──────────────────────────────────────────────────────────────────
@@ -750,6 +762,17 @@ impl ScenarioBuilder {
         self
     }
 
+    /// Assert that the simulated SECS observed exactly `count` CM/SM
+    /// separation pyro firings to date.
+    ///
+    /// Reads `SimSecs::csm_separation_fire_count`. Used by entry-phase
+    /// scenarios to verify P62 fires the pyro exactly once (and doesn't
+    /// keep re-firing on subsequent cycles).
+    pub fn expect_csm_separation_fire_count(mut self, count: u32) -> Self {
+        self.events.push(Event::ExpectCsmSeparationFireCount(count));
+        self
+    }
+
     /// Consume the builder and produce a [`Scenario`].
     pub fn build(self) -> Scenario {
         Scenario {
@@ -794,6 +817,7 @@ fn do_tick(
     t4.tick(state, hw);
     pump_engine_to_hw(state, hw);
     pump_rcs_to_hw(state, hw);
+    pump_secs_to_hw(state, hw);
 }
 
 /// Build the standard failure prefix for an `Expect*` event.
@@ -1065,6 +1089,12 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
                         pump_pipa_into_state(state, hw);
                         waitlist.tick(state, hw);
                         t4.tick(state, hw);
+                        // SECS pyros (drogue deploy at P67's V<VQUIT cross) fire
+                        // during the entry coast, so the staging flag must be
+                        // consumed in this loop too — otherwise the HAL never
+                        // observes the discrete. (Engine/RCS pumps stay omitted
+                        // because no thrust is commanded in free-fall.)
+                        pump_secs_to_hw(state, hw);
                         inner_remaining = inner_remaining.saturating_sub(slice);
                     }
 
@@ -1589,6 +1619,28 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
                     &format!(
                         "ExpectPeakHeatingIn OK: peak_q={peak:.2} ∈ \
                          [{min_mw_m2:.2}, {max_mw_m2:.2}] MW/m²"
+                    ),
+                );
+            }
+
+            // ── ExpectCsmSeparationFireCount ──────────────────────────────────
+            Event::ExpectCsmSeparationFireCount(expected) => {
+                let got = hw.secs.csm_separation_fire_count;
+                if got != expected {
+                    let prefix =
+                        fail_prefix(name, idx, "ExpectCsmSeparationFireCount", state.time.0);
+                    panic!(
+                        "{prefix}\n  SimSecs::csm_separation_fire_count = {got}, \
+                         expected {expected} (P62 must stage the pyro exactly once \
+                         and pump_secs_to_hw must consume the flag without re-firing)"
+                    );
+                }
+                let met_s = state.time.0 as f64 / 100.0;
+                log_event(
+                    name,
+                    &format!(
+                        "[MET {:.2}s] SmSep: csm_separation_fire_count = {got}",
+                        met_s
                     ),
                 );
             }
