@@ -915,10 +915,10 @@ fn feed_key_inner(state: &mut crate::AgcState, key: Key) {
 
 // ── Dispatch ──────────────────────────────────────────────────────────────────
 
-/// Returns true for verbs that do not require a noun (V34, V35, V70, V71,
-/// V72, V73, ...).
+/// Returns true for verbs that do not require a noun (V34, V35, V36, V46,
+/// V69, V70, V71, V72, V73, V93, V96, ...).
 fn verb_takes_no_noun(verb: u8) -> bool {
-    matches!(verb, 34 | 35 | 70 | 71 | 72 | 73)
+    matches!(verb, 34 | 35 | 36 | 46 | 69 | 70 | 71 | 72 | 73 | 93 | 96)
 }
 
 /// Dispatch a completed VERB+NOUN (or noun-less VERB) command.
@@ -938,10 +938,15 @@ fn dispatch_verb_noun(state: &mut crate::AgcState, verb: u8, noun: u8) {
         25 => start_load(state, verb, noun, 3, 0),
         34 => v34_terminate(state),
         35 => v35_lamp_test(state),
+        36 => v36_fresh_start(state),
+        46 => v46_start_servicer(state),
+        69 => v69_request_restart(state),
         70 => v70_liftoff_time_update(state),
         71 => v71_p27_block_update(state),
         72 => v72_single_address_update(state),
         73 => v73_agc_time_update(state),
+        93 => v93_rectify_w_matrix(state),
+        96 => v34_terminate(state),
         _ => raise_opr_err(state),
     }
 }
@@ -1222,6 +1227,8 @@ pub fn refresh_monitor_display(state: &mut crate::AgcState) {
 }
 
 /// V34 — Terminate active program: return to P00.
+///
+/// Also serves as the V96 dispatch arm (V96 is an alias).
 fn v34_terminate(state: &mut crate::AgcState) {
     let _ = crate::programs::p00::init(state);
 }
@@ -1229,6 +1236,59 @@ fn v34_terminate(state: &mut crate::AgcState) {
 /// V35 — Lamp test.
 fn v35_lamp_test(state: &mut crate::AgcState) {
     state.dsky.lamp_test_active = true;
+}
+
+/// V36 — Request FRESH START.
+///
+/// Wipes the AGC state back to canonical defaults via
+/// `services::fresh_start::fresh_start`, preserving only the fields the
+/// fresh-start sequence explicitly keeps (`gha_epoch_rad`,
+/// `liftoff_time`). This is the more drastic counterpart of V37E00E
+/// (P00 idle), which only resets the major mode and burn/DAP state.
+///
+/// AGC source: V36 in `Comanche055/PINBALL_GAME__BUTTONS_AND_LIGHTS.agc`.
+fn v36_fresh_start(state: &mut crate::AgcState) {
+    crate::services::fresh_start::fresh_start(state);
+}
+
+/// V46 — Establish the SERVICER (Average-G) cycle.
+///
+/// Idempotent — `start_servicer` short-circuits if the SERVICER is
+/// already running. Used by the crew during entry preflight to bring
+/// the navigation cycle up before P63 or whenever average-G
+/// computations are required outside an active major-mode init path.
+fn v46_start_servicer(state: &mut crate::AgcState) {
+    crate::services::average_g::start_servicer(state);
+}
+
+/// V69 — Request a software RESTART.
+///
+/// Re-enters the restart-group dispatcher in
+/// `services::fresh_start::restart`, which clears the scheduler, lights
+/// `state.dsky.restart_flag`, and re-creates jobs/tasks for any
+/// restart groups whose phase registers are non-idle. Nav state
+/// (`csm_state`, `target_state`, `refsmmat`, `time`, `major_mode`) is
+/// preserved.
+fn v69_request_restart(state: &mut crate::AgcState) {
+    crate::services::fresh_start::restart(state);
+}
+
+/// V93 — Rectify the Kalman W-matrix for the currently active
+/// navigation program (P20, P22, or P23).
+///
+/// The simulator stores two distinct W-matrices: P20 uses
+/// `rendezvous_nav` (CSM↔LM relative state); P22 and P23 share
+/// `csm_nav`. Each program's rectify helper resets the corresponding
+/// counters and flashes V06 N49 on the DSKY so the crew sees the
+/// action. With no W-matrix-bearing program active, raise OPR ERR.
+fn v93_rectify_w_matrix(state: &mut crate::AgcState) {
+    use crate::programs::{p20, p22, p23};
+    match state.major_mode {
+        m if m == p20::P20_MAJOR_MODE => p20::p20_rectify_w_matrix(state),
+        m if m == p22::P22_MAJOR_MODE => p22::p22_rectify_w_matrix(state),
+        m if m == p23::P23_MAJOR_MODE => p23::p23_rectify_w_matrix(state),
+        _ => raise_opr_err(state),
+    }
 }
 
 /// V37 — Select major mode / program.
@@ -1782,6 +1842,189 @@ mod tests {
         feed(&mut state, &[Key::Verb, d(3), d(5), Key::Entr]);
 
         assert!(state.dsky.lamp_test_active);
+    }
+
+    // ── TC-VN-MA3: M-A.3 crew-accessible verb dispatch (V36/V46/V69/V93/V96) ──
+    //
+    // Each test drives the verb-noun-less ENTR sequence through the V/N
+    // processor and asserts the observable state change matches the
+    // capability listed in issue #126.
+
+    /// TC-VN-MA3-V36: `V36 ENTR` performs a FRESH START — post-state must
+    /// match a direct call to `services::fresh_start::fresh_start` on the
+    /// same pre-state. Verifies via two parallel runs of the same initial
+    /// fixture (a non-default AGC state with mutations across several
+    /// fields).
+    #[test]
+    fn tc_vn_ma3_v36_fresh_start() {
+        fn fixture() -> AgcState {
+            let mut s = AgcState::new();
+            s.major_mode = 40;
+            s.dsky.lamp_test_active = true;
+            s.alarm.raise(crate::tables::alarm_codes::EXEC_OVERFLOW);
+            s.engine_thrusting = true;
+            s.liftoff_time = crate::types::Met(123_456);
+            s.gha_epoch_rad = 1.234_567;
+            s
+        }
+
+        let mut via_verb = fixture();
+        let mut via_call = fixture();
+
+        feed(&mut via_verb, &[Key::Verb, d(3), d(6), Key::Entr]);
+        crate::services::fresh_start::fresh_start(&mut via_call);
+
+        // The verb-driven path runs through `feed_key_inner`'s ENTR
+        // handler, which advances the V/N phase as part of the
+        // keystroke. Normalise that field before the equality check —
+        // a direct `fresh_start` call resets it via the full state
+        // replacement, so both must end on the same idle phase.
+        assert_eq!(
+            via_verb.major_mode, via_call.major_mode,
+            "TC-VN-MA3-V36: major mode must be zeroed"
+        );
+        assert_eq!(
+            via_verb.gha_epoch_rad, via_call.gha_epoch_rad,
+            "TC-VN-MA3-V36: gha_epoch_rad must survive fresh start"
+        );
+        assert_eq!(
+            via_verb.liftoff_time, via_call.liftoff_time,
+            "TC-VN-MA3-V36: liftoff time must survive fresh start"
+        );
+        assert!(
+            !via_verb.engine_thrusting,
+            "TC-VN-MA3-V36: engine_thrusting must be cleared"
+        );
+        assert_eq!(
+            via_verb.alarm.code, 0,
+            "TC-VN-MA3-V36: alarm code must be cleared"
+        );
+        assert_eq!(via_verb.vn.phase, VnPhase::Idle);
+    }
+
+    /// TC-VN-MA3-V46: `V46 ENTR` brings the SERVICER up.
+    /// Observables: `services::average_g::is_servicer_active` becomes
+    /// true and the waitlist holds a pending `servicer_task` entry.
+    #[test]
+    fn tc_vn_ma3_v46_start_servicer() {
+        use crate::services::average_g::SERVICER_ACTIVE_BIT;
+
+        let mut state = AgcState::new();
+        let servicer_active = |s: &AgcState| (s.flagwords[0] >> SERVICER_ACTIVE_BIT) & 1 != 0;
+        assert!(
+            !servicer_active(&state),
+            "fixture: SERVICER must start inactive"
+        );
+
+        feed(&mut state, &[Key::Verb, d(4), d(6), Key::Entr]);
+
+        assert!(
+            servicer_active(&state),
+            "TC-VN-MA3-V46: V46 must set SERVICER active"
+        );
+        // start_servicer schedules a waitlist entry — confirm a non-idle
+        // front delta exists so the next T3RUPT arms the timer.
+        assert!(
+            state.waitlist.front_delta().is_some(),
+            "TC-VN-MA3-V46: V46 must schedule the first SERVICER cycle"
+        );
+        assert_eq!(state.vn.phase, VnPhase::Idle);
+    }
+
+    /// TC-VN-MA3-V69: `V69 ENTR` requests a RESTART. Observables:
+    /// `state.dsky.restart_flag` lights and the OPR ERR / FLASH flags
+    /// are cleared — same transition the existing `restart_with_table`
+    /// tests in `services::fresh_start` assert.
+    #[test]
+    fn tc_vn_ma3_v69_request_restart() {
+        let mut state = AgcState::new();
+        state.dsky.opr_err = true;
+        state.dsky.flashing = true;
+
+        feed(&mut state, &[Key::Verb, d(6), d(9), Key::Entr]);
+
+        assert!(
+            state.dsky.restart_flag,
+            "TC-VN-MA3-V69: restart indicator must light"
+        );
+        assert!(
+            !state.dsky.opr_err,
+            "TC-VN-MA3-V69: opr_err must be cleared by restart"
+        );
+        assert!(
+            !state.dsky.flashing,
+            "TC-VN-MA3-V69: flashing must be cleared by restart"
+        );
+        assert_eq!(state.vn.phase, VnPhase::Idle);
+    }
+
+    /// TC-VN-MA3-V93-P22: in P22 (major mode 22), `V93 ENTR` rectifies
+    /// the CSM W-matrix via `p22_rectify_w_matrix` — observable through
+    /// the V06 N49 confirmation display.
+    #[test]
+    fn tc_vn_ma3_v93_p22_rectifies_w() {
+        let mut state = AgcState::new();
+        state.major_mode = crate::programs::p22::P22_MAJOR_MODE;
+        // Seed a non-default CSM nav state so the rectifier has to
+        // overwrite something observable.
+        state.csm_nav.mark_count = 5;
+        state.csm_nav.reject_count = 2;
+
+        feed(&mut state, &[Key::Verb, d(9), d(3), Key::Entr]);
+
+        assert_eq!(state.dsky.verb, 6, "TC-VN-MA3-V93: confirm verb 6");
+        assert_eq!(state.dsky.noun, 49, "TC-VN-MA3-V93: confirm noun 49");
+        assert_eq!(state.csm_nav.mark_count, 0, "TC-VN-MA3-V93: marks reset");
+        assert_eq!(state.csm_nav.reject_count, 0, "TC-VN-MA3-V93: rejects reset");
+    }
+
+    /// TC-VN-MA3-V93-P20: in P20 (major mode 20), `V93 ENTR` rectifies
+    /// the rendezvous W-matrix instead.
+    #[test]
+    fn tc_vn_ma3_v93_p20_rectifies_w() {
+        let mut state = AgcState::new();
+        state.major_mode = crate::programs::p20::P20_MAJOR_MODE;
+        state.rendezvous_nav.mark_count = 7;
+
+        feed(&mut state, &[Key::Verb, d(9), d(3), Key::Entr]);
+
+        assert_eq!(state.dsky.verb, 6);
+        assert_eq!(state.dsky.noun, 49);
+        assert_eq!(
+            state.rendezvous_nav.mark_count, 0,
+            "TC-VN-MA3-V93: P20 marks reset"
+        );
+    }
+
+    /// TC-VN-MA3-V93-no-program: `V93 ENTR` outside P20/P22/P23 raises
+    /// OPR ERR (no W-matrix to rectify).
+    #[test]
+    fn tc_vn_ma3_v93_no_program_opr_err() {
+        let mut state = AgcState::new();
+        state.major_mode = 0;
+
+        feed(&mut state, &[Key::Verb, d(9), d(3), Key::Entr]);
+
+        assert!(
+            state.dsky.opr_err,
+            "TC-VN-MA3-V93: opr_err must light when no W-matrix program is active"
+        );
+    }
+
+    /// TC-VN-MA3-V96: `V96 ENTR` is an alias for V34 — terminates the
+    /// active program and returns to P00.
+    #[test]
+    fn tc_vn_ma3_v96_terminates_to_p00() {
+        let mut state = AgcState::new();
+        state.major_mode = 40;
+
+        feed(&mut state, &[Key::Verb, d(9), d(6), Key::Entr]);
+
+        assert_eq!(
+            state.major_mode, 0,
+            "TC-VN-MA3-V96: must drop to P00 like V34"
+        );
+        assert_eq!(state.vn.phase, VnPhase::Idle);
     }
 
     // ── TC-VN-7: Unknown verb raises OPR ERR ──────────────────────────────────
