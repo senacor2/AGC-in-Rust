@@ -1069,6 +1069,81 @@ fn noun_display(state: &crate::AgcState, noun: u8) -> Option<(f32, f32, f32)> {
         //        register values unchanged.
         54 => Some((state.dsky.r[0], state.dsky.r[1], state.dsky.r[2])),
 
+        // N63 — RTGO / VPRED / TFE.
+        //        R1 = range-to-go to splash (km),
+        //        R2 = predicted inertial velocity at up-control exit (m/s),
+        //        R3 = time from entry interface (s).
+        //
+        // AGC source: V16N63 (RTGO / VPRED / TFE). Reference units are
+        // nmi / ft/s / min:sec; the simulator uses SI to match the N44
+        // convention (`agc-core/src/services/v_n.rs:1040`).
+        63 => Some((
+            state.entry.target_range_km as f32,
+            state.entry.vl_predicted_mps as f32,
+            state.entry.time_from_event_s as f32,
+        )),
+
+        // N64 — Drag / Vi / Range-to-splash.
+        //        R1 = sensed-acceleration drag (g),
+        //        R2 = inertial velocity magnitude (m/s),
+        //        R3 = range-to-splash (km, + = overshoot).
+        //
+        // AGC source: V16N64 (D / VI / DELTAH). MS-T6 status-report row.
+        64 => {
+            let v_mag = norm(state.csm_state.velocity) as f32;
+            Some((
+                state.entry.sensed_acceleration_g as f32,
+                v_mag,
+                state.entry.target_range_km as f32,
+            ))
+        }
+
+        // N66 — Bank command / Crossrange / Downrange error.
+        //        R1 = commanded bank angle (deg),
+        //        R2 = crossrange (km, + = south of track),
+        //        R3 = downrange error (km, + = overshoot).
+        //
+        // AGC source: V16N66 (ROLLC / LATANG / DIFF). Bank command is
+        // converted from radians to degrees here; the underlying
+        // `roll_command_rad` field is updated each SERVICER cycle by
+        // `guidance::entry::resolve_roll`.
+        66 => Some((
+            state.entry.roll_command_rad.to_degrees() as f32,
+            state.entry.crossrange_km as f32,
+            state.entry.downrange_error_km as f32,
+        )),
+
+        // N67 — Range-to-target / target latitude / target longitude.
+        //        R1 = range-to-target (km, + = overshoot),
+        //        R2 = target landing site latitude (deg, + = north),
+        //        R3 = target landing site longitude (deg, + = east).
+        //
+        // AGC source: V16N67 (RTGO / LAT / LONG). The historical AGC
+        // showed the present sub-satellite lat/lon; this implementation
+        // displays the uplinked target instead (`target_lat_rad` /
+        // `target_lon_rad`). Switching to present sub-satellite point
+        // would mirror `compute_range_to_go_km`'s ECI→ECEF conversion.
+        67 => Some((
+            state.entry.target_range_km as f32,
+            state.entry.target_lat_rad.to_degrees() as f32,
+            state.entry.target_lon_rad.to_degrees() as f32,
+        )),
+
+        // N68 — Bank command / Vi / Altitude rate.
+        //        R1 = commanded bank angle (deg),
+        //        R2 = inertial velocity magnitude (m/s),
+        //        R3 = altitude rate r·v/|r| (m/s, + = climbing).
+        //
+        // AGC source: V16N68 (ROLLC / VI / HDOT).
+        68 => {
+            let v_mag = norm(state.csm_state.velocity) as f32;
+            Some((
+                state.entry.roll_command_rad.to_degrees() as f32,
+                v_mag,
+                state.entry.r_dot_mps as f32,
+            ))
+        }
+
         // N62 — Abs vel / time from TIG / accum ΔV.
         //        R1 = |velocity| (m/s), R2 = time from TIG (seconds×100),
         //        R3 = accumulated ΔV magnitude (m/s).
@@ -2577,6 +2652,144 @@ mod tests {
             state.dsky.r[2], 44.0f32,
             "TC-VN-ND-7: r[2] must remain 44.0 for unknown noun"
         );
+    }
+
+    // ── TC-VN-ND-8 .. 12: Entry-phase display nouns N63 / N64 / N66 / N67 / N68 ─
+    //
+    // Each test seeds the relevant `EntryState` (and CSM velocity, where
+    // applicable) and drives `V06 N## ENTR` through the V/N keyqueue, then
+    // asserts the resulting `dsky.r[]` values match the documented scaling.
+    //
+    // Scaling convention follows N44 (SI units): km / m/s / deg / g / s,
+    // not the historical nmi / ft/s / min:sec.
+
+    /// TC-VN-ND-8: V06 N63 — RTGO / VPRED / TFE.
+    #[test]
+    fn tc_vn_nd_8_v06_n63_rtgo_vpred_tfe() {
+        let mut state = AgcState::new();
+        state.entry.target_range_km = 1234.5;
+        state.entry.vl_predicted_mps = 7_600.0;
+        state.entry.time_from_event_s = 87.25;
+
+        feed(
+            &mut state,
+            &[Key::Verb, d(0), d(6), Key::Noun, d(6), d(3), Key::Entr],
+        );
+
+        assert_eq!(state.dsky.verb, 6, "TC-VN-ND-8: verb = 6");
+        assert_eq!(state.dsky.noun, 63, "TC-VN-ND-8: noun = 63");
+        assert_eq!(state.dsky.r[0], 1234.5_f32, "TC-VN-ND-8: R1 = RTGO km");
+        assert_eq!(state.dsky.r[1], 7600.0_f32, "TC-VN-ND-8: R2 = VPRED m/s");
+        assert_eq!(state.dsky.r[2], 87.25_f32, "TC-VN-ND-8: R3 = TFE seconds");
+    }
+
+    /// TC-VN-ND-9: V06 N64 — Drag / Vi / Range-to-splash.
+    #[test]
+    fn tc_vn_nd_9_v06_n64_drag_vi_rtsplash() {
+        use crate::navigation::state_vector::{Frame, StateVector};
+
+        let mut state = AgcState::new();
+        // 4.2 g sensed drag; 7800 m/s inertial velocity; 510.0 km RTGO.
+        state.entry.sensed_acceleration_g = 4.2;
+        state.csm_state = StateVector {
+            position: [6_500_000.0, 0.0, 0.0],
+            velocity: [0.0, 7_800.0, 0.0],
+            epoch: crate::types::Met(0),
+            frame: Frame::EarthInertial,
+        };
+        state.entry.target_range_km = 510.0;
+
+        feed(
+            &mut state,
+            &[Key::Verb, d(0), d(6), Key::Noun, d(6), d(4), Key::Entr],
+        );
+
+        assert_eq!(state.dsky.noun, 64, "TC-VN-ND-9: noun = 64");
+        assert_eq!(state.dsky.r[0], 4.2_f32, "TC-VN-ND-9: R1 = drag g");
+        assert_eq!(state.dsky.r[1], 7800.0_f32, "TC-VN-ND-9: R2 = |Vi| m/s");
+        assert_eq!(state.dsky.r[2], 510.0_f32, "TC-VN-ND-9: R3 = RTGO km");
+    }
+
+    /// TC-VN-ND-10: V06 N66 — Bank / Crossrange / Downrange error.
+    #[test]
+    fn tc_vn_nd_10_v06_n66_bank_xrange_drange() {
+        let mut state = AgcState::new();
+        // 45° right bank; +12 km south of track; -3.5 km undershoot.
+        state.entry.roll_command_rad = 45.0_f64.to_radians();
+        state.entry.crossrange_km = 12.0;
+        state.entry.downrange_error_km = -3.5;
+
+        feed(
+            &mut state,
+            &[Key::Verb, d(0), d(6), Key::Noun, d(6), d(6), Key::Entr],
+        );
+
+        assert_eq!(state.dsky.noun, 66, "TC-VN-ND-10: noun = 66");
+        // Use tolerance — radian↔degree round-trip carries f32 rounding.
+        assert!(
+            (state.dsky.r[0] - 45.0_f32).abs() < 1.0e-4,
+            "TC-VN-ND-10: R1 = bank deg, got {}",
+            state.dsky.r[0]
+        );
+        assert_eq!(state.dsky.r[1], 12.0_f32, "TC-VN-ND-10: R2 = crossrange km");
+        assert_eq!(state.dsky.r[2], -3.5_f32, "TC-VN-ND-10: R3 = downrange km");
+    }
+
+    /// TC-VN-ND-11: V06 N67 — RTGO / target latitude / target longitude.
+    #[test]
+    fn tc_vn_nd_11_v06_n67_rtgo_target_lat_lon() {
+        let mut state = AgcState::new();
+        state.entry.target_range_km = 200.0;
+        state.entry.target_lat_rad = 0.5_f64; // ~28.65° north
+        state.entry.target_lon_rad = -1.0_f64; // ~-57.30° east
+
+        feed(
+            &mut state,
+            &[Key::Verb, d(0), d(6), Key::Noun, d(6), d(7), Key::Entr],
+        );
+
+        assert_eq!(state.dsky.noun, 67, "TC-VN-ND-11: noun = 67");
+        assert_eq!(state.dsky.r[0], 200.0_f32, "TC-VN-ND-11: R1 = RTGO km");
+        assert!(
+            (state.dsky.r[1] - 28.6479_f32).abs() < 1.0e-2,
+            "TC-VN-ND-11: R2 = target lat deg, got {}",
+            state.dsky.r[1]
+        );
+        assert!(
+            (state.dsky.r[2] - (-57.2957_f32)).abs() < 1.0e-2,
+            "TC-VN-ND-11: R3 = target lon deg, got {}",
+            state.dsky.r[2]
+        );
+    }
+
+    /// TC-VN-ND-12: V06 N68 — Bank / Vi / R-dot.
+    #[test]
+    fn tc_vn_nd_12_v06_n68_bank_vi_rdot() {
+        use crate::navigation::state_vector::{Frame, StateVector};
+
+        let mut state = AgcState::new();
+        state.entry.roll_command_rad = -55.0_f64.to_radians();
+        state.csm_state = StateVector {
+            position: [6_500_000.0, 0.0, 0.0],
+            velocity: [0.0, 7_500.0, 0.0],
+            epoch: crate::types::Met(0),
+            frame: Frame::EarthInertial,
+        };
+        state.entry.r_dot_mps = -120.0;
+
+        feed(
+            &mut state,
+            &[Key::Verb, d(0), d(6), Key::Noun, d(6), d(8), Key::Entr],
+        );
+
+        assert_eq!(state.dsky.noun, 68, "TC-VN-ND-12: noun = 68");
+        assert!(
+            (state.dsky.r[0] - (-55.0_f32)).abs() < 1.0e-4,
+            "TC-VN-ND-12: R1 = bank deg, got {}",
+            state.dsky.r[0]
+        );
+        assert_eq!(state.dsky.r[1], 7500.0_f32, "TC-VN-ND-12: R2 = |Vi| m/s");
+        assert_eq!(state.dsky.r[2], -120.0_f32, "TC-VN-ND-12: R3 = R-dot m/s");
     }
 
     // ── N18 commit: auto maneuver ball angles ────────────────────────────────
