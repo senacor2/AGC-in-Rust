@@ -37,13 +37,21 @@ Rust has been installed via rustup. The rust proxies can be found
 in `/opt/homebrew/opt/rustup/bin`.
 
 ```sh
-cargo build                                                    # build (host)
-cargo build --target thumbv7em-none-eabihf -p agc-core         # bare-metal build
-cargo test                                                     # run all tests
-cargo test -p agc-core -- executive                            # run tests for a module
-cargo test <name>                                              # run a single test by name
-cargo clippy                                                   # lint
+cargo build                                                                  # build host crates (default-members)
+cargo build --target thumbv7em-none-eabihf -p agc-core                       # agc-core for thumbv7em
+cargo build -p agc-board-nucleo-f767 --target thumbv7em-none-eabihf          # Nucleo board binary
+cargo build -p agc-bridge-pico       --target thumbv6m-none-eabi             # Pico bridge binary
+cargo test                                                                   # run all tests
+cargo test -p agc-core -- executive                                          # run tests for a module
+cargo test <name>                                                            # run a single test by name
+cargo clippy                                                                 # lint
 ```
+
+Always pass `-p <crate>` when building a board binary. A bare
+`cargo build --target thumbv7em-none-eabihf` (or `--workspace`) pulls both
+board crates into one build graph, which makes Cargo unify the conflicting
+`critical-section` impl features and triggers the `RawRestoreStateInner`
+compile error (see issue #102).
 
 ## Version control and task tracking
 
