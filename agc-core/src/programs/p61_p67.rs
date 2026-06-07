@@ -185,6 +185,26 @@ pub struct EntryState {
     pub target_lon_rad: f64,
     /// `true` once `p67_deploy_drogue` has run.
     pub drogue_deployed: bool,
+    /// Predicted inertial velocity at up-control exit (m/s).
+    ///
+    /// Updated each SERVICER cycle in `EntryPhase::Entry` and later by
+    /// `guidance::entry::predicted_exit_velocity_mps` (the AGC's `VL` at
+    /// `REENTRY_CONTROL.agc:571`). 0.0 before the 0.05g threshold or
+    /// when HUNTEST setup falls back to the PREDICT3 table path. AGC
+    /// correspondence: V16N63 R2 (`VPRED`).
+    pub vl_predicted_mps: f64,
+    /// Seconds elapsed since the AGC observed the 0.05g entry-interface
+    /// threshold (the `PreEntry → Entry` phase transition).
+    ///
+    /// 0.0 before the transition; updated each SERVICER cycle thereafter
+    /// from `state.time − entry_interface_time`. AGC correspondence:
+    /// V16N63 R3 (`TFE`).
+    pub time_from_event_s: f64,
+    /// Mission time at the `PreEntry → Entry` transition (entry interface).
+    ///
+    /// `Met(0)` until the threshold has been crossed. Used to compute
+    /// [`Self::time_from_event_s`] each SERVICER cycle.
+    pub entry_interface_time: crate::types::Met,
 }
 
 impl EntryState {
@@ -208,6 +228,9 @@ impl EntryState {
             target_lat_rad: 0.0,
             target_lon_rad: 0.0,
             drogue_deployed: false,
+            vl_predicted_mps: 0.0,
+            time_from_event_s: 0.0,
+            entry_interface_time: crate::types::Met(0),
         }
     }
 }
@@ -362,6 +385,14 @@ pub fn entry_servicer_exit(state: &mut crate::AgcState) {
     // from there.
     p63_check_threshold(state);
 
+    // Refresh V16N63 display quantities (TFE / VL). TFE stays at 0
+    // before the threshold latches `entry_interface_time`; VL is filled
+    // in below from huntest_setup once closed-loop guidance is active.
+    if state.entry.entry_interface_time.0 != 0 {
+        let elapsed_cs = state.time.0.wrapping_sub(state.entry.entry_interface_time.0);
+        state.entry.time_from_event_s = elapsed_cs as f64 / 100.0;
+    }
+
     // Closed-loop guidance once we are past 0.05g. Five flavours:
     //   - EntryPhase::Entry     → MS-E3 HUNTEST Newton iteration.
     //   - EntryPhase::Skip      → MS-E4 UPCONTRL / SKIPPER feedback law.
@@ -382,6 +413,7 @@ pub fn entry_servicer_exit(state: &mut crate::AgcState) {
         use crate::guidance::entry;
 
         state.entry.predicted_range_km = entry::predict_range(state);
+        state.entry.vl_predicted_mps = entry::predicted_exit_velocity_mps(state);
 
         let upd = match state.entry.phase {
             EntryPhase::Entry => entry::compute_ld_command(state),
@@ -448,6 +480,9 @@ pub fn p63_check_threshold(state: &mut crate::AgcState) -> bool {
         && state.entry.sensed_acceleration_g >= ENTRY_THRESHOLD_G
     {
         state.entry.phase = EntryPhase::Entry;
+        // Latch the entry-interface MET so V16N63 R3 (TFE) and the
+        // entry display nouns can show seconds-from-event from here on.
+        state.entry.entry_interface_time = state.time;
         // Trim-attitude (zero-bank) roll hold until the MS-E3 closed loop
         // begins computing real bank commands.
         state.dap_state.mode = DapMode::EntryRoll(0.0);
@@ -469,6 +504,12 @@ pub fn init_p64(state: &mut crate::AgcState) -> JobPriority {
         raise(state, ALARM_P64_EARLY);
     }
     state.entry.phase = EntryPhase::Entry;
+    // P64 can be entered directly by the crew (bypassing P63's
+    // threshold trip), so latch the entry-interface MET here too
+    // unless an earlier 0.05g crossing already set it.
+    if state.entry.entry_interface_time.0 == 0 {
+        state.entry.entry_interface_time = state.time;
+    }
 
     set_display(state, P64_MAJOR_MODE, VERB_MONITOR, 64);
     write_entry_status(state);

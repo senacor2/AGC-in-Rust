@@ -194,6 +194,18 @@ pub fn predict_range(state: &AgcState) -> f64 {
     asp_km
 }
 
+/// Predicted inertial velocity (m/s) at the end of up-control (`VL` in
+/// AGC nomenclature; the V16N63 R2 `VPRED` register).
+///
+/// Returns the `vl_mps` from the current HUNTEST setup, which captures
+/// the closed-loop guidance law's estimate of how fast the spacecraft
+/// will still be moving when it exits up-control. Returns 0.0 before
+/// the 0.05g threshold (HUNTEST setup gates on phase) or when the
+/// setup falls back to PREDICT3 (degenerate intermediates).
+pub fn predicted_exit_velocity_mps(state: &AgcState) -> f64 {
+    huntest_setup(state).map(|s| s.vl_mps).unwrap_or(0.0)
+}
+
 /// Frozen HUNTEST intermediates, shared between [`predict_range`] and
 /// [`upcontrol_step`]. Mirrors the AGC erasable variables produced by
 /// `REENTRY_CONTROL.agc:500–649` (HUNTEST setup + GAMMAL computation).
