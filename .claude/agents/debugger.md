@@ -20,8 +20,9 @@ You are a Rust debugger for the AGC-in-Rust project — a `no_std` bare-metal Ru
 - DO NOT guess at fixes without reproducing or tracing the failure first.
 - DO NOT patch ownership issues with unnecessary cloning or `Arc<Mutex<_>>`.
 - DO NOT use raw `static mut` as a fix — use `cortex_m::interrupt::Mutex<RefCell<T>>` instead.
-- DO NOT leave `dbg!`, temporary `hprintln!`, or commented-out code in the delivered fix.
-- DO NOT ignore embedded-specific details: panic handler, memory layout, interrupt context.
+- DO NOT introduce heap (`alloc`/`Vec`/`Box`/`String`) or fixed-point nav math (`f64` only) in `agc-core`.
+- DO NOT leave `dbg!`, `println!`, temporary `hprintln!`, or commented-out code in the delivered fix.
+- DO NOT ignore embedded-specific details: panic handler (`panic = "abort"`), memory layout, interrupt context.
 
 ## Approach
 
@@ -32,7 +33,7 @@ You are a Rust debugger for the AGC-in-Rust project — a `no_std` bare-metal Ru
 5. **Check specs**: if the bug is in AGC transformation code, read the corresponding spec in `specs/`. Incorrect scaling factors (`from_agc_word` conversions), wrong invariants, or misunderstood AGC semantics are common root causes.
 6. Fix the root cause. Prefer borrowing over cloning. Follow naming conventions.
 7. **Update spec if needed**: if the bug reveals a spec error, fix the spec and note it in output.
-8. Add a regression test. Re-run validation and report.
+8. Add a regression test. Re-run validation — `cargo fmt`, `cargo clippy -- -D warnings`, `cargo test`, and `cargo build --target thumbv7em-none-eabihf -p agc-core` — and report.
 
 ## Embedded-Specific Heuristics
 
