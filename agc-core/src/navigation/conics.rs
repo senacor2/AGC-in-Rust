@@ -478,6 +478,68 @@ pub fn apoapsis_altitude_moon(el: &OrbitalElements) -> f64 {
     apoapsis_radius(el) - R_MOON
 }
 
+/// Time from the elements' epoch to the next descending crossing of the
+/// target radius (seconds).
+///
+/// "Descending" means the spacecraft is moving inward (radial velocity
+/// negative). This is the one-dimensional Kepler propagation that
+/// V82 / R30 uses to compute V16N44 R3 (Time of Free Fall) — how long
+/// until the spacecraft next falls to a given altitude on the way down.
+///
+/// Closed-form, no iteration: true anomaly → eccentric anomaly → mean
+/// anomaly → Δt via Kepler's third law.
+///
+/// Returns `None` when no descending crossing exists:
+/// - hyperbolic / parabolic orbit (no recurring radius crossings),
+/// - circular orbit (radius is constant — never "descends"),
+/// - target radius below periapsis (orbit never reaches it),
+/// - target radius above apoapsis (orbit never reaches it).
+///
+/// For all elliptic orbits where periapsis ≤ r_target ≤ apoapsis the
+/// returned Δt is in `[0, T)` where `T` is the orbital period.
+pub fn time_to_radius_descending(el: &OrbitalElements, r_target: f64, mu: f64) -> Option<f64> {
+    if el.is_hyperbolic() || el.is_circular() {
+        return None;
+    }
+    let r_peri = periapsis_radius(el);
+    let r_apo = apoapsis_radius(el);
+    if r_target < r_peri || r_target > r_apo {
+        return None;
+    }
+
+    // r(ν) = p / (1 + e·cos ν) ⇒ cos ν = (p/r − 1) / e
+    let p = el.a * (1.0 - el.e * el.e);
+    let cos_nu = ((p / r_target) - 1.0) / el.e;
+    // Clamp against tiny numerical excess (target at apsis exactly).
+    let cos_nu = cos_nu.clamp(-1.0, 1.0);
+    // Two true-anomaly solutions: +ν (ascending) and 2π−ν (descending).
+    let nu_descending = TAU - libm::acos(cos_nu);
+
+    // Convert true anomaly → mean anomaly via eccentric anomaly:
+    //   E = 2·atan2(√(1−e)·sin(ν/2), √(1+e)·cos(ν/2))
+    //   M = E − e·sin E
+    let mean_from_true = |nu: f64| -> f64 {
+        let half = nu * 0.5;
+        let big_e = 2.0
+            * libm::atan2(
+                libm::sqrt(1.0 - el.e) * libm::sin(half),
+                libm::sqrt(1.0 + el.e) * libm::cos(half),
+            );
+        big_e - el.e * libm::sin(big_e)
+    };
+
+    let m_now = mean_from_true(el.nu);
+    let m_target = mean_from_true(nu_descending);
+    let mut dm = m_target - m_now;
+    // Forward in time only — wrap negatives into the next orbit.
+    while dm < 0.0 {
+        dm += TAU;
+    }
+
+    let n_mean = libm::sqrt(mu / (el.a * el.a * el.a));
+    Some(dm / n_mean)
+}
+
 // ── P29 Time-of-Longitude Solver ──────────────────────────────────────────────
 
 /// Result of a successful [`time_of_longitude`] call.
