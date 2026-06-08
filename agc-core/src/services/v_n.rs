@@ -916,9 +916,9 @@ fn feed_key_inner(state: &mut crate::AgcState, key: Key) {
 // ── Dispatch ──────────────────────────────────────────────────────────────────
 
 /// Returns true for verbs that do not require a noun (V34, V35, V36, V46,
-/// V69, V70, V71, V72, V73, V93, V96, ...).
+/// V69, V70, V71, V72, V73, V82, V93, V96, ...).
 fn verb_takes_no_noun(verb: u8) -> bool {
-    matches!(verb, 34 | 35 | 36 | 46 | 69 | 70 | 71 | 72 | 73 | 93 | 96)
+    matches!(verb, 34 | 35 | 36 | 46 | 69 | 70 | 71 | 72 | 73 | 82 | 93 | 96)
 }
 
 /// Dispatch a completed VERB+NOUN (or noun-less VERB) command.
@@ -945,6 +945,7 @@ fn dispatch_verb_noun(state: &mut crate::AgcState, verb: u8, noun: u8) {
         71 => v71_p27_block_update(state),
         72 => v72_single_address_update(state),
         73 => v73_agc_time_update(state),
+        82 => v82_request_orbital_parameters(state),
         93 => v93_rectify_w_matrix(state),
         96 => v34_terminate(state),
         _ => raise_opr_err(state),
@@ -993,6 +994,12 @@ fn time_to_hms(cs: u32) -> (f32, f32, f32) {
     (hours as f32, minutes as f32, r3)
 }
 
+/// Altitude (m) above the reference Earth radius at which V16N44 R3
+/// (Time of Free Fall) is computed. Apollo's R30 routine used "300 kft
+/// above the Fischer ellipsoid" — 300 000 ft ≈ 91 440 m. Below this
+/// altitude sensible drag begins and the free-fall model breaks down.
+pub const TFF_ALTITUDE_M: f64 = 91_440.0;
+
 fn noun_display(state: &crate::AgcState, noun: u8) -> Option<(f32, f32, f32)> {
     use crate::math::linalg::norm;
 
@@ -1032,16 +1039,22 @@ fn noun_display(state: &crate::AgcState, noun: u8) -> Option<(f32, f32, f32)> {
         // N43 — Lat/Lon/Alt. Placeholder — P21 writes these directly when active.
         43 => Some((0.0, 0.0, 0.0)),
 
-        // N44 — Apogee / Perigee / Half-period.
-        //        R1 = apogee altitude (km),   R2 = perigee altitude (km),
-        //        R3 = orbital half-period (min).
+        // N44 — Apogee / Perigee / TFF.
+        //        R1 = apogee altitude (km),
+        //        R2 = perigee altitude (km),
+        //        R3 = Time of Free Fall (s) — seconds until the spacecraft
+        //             next descends through 300 kft (91.44 km) above the
+        //             reference Earth radius. R3 = 0 when no descending
+        //             crossing exists (hyperbolic / circular orbit, or
+        //             perigee above / apogee below the TFF altitude).
         //
-        // Apollo's N44 carried these in nautical miles ("XXXX.X nmi") and
-        // a "XXbXX min s" mixed format for TFF; the simulator picks plain
-        // SI units (km, min) so each register fits comfortably inside the
-        // DSKY's 5-digit display for any LEO/MEO/HEO orbit. A real-flight
-        // unit pass would re-encode this in nmi×10 / min:s once the DSKY
-        // register format spec lands.
+        // Apollo's N44 carried these in nautical miles and a "XXbXX min s"
+        // mixed format for TFF; the simulator uses SI (km, seconds) for
+        // consistency with the N44 convention chosen earlier and the M-A.2
+        // entry-noun precedent.
+        //
+        // Reached via V06N44 / V16N44 (direct) or V82 (R30 orbital
+        // parameter display, which dispatches into this same arm).
         44 => {
             use crate::math::linalg::cross;
             let r = norm(state.csm_state.position);
@@ -1051,19 +1064,21 @@ fn noun_display(state: &crate::AgcState, noun: u8) -> Option<(f32, f32, f32)> {
             // valid Keplerian orbit (zero h means rectilinear or unset state).
             if r > 0.0 && h >= 1.0 {
                 use crate::navigation::conics::{
-                    apoapsis_altitude_earth, orbital_period, periapsis_altitude_earth,
-                    sv_to_elements,
+                    apoapsis_altitude_earth, periapsis_altitude_earth, sv_to_elements,
+                    time_to_radius_descending,
                 };
+                use crate::navigation::gravity::R_EARTH;
                 let el = sv_to_elements(state.csm_state);
                 if el.is_hyperbolic() {
-                    // No apoapsis/period for a hyperbolic escape trajectory.
                     Some((0.0, 0.0, 0.0))
                 } else {
                     let apo_km = (apoapsis_altitude_earth(&el) / 1000.0) as f32;
                     let peri_km = (periapsis_altitude_earth(&el) / 1000.0) as f32;
-                    let mu = el.mu();
-                    let half_period_min = (orbital_period(&el, mu) / 120.0) as f32;
-                    Some((apo_km, peri_km, half_period_min))
+                    let r_tff = R_EARTH + TFF_ALTITUDE_M;
+                    let tff_s = time_to_radius_descending(&el, r_tff, el.mu())
+                        .map(|t| t as f32)
+                        .unwrap_or(0.0);
+                    Some((apo_km, peri_km, tff_s))
                 }
             } else {
                 Some((0.0, 0.0, 0.0))
@@ -1271,6 +1286,25 @@ fn v46_start_servicer(state: &mut crate::AgcState) {
 /// preserved.
 fn v69_request_restart(state: &mut crate::AgcState) {
     crate::services::fresh_start::restart(state);
+}
+
+/// V82 — Request Orbital Parameter Display (the AGC's R30 routine).
+///
+/// Pages the DSKY directly to V06 N44 with the latest apogee / perigee
+/// / TFF triplet computed from `state.csm_state`. The N44 arm in
+/// `noun_display` calls `navigation::conics::time_to_radius_descending`
+/// to obtain TFF — a one-dimensional Kepler propagation to 91.44 km
+/// above the reference Earth radius.
+///
+/// **DELRSPL (predicted splash-point miss).** R30 historically returned
+/// DELRSPL alongside the apogee/perigee/TFF triplet, but only after the
+/// entry phase committed to a target (post-P64). This implementation
+/// leaves the slot empty by routing through N44; once the entry-phase
+/// state carries the splash-point miss, a follow-up can swap the
+/// display to a noun that surfaces it (or extend N44 R3 with a mode
+/// bit for the swap).
+fn v82_request_orbital_parameters(state: &mut crate::AgcState) {
+    v06_display_decimal(state, 44);
 }
 
 /// V93 — Rectify the Kalman W-matrix for the currently active
@@ -2797,9 +2831,10 @@ mod tests {
         );
     }
 
-    /// TC-VN-ND-5: V06 N44 computes apogee/perigee/half-period from CSM state
-    /// in a circular LEO orbit. For a circular orbit apogee ≈ perigee within 1 km
-    /// and half-period must fit in the 5-digit DSKY register (no overflow).
+    /// TC-VN-ND-5: V06 N44 computes apogee / perigee / TFF from CSM state
+    /// in a circular LEO orbit. Apogee ≈ perigee within 1 km and TFF
+    /// returns 0 (no descending crossing of the 91.44 km TFF altitude on
+    /// a circular orbit — `time_to_radius_descending` returns `None`).
     #[test]
     fn tc_vn_nd_5_v06_n44_apogee_perigee_circular_leo() {
         use crate::navigation::gravity::MU_EARTH;
@@ -2820,10 +2855,9 @@ mod tests {
             &[Key::Verb, d(0), d(6), Key::Noun, d(4), d(4), Key::Entr],
         );
 
-        // R1 / R2 are altitudes in kilometres; R3 is the half-period in minutes.
         let apo_km = state.dsky.r[0];
         let peri_km = state.dsky.r[1];
-        let half_period_min = state.dsky.r[2];
+        let tff_s = state.dsky.r[2];
 
         assert!(
             apo_km > 0.0,
@@ -2834,22 +2868,79 @@ mod tests {
             "TC-VN-ND-5: perigee altitude must be positive, got {peri_km} km"
         );
         assert!(
-            half_period_min > 0.0,
-            "TC-VN-ND-5: half-period must be positive, got {half_period_min} min"
-        );
-        assert!(
             (apo_km - peri_km).abs() < 1.0,
             "TC-VN-ND-5: circular orbit apogee ≈ perigee within 1 km, |apo-peri| = {} km",
             (apo_km - peri_km).abs()
         );
-        // All three registers must be representable in the 5-digit display
-        // (i.e. < 100 000) — the original `m` / `s` units overflowed for any
-        // non-trivial Earth orbit.
+        assert_eq!(
+            tff_s, 0.0,
+            "TC-VN-ND-5: circular orbit has no descending crossing of the TFF altitude — R3 must be 0"
+        );
+        // All three registers must be representable in the 5-digit display.
         assert!(apo_km < 100_000.0, "apogee in km must fit in 5 digits");
         assert!(peri_km < 100_000.0, "perigee in km must fit in 5 digits");
+    }
+
+    /// TC-VN-ND-13: V82 dispatches to V06 N44 with a meaningful TFF
+    /// computed against an analytic deorbit ellipse.
+    ///
+    /// Fixture: an orbit with apogee at 200 km and perigee at 0 km
+    /// (skimming the reference Earth radius). Spacecraft starts at
+    /// apogee with the half-step velocity that yields a 200 × 0 km
+    /// ellipse. TFF is the analytic half-period (apogee → periapsis)
+    /// minus the time from periapsis to climb back to 91.44 km on the
+    /// ascending branch — i.e. the time to descend from apogee to
+    /// 91.44 km on the way down. Solved closed-form via Kepler's
+    /// equation and compared to the V82-driven display within 1 s.
+    #[test]
+    fn tc_vn_nd_13_v82_tff_against_analytic_conic() {
+        use crate::navigation::conics::{sv_to_elements, time_to_radius_descending};
+        use crate::navigation::gravity::{MU_EARTH, R_EARTH};
+        use crate::navigation::state_vector::{Frame, StateVector};
+
+        // Apogee = R_EARTH + 200 km, perigee = R_EARTH. SMA = mean.
+        let r_apo = R_EARTH + 200_000.0;
+        let r_peri = R_EARTH;
+        let a = 0.5 * (r_apo + r_peri);
+        // Velocity at apogee for this ellipse: vis-viva v² = μ (2/r − 1/a).
+        let v_apo = libm::sqrt(MU_EARTH * (2.0 / r_apo - 1.0 / a));
+
+        let mut state = AgcState::new();
+        state.csm_state = StateVector {
+            position: [r_apo, 0.0, 0.0],
+            velocity: [0.0, v_apo, 0.0],
+            epoch: crate::types::Met(0),
+            frame: Frame::EarthInertial,
+        };
+
+        // Independent ground-truth TFF from the conics primitive.
+        let el = sv_to_elements(state.csm_state);
+        let r_target = R_EARTH + crate::services::v_n::TFF_ALTITUDE_M;
+        let tff_truth_s = time_to_radius_descending(&el, r_target, el.mu())
+            .expect("ellipse must reach TFF altitude on the descending branch");
+
+        feed(&mut state, &[Key::Verb, d(8), d(2), Key::Entr]);
+
+        // V82 must page the DSKY to V06 N44 with the freshly computed
+        // apogee / perigee / TFF triplet.
+        assert_eq!(state.dsky.verb, 6, "TC-VN-ND-13: V82 must page to V06");
+        assert_eq!(state.dsky.noun, 44, "TC-VN-ND-13: V82 must page to N44");
+        let tff_s = state.dsky.r[2];
         assert!(
-            half_period_min < 100_000.0,
-            "half-period in min must fit in 5 digits"
+            (tff_s as f64 - tff_truth_s).abs() < 1.0,
+            "TC-VN-ND-13: TFF must match analytic conic within 1 s — got {tff_s} s, want {tff_truth_s} s"
+        );
+
+        // Apogee and perigee should match the fixture within rounding.
+        let apo_alt_km = state.dsky.r[0];
+        let peri_alt_km = state.dsky.r[1];
+        assert!(
+            (apo_alt_km - 200.0).abs() < 0.5,
+            "TC-VN-ND-13: apogee altitude should be ~200 km, got {apo_alt_km} km"
+        );
+        assert!(
+            peri_alt_km.abs() < 0.5,
+            "TC-VN-ND-13: perigee altitude should be ~0 km, got {peri_alt_km} km"
         );
     }
 
