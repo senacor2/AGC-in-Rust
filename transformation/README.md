@@ -67,5 +67,6 @@ grep "Not Started\|In Progress" transformation/specifications.md
 - [docs/architecture.md](../docs/architecture.md) — Full software architecture
 - [docs/testing.md](../docs/testing.md) — VirtualAGC integration test strategy
 - [docs/optimization.md](../docs/optimization.md) — Rust Embedded Book compliance
-- [AGENTS.md](../AGENTS.md) — Coding conventions
+- [CLAUDE.md](../CLAUDE.md) — Coding conventions and constraints
+- [docs/workflow.md](../docs/workflow.md) — Agent roles, flow, and parallelism rules
 - [WORKSPACE.md](../WORKSPACE.md) — Development environment setup

@@ -47,7 +47,8 @@ For embedded debugging, install the **Cortex-Debug** extension and configure `pr
 
 | File | Purpose |
 |---|---|
-| `AGENTS.md` | Coding conventions and embedded rules |
+| `CLAUDE.md` | Coding rules, embedded/no_std constraints, AGC cross-reference convention |
+| `docs/workflow.md` | Agent roles, hand-off flow, agent-selection triggers, parallelism rules |
 | `docs/architecture.md` | Full software architecture and design decisions |
 | `docs/testing.md` | VirtualAGC integration test strategy |
 | `docs/optimization.md` | Rust Embedded Book compliance gaps |

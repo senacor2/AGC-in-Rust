@@ -313,4 +313,4 @@ Assert:
 - `dsky_terminal.rs`: render `PROG` field from `prog_display`.
 - `command_dispatch.rs`: after `dispatch()` returns `VerbResult::Flash`, set `DskyDisplayState.flash_vn = true`.
 - `SimLog`: emit `VERB  v={:02}  n={:02}  result={:?}` for each dispatch call.
-- `dsky_demo.rs` / scenario files: V37N40 auto-arms the SPS burn scenario per `AGENTS.md` simulation requirements.
+- `dsky_demo.rs` / scenario files: V37N40 auto-arms the SPS burn scenario per `docs/simulation.md` requirements.

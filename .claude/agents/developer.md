@@ -15,17 +15,13 @@ You are a developer implementing the software for a space ship's navigation comp
 - Architecture and type conventions: `docs/architecture.md`
 - Testing strategy (VirtualAGC fixtures): `docs/testing.md`
 - Embedded compliance requirements: `docs/optimization.md`
-- Coding rules: `AGENTS.md`
+
+The coding rules, embedded/no_std constraints, and AGC cross-reference convention are in `CLAUDE.md` (auto-loaded). Project-specific notes below:
 
 ## Constraints
 
-- DO NOT introduce heap allocation (`Vec`, `Box`, `alloc`) in `agc-core` — this breaks the `no_std` build.
-- DO NOT use raw `static mut` — use `cortex_m::interrupt::Mutex<RefCell<T>>` for shared mutable state.
-- DO NOT use `#[interrupt]` from `cortex-m-rt` directly — use the re-export from the device PAC.
-- DO NOT add `panic-halt` or any other panic-handler crate — only one `#[panic_handler]` is allowed.
-- DO NOT implement fixed-point arithmetic for navigation math — use `f64` (ADR-003).
-- DO NOT re-implement the AGC interpretive language VM (ADR-001).
-- DO NOT leave `dbg!`, temporary `hprintln!`, or commented-out code in finished changes.
+- `f64` for navigation math, never fixed-point (ADR-003); do not re-implement the AGC interpretive VM (ADR-001).
+- Only one `#[panic_handler]` — do not add `panic-halt` or another panic-handler crate.
 
 ## Approach
 
@@ -37,11 +33,7 @@ You are a developer implementing the software for a space ship's navigation comp
    - Navigation/guidance math: `f64`, SI units
    - CDU angles, PIPA counts, channel words: `u16` / `i16`
    - Physical quantity newtypes: `CduAngle`, `Met`, `DeltaV`, `Vec3`, `Mat3x3`
-6. **Cross-reference AGC source** in every doc comment for functions implementing a specific AGC routine:
-   ```rust
-   /// AGC source: Comanche055/CONIC_SUBROUTINES.agc, KEPRTN routine.
-   pub fn kepler_step(...) { ... }
-   ```
+6. **Cross-reference AGC source** in every doc comment for functions implementing a specific AGC routine (format in `CLAUDE.md`).
 7. **Restart safety**: multi-step computations that must survive restart must bracket with `state.restart.set_phase(...)`.
 8. Add tests. For math functions, include at least one case from a VirtualAGC fixture (see `docs/testing.md §7`).
 9. **Update spec status** in `transformation/specifications.md` when implementation is complete.

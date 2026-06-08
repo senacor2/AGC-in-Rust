@@ -12,7 +12,7 @@ AGC source: Comanche055/INFLIGHT_ALIGNMENT_ROUTINES.agc  (ARCTRIG, CALCGA; pages
 Secondary references:
 - AGC Block II Interpretive Language Manual (ibiblio.org/apollo) — SIN, COS, ASIN, ACOS opcodes
 - `docs/architecture.md` §3 — `f64` for all navigation math; `libm` for `no_std` math
-- `AGENTS.md` — no `std::f64`, must use `libm::*` under `no_std`
+- `CLAUDE.md` — no `std::f64`, must use `libm::*` under `no_std`
 
 Note on trig source: Comanche055 does not contain a standalone SINCOS assembly file.
 The SIN, COS, ASIN, ACOS, ATAN opcodes are part of the AGC Block II interpretive

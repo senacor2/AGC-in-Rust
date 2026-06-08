@@ -117,6 +117,6 @@ These are the highest-priority unstarted components (see `transformation/specifi
 |---|---|
 | [`docs/architecture.md`](../docs/architecture.md) | Type conventions, module boundaries, HAL design |
 | [`docs/testing.md`](../docs/testing.md) | VirtualAGC fixture capture strategy, tolerances |
-| [`AGENTS.md`](../AGENTS.md) | Coding rules, embedded constraints, no_std rules |
+| [`CLAUDE.md`](../CLAUDE.md) | Coding rules, embedded constraints, no_std rules |
 | [`transformation/specifications.md`](../transformation/specifications.md) | Status of all specs |
 | [`agc-sim/README.md`](../agc-sim/README.md) | DSKY TUI layout, keyboard map, sim modules |
