@@ -101,37 +101,22 @@ pub fn p21_init(state: &mut AgcState) -> JobPriority {
     state.major_mode = P21_MAJOR_MODE;
     state.dsky.prog = P21_MAJOR_MODE;
 
-    // Precondition: non-zero CSM epoch.
+    // Precondition: non-zero CSM epoch. The N43 noun_display arm
+    // detects this independently and returns (0, 0, 0), so the
+    // display_noun call after the alarm raise still leaves the
+    // DSKY in a consistent V06 N43 layout.
     if state.csm_state.epoch.to_seconds() == 0.0 {
         state.alarm.code = ALARM_NO_CSM_SV;
         state.alarm.lit = true;
-        state.dsky.verb = 6;
-        state.dsky.noun = 43;
-        state.dsky.r[0] = 0.0;
-        state.dsky.r[1] = 0.0;
-        state.dsky.r[2] = 0.0;
+        crate::services::v_n::display_noun(state, 43);
         return P21_PRIORITY;
     }
 
-    let epoch_s = state.csm_state.epoch.to_seconds();
-    let target_get_s = state.time.to_seconds();
-    let csm_pos = state.csm_state.position;
-    let csm_vel = state.csm_state.velocity;
-    let gha_epoch = state.gha_epoch_rad;
-
-    let result = p21_compute_ground_track(csm_pos, csm_vel, epoch_s, target_get_s, gha_epoch);
-
-    // Display via V06 N43.
-    // R1: latitude  (degrees × 100, cast to f32)
-    // R2: longitude (degrees × 100, cast to f32)
-    // R3: altitude  (km × 10, cast to f32)
-    const RAD_TO_DEG: f64 = 180.0 / core::f64::consts::PI;
-    state.dsky.verb = 6;
-    state.dsky.noun = 43;
-    state.dsky.r[0] = (result.lat_rad * RAD_TO_DEG * 100.0) as f32;
-    state.dsky.r[1] = (result.lon_rad * RAD_TO_DEG * 100.0) as f32;
-    state.dsky.r[2] = (result.alt_m / 100.0) as f32; // km × 10
-    state.dsky.flashing = false;
+    // Lat / lon / alt are computed by the N43 arm in
+    // `services::v_n::noun_display` from `state.csm_state` + `state.time`
+    // + `state.gha_epoch_rad`, so the V06 N43 page is the single source
+    // of truth for the ground-track display.
+    crate::services::v_n::display_noun(state, 43);
 
     P21_PRIORITY
 }

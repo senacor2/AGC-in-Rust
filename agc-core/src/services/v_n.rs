@@ -1036,8 +1036,39 @@ fn noun_display(state: &crate::AgcState, noun: u8) -> Option<(f32, f32, f32)> {
             Some((target_mag, accum_mag, remaining))
         }
 
-        // N43 — Lat/Lon/Alt. Placeholder — P21 writes these directly when active.
-        43 => Some((0.0, 0.0, 0.0)),
+        // N43 — Latitude / Longitude / Altitude.
+        //        R1 = geocentric latitude  (deg, + = north),
+        //        R2 = geocentric longitude (deg, + = east),
+        //        R3 = altitude above the reference Earth radius (km).
+        //
+        // Computes the current sub-satellite point by propagating
+        // `state.csm_state` forward to `state.time` via `kepler_step`,
+        // rotating to Earth-fixed coordinates with the current GHA,
+        // and extracting (lat, lon, alt). Delegates to
+        // `programs::p21::p21_compute_ground_track` so both the V/N
+        // display arm and P21 itself share one ECI → geodetic path.
+        //
+        // Returns (0, 0, 0) when no valid CSM state vector is loaded
+        // (`csm_state.epoch == 0`). SI scaling — matches N44 and the
+        // M-A.2 entry-display nouns.
+        43 => {
+            if state.csm_state.epoch.0 == 0 {
+                return Some((0.0, 0.0, 0.0));
+            }
+            const RAD_TO_DEG: f64 = 180.0 / core::f64::consts::PI;
+            let result = crate::programs::p21::p21_compute_ground_track(
+                state.csm_state.position,
+                state.csm_state.velocity,
+                state.csm_state.epoch.to_seconds(),
+                state.time.to_seconds(),
+                state.gha_epoch_rad,
+            );
+            Some((
+                (result.lat_rad * RAD_TO_DEG) as f32,
+                (result.lon_rad * RAD_TO_DEG) as f32,
+                (result.alt_m / 1_000.0) as f32,
+            ))
+        }
 
         // N44 — Apogee / Perigee / TFF.
         //        R1 = apogee altitude (km),
@@ -1210,6 +1241,17 @@ fn v06_display_decimal(state: &mut crate::AgcState, noun: u8) {
         state.dsky.r[1] = r2;
         state.dsky.r[2] = r3;
     }
+}
+
+/// Show a V06 noun from program initialisation code.
+///
+/// Equivalent to a `V06 N## ENTR` keystroke without touching the
+/// V/N processor's phase machinery — sets verb / noun / R1..R3 from
+/// the centralised `noun_display` table so program init paths don't
+/// need to know each noun's register encoding. Used by P21 (N43) and
+/// any future program that needs to surface a noun at init time.
+pub fn display_noun(state: &mut crate::AgcState, noun: u8) {
+    v06_display_decimal(state, noun);
 }
 
 /// V16 — Continuous monitor display.
