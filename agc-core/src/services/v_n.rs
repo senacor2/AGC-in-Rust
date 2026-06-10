@@ -1079,6 +1079,14 @@ fn noun_display(state: &crate::AgcState, noun: u8) -> Option<(f32, f32, f32)> {
         //             crossing exists (hyperbolic / circular orbit, or
         //             perigee above / apogee below the TFF altitude).
         //
+        // Altitudes are measured against the **frame's** reference body:
+        // - `Frame::EarthInertial` → above R_EARTH
+        // - `Frame::MoonInertial`  → above R_MOON
+        // - `Frame::StableMember`  → degenerate, return zeros
+        //
+        // TFF only makes sense in Earth orbit (it's a re-entry quantity);
+        // for lunar orbits R3 = 0 regardless of geometry.
+        //
         // Apollo's N44 carried these in nautical miles and a "XXbXX min s"
         // mixed format for TFF; the simulator uses SI (km, seconds) for
         // consistency with the N44 convention chosen earlier and the M-A.2
@@ -1088,32 +1096,45 @@ fn noun_display(state: &crate::AgcState, noun: u8) -> Option<(f32, f32, f32)> {
         // parameter display, which dispatches into this same arm).
         44 => {
             use crate::math::linalg::cross;
+            use crate::navigation::state_vector::Frame;
             let r = norm(state.csm_state.position);
             let h_vec = cross(state.csm_state.position, state.csm_state.velocity);
             let h = norm(h_vec);
             // Guard: both position and angular momentum must be nonzero for a
             // valid Keplerian orbit (zero h means rectilinear or unset state).
-            if r > 0.0 && h >= 1.0 {
-                use crate::navigation::conics::{
-                    apoapsis_altitude_earth, periapsis_altitude_earth, sv_to_elements,
-                    time_to_radius_descending,
-                };
-                use crate::navigation::gravity::R_EARTH;
-                let el = sv_to_elements(state.csm_state);
-                if el.is_hyperbolic() {
-                    Some((0.0, 0.0, 0.0))
-                } else {
-                    let apo_km = (apoapsis_altitude_earth(&el) / 1000.0) as f32;
-                    let peri_km = (periapsis_altitude_earth(&el) / 1000.0) as f32;
+            // `StableMember` is the IMU frame, not an orbital frame — bail.
+            if r <= 0.0 || h < 1.0 || state.csm_state.frame == Frame::StableMember {
+                return Some((0.0, 0.0, 0.0));
+            }
+            use crate::navigation::conics::{
+                apoapsis_altitude_earth, apoapsis_altitude_moon, periapsis_altitude_earth,
+                periapsis_altitude_moon, sv_to_elements, time_to_radius_descending,
+            };
+            use crate::navigation::gravity::R_EARTH;
+            let el = sv_to_elements(state.csm_state);
+            if el.is_hyperbolic() {
+                return Some((0.0, 0.0, 0.0));
+            }
+            let (apo_km, peri_km, tff_s) = match state.csm_state.frame {
+                Frame::EarthInertial => {
+                    let apo = (apoapsis_altitude_earth(&el) / 1000.0) as f32;
+                    let peri = (periapsis_altitude_earth(&el) / 1000.0) as f32;
                     let r_tff = R_EARTH + TFF_ALTITUDE_M;
-                    let tff_s = time_to_radius_descending(&el, r_tff, el.mu())
+                    let tff = time_to_radius_descending(&el, r_tff, el.mu())
                         .map(|t| t as f32)
                         .unwrap_or(0.0);
-                    Some((apo_km, peri_km, tff_s))
+                    (apo, peri, tff)
                 }
-            } else {
-                Some((0.0, 0.0, 0.0))
-            }
+                Frame::MoonInertial => {
+                    let apo = (apoapsis_altitude_moon(&el) / 1000.0) as f32;
+                    let peri = (periapsis_altitude_moon(&el) / 1000.0) as f32;
+                    // TFF is an Earth re-entry quantity — no analogue
+                    // in lunar orbit (no atmosphere).
+                    (apo, peri, 0.0)
+                }
+                Frame::StableMember => unreachable!("guarded above"),
+            };
+            Some((apo_km, peri_km, tff_s))
         }
 
         // N54 — Range/Rate/Theta. Already written by P20 directly — return current
@@ -2984,6 +3005,80 @@ mod tests {
             peri_alt_km.abs() < 0.5,
             "TC-VN-ND-13: perigee altitude should be ~0 km, got {peri_alt_km} km"
         );
+    }
+
+    /// TC-VN-ND-14: V06 N44 dispatches the apsis helpers on the state's
+    /// frame, not unconditionally on Earth. This is the #146 regression
+    /// fixture: load the TEI-demo lunar parking orbit (CSM circling the
+    /// Moon at 111 km altitude in MCI) and assert R1 ≈ R2 ≈ 111 km.
+    ///
+    /// Pre-fix, the N44 arm always called `apoapsis_altitude_earth`
+    /// regardless of frame, so the display showed
+    /// `1848 km - R_EARTH(6378 km) = -4530 km` for both apogee and
+    /// perigee — the symptom reported in issue #146.
+    #[test]
+    fn tc_vn_nd_14_n44_lunar_frame_uses_moon_radius() {
+        use crate::navigation::gravity::{MU_MOON, R_MOON};
+        use crate::navigation::state_vector::{Frame, StateVector};
+
+        let mut state = AgcState::new();
+        // Same fixture as agc-sim/scripts/tei_demo.dsky — circular at
+        // R_MOON + 111 km in MCI, prograde +Y velocity.
+        let r = R_MOON + 111_000.0;
+        let v_circ = libm::sqrt(MU_MOON / r);
+        state.csm_state = StateVector {
+            position: [r, 0.0, 0.0],
+            velocity: [0.0, v_circ, 0.0],
+            epoch: crate::types::Met(0),
+            frame: Frame::MoonInertial,
+        };
+
+        feed(
+            &mut state,
+            &[Key::Verb, d(0), d(6), Key::Noun, d(4), d(4), Key::Entr],
+        );
+
+        assert_eq!(state.dsky.verb, 6);
+        assert_eq!(state.dsky.noun, 44);
+        let apo = state.dsky.r[0];
+        let peri = state.dsky.r[1];
+        let tff = state.dsky.r[2];
+        assert!(
+            (apo - 111.0).abs() < 1.0,
+            "TC-VN-ND-14: apogee altitude must be ~111 km above R_MOON, got {apo} km"
+        );
+        assert!(
+            (peri - 111.0).abs() < 1.0,
+            "TC-VN-ND-14: perigee altitude must be ~111 km above R_MOON, got {peri} km"
+        );
+        assert_eq!(
+            tff, 0.0,
+            "TC-VN-ND-14: TFF is an Earth re-entry quantity — must be 0 in lunar orbit"
+        );
+    }
+
+    /// TC-VN-ND-15: V06 N44 against a `StableMember` (IMU) frame state
+    /// returns zeros — that frame is not an orbital frame.
+    #[test]
+    fn tc_vn_nd_15_n44_stable_member_frame_returns_zeros() {
+        use crate::navigation::state_vector::{Frame, StateVector};
+
+        let mut state = AgcState::new();
+        state.csm_state = StateVector {
+            position: [6_671_000.0, 0.0, 0.0],
+            velocity: [0.0, 7_726.0, 0.0],
+            epoch: crate::types::Met(0),
+            frame: Frame::StableMember,
+        };
+
+        feed(
+            &mut state,
+            &[Key::Verb, d(0), d(6), Key::Noun, d(4), d(4), Key::Entr],
+        );
+
+        assert_eq!(state.dsky.r[0], 0.0);
+        assert_eq!(state.dsky.r[1], 0.0);
+        assert_eq!(state.dsky.r[2], 0.0);
     }
 
     /// TC-VN-ND-6: refresh_monitor_display is a no-op when verb != 16.
