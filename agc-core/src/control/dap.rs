@@ -269,6 +269,30 @@ pub fn dap_step(state: &mut crate::AgcState) {
     let rates = compute_body_rates(current_cdu, prev_cdu, DAP_PERIOD_S);
     state.dap_state.rate_estimate = rates;
 
+    // ── Gimbal-lock avoidance (O'Brien §15.5) ────────────────────────────────
+    // Check during active attitude maneuvers: if the middle gimbal (CDU[2])
+    // enters the critical band (≈ ±5° of ±90°) while the DAP is steering,
+    // override the maneuver target with a 90° roll-away about the body X-axis
+    // and light the GIMBAL_LOCK lamp.  Rate-damping and off-mode are exempt
+    // because the craft is not being actively steered.
+    {
+        use crate::control::imu_control::is_gimbal_lock_critical;
+        if matches!(
+            state.dap_state.mode,
+            DapMode::AttitudeHold | DapMode::Maneuver
+        ) && is_gimbal_lock_critical(&state.current_cdu)
+        {
+            state.dsky.gimbal_lock = true;
+            dispatch_gimbal_lock_roll_away(state, rates);
+            // Update prev_cdu and return — skip the normal mode dispatch this
+            // cycle so the avoidance maneuver takes priority.
+            state.dap_state.prev_cdu = current_cdu;
+            return;
+        } else if !is_gimbal_lock_critical(&state.current_cdu) {
+            state.dsky.gimbal_lock = false;
+        }
+    }
+
     // ── Mode dispatch ──────────────────────────────────────────────────────
     match state.dap_state.mode {
         DapMode::Off => unreachable!(), // handled above
@@ -304,6 +328,52 @@ pub fn dap_step(state: &mut crate::AgcState) {
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
+
+/// Dispatch: Gimbal-lock avoidance roll-away maneuver.
+///
+/// Commands a 90° roll about the spacecraft long axis (body X) to drive the
+/// middle gimbal (pitch CDU) away from the ±90° singularity.
+///
+/// The roll direction is chosen to move the middle gimbal back toward 0°:
+/// - if middle_gimbal > 0 (near +90°): roll negative (clockwise from aft)
+/// - if middle_gimbal ≤ 0 (near −90°): roll positive
+///
+/// After the roll the DAP reverts to `AttitudeHold` to prevent further
+/// steering toward the lock zone.  The GIMBAL_LOCK lamp stays lit until the
+/// next dap_step cycle that finds the middle gimbal outside the critical band.
+///
+/// AGC source: Frank O'Brien, *The Apollo Guidance Computer* §15.5 —
+/// KALCMANU gimbal-lock avoidance roll maneuver.
+fn dispatch_gimbal_lock_roll_away(state: &mut crate::AgcState, rates: Vec3) {
+    use core::f64::consts::{FRAC_PI_2, TAU};
+
+    // Middle gimbal angle in radians.
+    let mid_gimbal_rad = state.current_cdu[2].to_radians();
+
+    // Current roll attitude (outer gimbal, CDU[0]).
+    let current_roll = state.current_cdu[0].to_radians();
+
+    // Roll ±90° away from the lock.
+    let roll_target = if mid_gimbal_rad > 0.0 {
+        current_roll - FRAC_PI_2
+    } else {
+        current_roll + FRAC_PI_2
+    };
+
+    // Normalise roll to (−π, π] using libm::fmod (no_std compatible).
+    let shifted = roll_target + core::f64::consts::PI;
+    let roll_target = libm::fmod(shifted, TAU) - core::f64::consts::PI;
+
+    // Preserve pitch/yaw commanded attitude; only override roll.
+    state.dap_state.commanded_attitude[0] = roll_target;
+
+    // Engage Maneuver mode at 2°/s on the roll axis for the avoidance.
+    const ROLL_RATE: f64 = 2.0 * core::f64::consts::PI / 180.0;
+    state.dap_state.maneuver_rate = [ROLL_RATE, 0.0, 0.0];
+    state.dap_state.mode = DapMode::Maneuver;
+
+    dispatch_attitude_hold(state, rates);
+}
 
 /// Dispatch: Rate-Damping mode — null body rates via RCS.
 ///
@@ -797,6 +867,76 @@ mod tests {
         assert_eq!(
             state.alarm.code, 0,
             "dap_init must not raise alarms on a full Waitlist"
+        );
+    }
+
+    // ── TC-DAP-12: Gimbal-lock avoidance (M-B.4) ──────────────────────────
+
+    /// TC-DAP-12a: When the middle gimbal enters the critical band (≈±5° of
+    /// ±90°) during an attitude maneuver, DAP must:
+    /// - light the GIMBAL_LOCK lamp,
+    /// - command a roll-away maneuver,
+    /// - remain in Maneuver mode.
+    ///
+    /// Middle gimbal at 87° (inside the ≈±5° critical band around 90°):
+    /// CDU[2] = 87° in counts = round(87/360 × 65536) = 15872.
+    #[test]
+    fn tc_dap_12a_gimbal_lock_avoidance_fires_roll_away() {
+        use crate::types::CduAngle;
+
+        let mut state = make_state();
+        state.dap_state.mode = DapMode::Maneuver;
+        state.dap_state.commanded_attitude = [0.0, 0.0, 0.0];
+        state.dap_state.maneuver_rate = [0.01, 0.0, 0.0];
+        state.dap_state.deadband = 0.01; // tight deadband to make jets fire
+        state.dap_state.rate_deadband = 0.001;
+
+        // Middle gimbal (CDU[2]) at 87° — inside the ≈5° critical band.
+        let counts_87 = (87.0_f64 / 360.0 * 65536.0).round() as i16;
+        state.current_cdu = [CduAngle(0), CduAngle(0), CduAngle(counts_87)];
+        state.dap_state.prev_cdu = state.current_cdu;
+
+        dap_step(&mut state);
+
+        assert!(
+            state.dsky.gimbal_lock,
+            "TC-DAP-12a: GIMBAL_LOCK lamp must light when critical"
+        );
+        assert_eq!(
+            state.dap_state.mode,
+            DapMode::Maneuver,
+            "TC-DAP-12a: DAP must remain in Maneuver mode during avoidance"
+        );
+        // Roll-away sets maneuver_rate[0] to 2°/s (avoidance rate).
+        const EXPECTED_RATE: f64 = 2.0 * core::f64::consts::PI / 180.0;
+        assert!(
+            (state.dap_state.maneuver_rate[0] - EXPECTED_RATE).abs() < 1e-10,
+            "TC-DAP-12a: roll-away rate must be 2°/s"
+        );
+    }
+
+    /// TC-DAP-12b: Outside the critical band, gimbal lock lamp stays dark
+    /// and the normal mode dispatch runs.
+    #[test]
+    fn tc_dap_12b_no_avoidance_outside_critical_band() {
+        use crate::types::CduAngle;
+
+        let mut state = make_state();
+        state.dap_state.mode = DapMode::AttitudeHold;
+        state.dap_state.commanded_attitude = [0.0, 0.0, 0.0];
+        state.dap_state.deadband = 1000.0; // wide — no jets
+        state.dap_state.rate_deadband = 1000.0;
+
+        // Middle gimbal at 45° — well outside the critical band.
+        let counts_45 = (45.0_f64 / 360.0 * 65536.0).round() as i16;
+        state.current_cdu = [CduAngle(0), CduAngle(0), CduAngle(counts_45)];
+        state.dap_state.prev_cdu = state.current_cdu;
+
+        dap_step(&mut state);
+
+        assert!(
+            !state.dsky.gimbal_lock,
+            "TC-DAP-12b: GIMBAL_LOCK lamp must be dark at 45°"
         );
     }
 }
