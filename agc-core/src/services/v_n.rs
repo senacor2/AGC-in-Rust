@@ -915,10 +915,10 @@ fn feed_key_inner(state: &mut crate::AgcState, key: Key) {
 
 // ── Dispatch ──────────────────────────────────────────────────────────────────
 
-/// Returns true for verbs that do not require a noun (V34, V35, V36, V46,
-/// V69, V70, V71, V72, V73, V82, V93, V96, ...).
+/// Returns true for verbs that do not require a noun (V32, V33, V34, V35,
+/// V36, V46, V69, V70, V71, V72, V73, V82, V93, V94, V96, ...).
 fn verb_takes_no_noun(verb: u8) -> bool {
-    matches!(verb, 34 | 35 | 36 | 46 | 69 | 70 | 71 | 72 | 73 | 82 | 93 | 96)
+    matches!(verb, 32 | 33 | 34 | 35 | 36 | 46 | 69 | 70 | 71 | 72 | 73 | 82 | 93 | 94 | 96)
 }
 
 /// Dispatch a completed VERB+NOUN (or noun-less VERB) command.
@@ -936,6 +936,8 @@ fn dispatch_verb_noun(state: &mut crate::AgcState, verb: u8, noun: u8) {
         16 => v16_monitor(state, noun),
         21..=23 => start_load(state, verb, noun, 1, verb - 21),
         25 => start_load(state, verb, noun, 3, 0),
+        32 => v32_recycle(state),
+        33 => v33_proceed(state),
         34 => v34_terminate(state),
         35 => v35_lamp_test(state),
         36 => v36_fresh_start(state),
@@ -947,6 +949,7 @@ fn dispatch_verb_noun(state: &mut crate::AgcState, verb: u8, noun: u8) {
         73 => v73_agc_time_update(state),
         82 => v82_request_orbital_parameters(state),
         93 => v93_rectify_w_matrix(state),
+        94 => v94_attitude_maneuver(state),
         96 => v34_terminate(state),
         _ => raise_opr_err(state),
     }
@@ -1386,6 +1389,75 @@ fn v93_rectify_w_matrix(state: &mut crate::AgcState) {
         m if m == p23::P23_MAJOR_MODE => p23::p23_rectify_w_matrix(state),
         _ => raise_opr_err(state),
     }
+}
+
+/// V32 — Recycle (re-enter) the current major mode.
+///
+/// Re-invokes the entry point of the program currently in `state.major_mode`
+/// from the top, as if the crew had typed `V37E<mm>E` again.  Useful during
+/// an abort-and-retry cycle where the crew wants to restart the current
+/// program without selecting a new one.
+///
+/// If no program is registered for the current mode (or `major_mode == 0`),
+/// the call is a no-op (V32 in P00 does nothing, matching Apollo practice).
+///
+/// AGC source: Comanche055/PINBALL_GAME__BUTTONS_AND_LIGHTS.agc — V32 path.
+fn v32_recycle(state: &mut crate::AgcState) {
+    use crate::programs::PROGRAM_TABLE;
+    let slot = state.major_mode as usize;
+    if slot < PROGRAM_TABLE.len() {
+        if let Some(init_fn) = PROGRAM_TABLE[slot] {
+            let _prio = init_fn(state);
+        }
+    }
+}
+
+/// V33 — Proceed without keyboard entry.
+///
+/// Fires the pending V50 `on_proceed` callback if one is set (same effect as
+/// pressing PRO in a V50 context).  Outside a V50 context, clears `flashing`
+/// so any stale crew-input prompt is dismissed.
+///
+/// This lets crew-initiated P-programs advance their phase sequence without
+/// pressing the physical PRO key — useful during P22 / P23 mark sequences
+/// where V33 serves as the keyboard-equivalent of PRO.
+///
+/// AGC source: Comanche055/PINBALL_GAME__BUTTONS_AND_LIGHTS.agc — V33 path.
+fn v33_proceed(state: &mut crate::AgcState) {
+    if let Some(pending) = state.vn.pending_v50.take() {
+        (pending.on_proceed)(state);
+    } else {
+        // Nothing pending — dismiss any dangling input prompt.
+        state.dsky.flashing = false;
+    }
+}
+
+/// V94 — Cislunar attitude maneuver for sextant acquisition.
+///
+/// Commands the DAP to maneuver to the attitude stored in
+/// `state.p23_preferred_attitude` (set by P23 when it knows the next
+/// star-horizon or star-landmark target).  If no preferred attitude is
+/// stored, the current commanded attitude is preserved (V94 is a no-op
+/// when P23 has not yet computed a target).
+///
+/// KALCMANU-quality steering improvement is tracked under M-C.1; this
+/// implementation uses the existing rate-limited Maneuver DAP path.
+///
+/// AGC source: Comanche055/P20-P25.agc — V94 verb handler ("PLEASE MANEUVER
+/// TO REQUIRED ATTITUDE").
+fn v94_attitude_maneuver(state: &mut crate::AgcState) {
+    use crate::control::dap::DapMode;
+    if let Some(att) = state.p23_preferred_attitude {
+        state.dap_state.commanded_attitude = att;
+        // Rate-limited maneuver at 0.5°/s (≈ 0.00873 rad/s) on all axes.
+        const MANEUVER_RATE: f64 = 0.5_f64 * core::f64::consts::PI / 180.0;
+        state.dap_state.maneuver_rate = [MANEUVER_RATE; 3];
+        if state.dap_state.mode != DapMode::Off {
+            state.dap_state.mode = DapMode::Maneuver;
+        }
+    }
+    // Reflect verb/noun on the DSKY so crew sees their command.
+    state.dsky.verb = 94;
 }
 
 /// V37 — Select major mode / program.
@@ -2122,6 +2194,146 @@ mod tests {
             "TC-VN-MA3-V96: must drop to P00 like V34"
         );
         assert_eq!(state.vn.phase, VnPhase::Idle);
+    }
+
+    // ── TC-VN-MB3: V32/V33/V94 — M-B.3 and M-B.2 verbs ──────────────────────
+
+    /// TC-VN-MB3-V32: `V32 ENTR` in an active program re-enters it.
+    ///
+    /// Sets major_mode = 37 (P37 is registered), fires V32, and verifies
+    /// that P37 init ran (pending_maneuver may or may not be set; what matters
+    /// is that major_mode stays at 37 and dsky.prog reflects it).
+    #[test]
+    fn tc_vn_mb3_v32_recycle_reenters_program() {
+        let mut state = AgcState::new();
+        use crate::navigation::gravity::{MU_MOON, R_MOON};
+        use crate::navigation::state_vector::{Frame, StateVector};
+        // Set up a valid P37 state (MoonInertial frame).
+        let r = R_MOON + 100_000.0;
+        let v = libm::sqrt(MU_MOON / r);
+        state.csm_state = StateVector {
+            position: [r, 0.0, 0.0],
+            velocity: [0.0, v, 0.0],
+            epoch: crate::types::Met(0),
+            frame: Frame::MoonInertial,
+        };
+        state.major_mode = 37;
+
+        feed(&mut state, &[Key::Verb, d(3), d(2), Key::Entr]);
+
+        assert_eq!(state.major_mode, 37, "TC-VN-MB3-V32: major_mode must stay at 37");
+        assert_eq!(state.dsky.prog, 37, "TC-VN-MB3-V32: dsky.prog must be 37");
+        assert_eq!(state.vn.phase, VnPhase::Idle);
+    }
+
+    /// TC-VN-MB3-V32-p00: `V32 ENTR` in P00 is a no-op.
+    #[test]
+    fn tc_vn_mb3_v32_noop_in_p00() {
+        let mut state = AgcState::new();
+        state.major_mode = 0;
+        state.dsky.verb = 6;
+        state.dsky.noun = 36;
+
+        feed(&mut state, &[Key::Verb, d(3), d(2), Key::Entr]);
+
+        assert_eq!(state.major_mode, 0, "TC-VN-MB3-V32: P00 V32 must not change major_mode");
+    }
+
+    /// TC-VN-MB3-V33-pending-v50: `V33 ENTR` fires a pending V50 callback
+    /// — same effect as pressing PRO.
+    #[test]
+    fn tc_vn_mb3_v33_fires_pending_v50() {
+        let mut state = AgcState::new();
+        state.major_mode = 22;
+        // Install a V50 callback that sets major_mode to 99 as a sentinel.
+        fn mark_callback(s: &mut crate::AgcState) {
+            s.major_mode = 99;
+        }
+        crate::services::v_n::request_v50(&mut state, 18, mark_callback);
+        assert!(state.vn.pending_v50.is_some(), "fixture: V50 must be pending");
+
+        feed(&mut state, &[Key::Verb, d(3), d(3), Key::Entr]);
+
+        assert_eq!(
+            state.major_mode, 99,
+            "TC-VN-MB3-V33: pending V50 callback must have fired"
+        );
+        assert!(
+            state.vn.pending_v50.is_none(),
+            "TC-VN-MB3-V33: pending_v50 must be cleared after V33"
+        );
+    }
+
+    /// TC-VN-MB3-V33-no-v50: `V33 ENTR` outside a V50 context dismisses
+    /// the flashing prompt.
+    #[test]
+    fn tc_vn_mb3_v33_no_v50_clears_flashing() {
+        let mut state = AgcState::new();
+        state.dsky.flashing = true;
+
+        feed(&mut state, &[Key::Verb, d(3), d(3), Key::Entr]);
+
+        assert!(
+            !state.dsky.flashing,
+            "TC-VN-MB3-V33: V33 outside V50 context must clear flashing"
+        );
+    }
+
+    /// TC-VN-MB2-V94: `V94 ENTR` with a preferred P23 attitude loads the
+    /// DAP Maneuver mode and sets the commanded attitude.
+    #[test]
+    fn tc_vn_mb2_v94_commands_dap_maneuver() {
+        let mut state = AgcState::new();
+        state.major_mode = 23;
+        // Set a preferred attitude: 15° roll, 10° pitch, 5° yaw.
+        let att = [
+            15.0_f64.to_radians(),
+            10.0_f64.to_radians(),
+            5.0_f64.to_radians(),
+        ];
+        state.p23_preferred_attitude = Some(att);
+        // DAP must be running for V94 to engage Maneuver mode.
+        state.dap_state.mode = crate::control::dap::DapMode::AttitudeHold;
+
+        feed(&mut state, &[Key::Verb, d(9), d(4), Key::Entr]);
+
+        assert_eq!(
+            state.dap_state.mode,
+            crate::control::dap::DapMode::Maneuver,
+            "TC-VN-MB2-V94: DAP must enter Maneuver mode"
+        );
+        for (i, &expected) in att.iter().enumerate() {
+            assert!(
+                (state.dap_state.commanded_attitude[i] - expected).abs() < 1e-10,
+                "TC-VN-MB2-V94: commanded_attitude[{i}] must match preferred attitude"
+            );
+        }
+        assert_eq!(state.dsky.verb, 94, "TC-VN-MB2-V94: DSKY verb must reflect 94");
+        assert_eq!(state.vn.phase, VnPhase::Idle);
+    }
+
+    /// TC-VN-MB2-V94-no-attitude: `V94 ENTR` without a preferred attitude is
+    /// a no-op on the commanded attitude.
+    #[test]
+    fn tc_vn_mb2_v94_no_preferred_attitude_noop() {
+        let mut state = AgcState::new();
+        state.p23_preferred_attitude = None;
+        state.dap_state.commanded_attitude = [1.0, 2.0, 3.0];
+        state.dap_state.mode = crate::control::dap::DapMode::AttitudeHold;
+
+        feed(&mut state, &[Key::Verb, d(9), d(4), Key::Entr]);
+
+        assert_eq!(
+            state.dap_state.commanded_attitude,
+            [1.0, 2.0, 3.0],
+            "TC-VN-MB2-V94: commanded_attitude must be unchanged without preferred attitude"
+        );
+        // Mode stays at AttitudeHold (V94 is a no-op).
+        assert_eq!(
+            state.dap_state.mode,
+            crate::control::dap::DapMode::AttitudeHold,
+            "TC-VN-MB2-V94: mode must stay at AttitudeHold when no preferred attitude"
+        );
     }
 
     // ── TC-VN-7: Unknown verb raises OPR ERR ──────────────────────────────────

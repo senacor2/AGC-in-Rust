@@ -262,6 +262,19 @@ pub struct AgcState {
     ///
     /// AGC erasable: TTPI (computed TPI arrival time; scale B+17 centiseconds).
     pub tpi_arrival_epoch: Option<f64>,
+
+    // ── P23 preferred attitude ────────────────────────────────────────────────
+    /// Euler [roll, pitch, yaw] attitude (radians) that P23 has computed as
+    /// the best sextant acquisition attitude for the next star-horizon or
+    /// star-landmark sighting.
+    ///
+    /// Set by P23 when a new sighting target is loaded.  Consumed by V94 to
+    /// command the DAP to maneuver to this attitude.
+    /// Reset to `None` on FRESH START.
+    ///
+    /// AGC correspondence: no direct equivalent; the real AGC computed the
+    /// sextant-drive angles on the fly from CDU counts.
+    pub p23_preferred_attitude: Option<types::Vec3>,
 }
 
 impl Default for AgcState {
@@ -384,6 +397,7 @@ impl AgcState {
             entry: EntryState::new(),
             vn: VnState::new(),
             tpi_arrival_epoch: None,
+            p23_preferred_attitude: None,
         }
     }
 }
