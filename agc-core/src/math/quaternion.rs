@@ -7,7 +7,7 @@
 //! These functions are pure (no side effects, no global state) and
 //! allocation-free — safe for `#![no_std]` bare-metal targets.
 
-use crate::types::Mat3x3;
+use crate::types::{Mat3x3, Vec3};
 
 /// Scalar-first quaternion `[w, x, y, z]`.
 ///
@@ -156,6 +156,44 @@ pub fn quat_from_mat3x3(m: Mat3x3) -> Quat {
     };
 
     quat_normalise(q)
+}
+
+/// Convert AGC CDU Euler angles `[roll, pitch, yaw]` (XYZ intrinsic Tait-Bryan)
+/// to a scalar-first unit quaternion `[w, x, y, z]`.
+///
+/// Matches the gimbal suspension order used by `gimbal_matrix_from_euler`:
+/// `M = Rx(roll) · Ry(pitch) · Rz(yaw)`.
+///
+/// AGC CDU convention: CDU[0]=outer/roll, CDU[1]=inner/pitch, CDU[2]=middle/yaw.
+pub fn euler_to_quat(euler: Vec3) -> Quat {
+    let [rx, ry, rz] = euler;
+    let (srx, crx) = (libm::sin(rx * 0.5), libm::cos(rx * 0.5));
+    let (sry, cry) = (libm::sin(ry * 0.5), libm::cos(ry * 0.5));
+    let (srz, crz) = (libm::sin(rz * 0.5), libm::cos(rz * 0.5));
+    quat_normalise([
+        crx * cry * crz + srx * sry * srz,
+        srx * cry * crz - crx * sry * srz,
+        crx * sry * crz + srx * cry * srz,
+        crx * cry * srz - srx * sry * crz,
+    ])
+}
+
+/// Convert a scalar-first unit quaternion to AGC CDU Euler angles
+/// `[roll, pitch, yaw]` (XYZ intrinsic Tait-Bryan — inverse of `euler_to_quat`).
+///
+/// Returns angles in the range `roll, yaw ∈ (−π, π]`, `pitch ∈ [−π/2, π/2]`.
+/// The pitch singularity at ±90° (gimbal lock) is clamped via `copysign`.
+pub fn quat_to_euler(q: Quat) -> Vec3 {
+    let [w, x, y, z] = q;
+    let roll = libm::atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y));
+    let sinp = 2.0 * (w * y - z * x);
+    let pitch = if sinp.abs() >= 1.0 {
+        libm::copysign(core::f64::consts::FRAC_PI_2, sinp)
+    } else {
+        libm::asin(sinp)
+    };
+    let yaw = libm::atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z));
+    [roll, pitch, yaw]
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -423,5 +461,66 @@ mod tests {
         );
         let m_rt = quat_to_mat3x3(q_rt);
         assert_mat_near(m_rt, m, 1e-12);
+    }
+
+    // ── euler_to_quat / quat_to_euler round-trip ──────────────────────────────
+
+    fn assert_euler_near(a: Vec3, b: Vec3, eps: f64, label: &str) {
+        for i in 0..3 {
+            assert!(
+                (a[i] - b[i]).abs() < eps,
+                "{label} [euler {i}]: {} vs {} (eps={eps})",
+                a[i],
+                b[i]
+            );
+        }
+    }
+
+    /// tc_euler_quat_identity: [0, 0, 0] round-trips through the quaternion
+    /// representation to [0, 0, 0].
+    #[test]
+    fn tc_euler_quat_identity() {
+        let euler = [0.0_f64, 0.0, 0.0];
+        let q = euler_to_quat(euler);
+        assert!((q[0] - 1.0).abs() < 1e-14, "w must be 1 for identity, got {}", q[0]);
+        assert!(q[1].abs() < 1e-14 && q[2].abs() < 1e-14 && q[3].abs() < 1e-14);
+        let rt = quat_to_euler(q);
+        assert_euler_near(rt, euler, 1e-12, "identity round-trip");
+    }
+
+    /// tc_euler_quat_pure_roll: 45° roll round-trips correctly.
+    #[test]
+    fn tc_euler_quat_pure_roll() {
+        let euler = [45.0_f64.to_radians(), 0.0, 0.0];
+        let rt = quat_to_euler(euler_to_quat(euler));
+        assert_euler_near(rt, euler, 1e-12, "pure-roll round-trip");
+    }
+
+    /// tc_euler_quat_pure_pitch: 30° pitch round-trips correctly.
+    #[test]
+    fn tc_euler_quat_pure_pitch() {
+        let euler = [0.0, 30.0_f64.to_radians(), 0.0];
+        let rt = quat_to_euler(euler_to_quat(euler));
+        assert_euler_near(rt, euler, 1e-12, "pure-pitch round-trip");
+    }
+
+    /// tc_euler_quat_pure_yaw: 90° yaw round-trips correctly.
+    #[test]
+    fn tc_euler_quat_pure_yaw() {
+        let euler = [0.0, 0.0, 90.0_f64.to_radians()];
+        let rt = quat_to_euler(euler_to_quat(euler));
+        assert_euler_near(rt, euler, 1e-12, "pure-yaw round-trip");
+    }
+
+    /// tc_euler_quat_combined: combined [20°, 15°, 35°] round-trips within 1e-12.
+    #[test]
+    fn tc_euler_quat_combined() {
+        let euler = [
+            20.0_f64.to_radians(),
+            15.0_f64.to_radians(),
+            35.0_f64.to_radians(),
+        ];
+        let rt = quat_to_euler(euler_to_quat(euler));
+        assert_euler_near(rt, euler, 1e-12, "combined [20°,15°,35°] round-trip");
     }
 }
