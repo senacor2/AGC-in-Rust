@@ -113,9 +113,22 @@ pub struct DapState {
     /// or from crew V49 entries.
     pub commanded_attitude: Vec3,
 
-    /// Current maneuver rate [roll, pitch, yaw] in rad/s.
-    /// In Maneuver mode, `commanded_attitude` is incremented by this value
-    /// each cycle (× 0.1 s period). Zero in AttitudeHold.
+    /// Final maneuver target attitude [roll, pitch, yaw] in radians.
+    ///
+    /// Set by the caller (V94, V49, or gimbal-lock avoidance) before entering
+    /// `DapMode::Maneuver`.  KALCMANU advances `commanded_attitude` toward
+    /// this value each cycle.  Ignored in all other modes.
+    ///
+    /// AGC: the target attitude is stored as CDU gimbal angles in the
+    /// KALCMANU erasable area (`DELANG1/2/3` octal 0142–0146).
+    pub maneuver_target: Vec3,
+
+    /// KALCMANU maneuver rate (rad/s) — the maximum angular rate along the
+    /// eigenaxis.  All three elements are set to the same scalar value;
+    /// only `maneuver_rate[0]` is read by KALCMANU.
+    ///
+    /// Typical: 0.5°/s (≈ 0.00873 rad/s) for crew maneuvers;
+    /// 2°/s (≈ 0.0349 rad/s) for gimbal-lock avoidance.
     /// AGC: KALCMANU steering angular rate, typically ≤ 0.5°/s.
     pub maneuver_rate: Vec3,
 
@@ -303,14 +316,7 @@ pub fn dap_step(state: &mut crate::AgcState) {
             dispatch_attitude_hold(state, rates);
         }
         DapMode::Maneuver => {
-            // Advance commanded attitude by maneuver_rate × dt.
-            let dt = DAP_PERIOD_S;
-            let mr = state.dap_state.maneuver_rate;
-            state.dap_state.commanded_attitude[0] += mr[0] * dt;
-            state.dap_state.commanded_attitude[1] += mr[1] * dt;
-            state.dap_state.commanded_attitude[2] += mr[2] * dt;
-            // Then run attitude hold towards the updated target.
-            dispatch_attitude_hold(state, rates);
+            dispatch_kalcmanu(state, rates);
         }
         DapMode::Tvc => {
             dispatch_tvc(state);
@@ -328,6 +334,38 @@ pub fn dap_step(state: &mut crate::AgcState) {
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
+
+/// Dispatch: KALCMANU eigenaxis attitude maneuver.
+///
+/// Each call advances `dap_state.commanded_attitude` one step toward
+/// `dap_state.maneuver_target` along the shortest rotation arc (eigenaxis),
+/// then runs the attitude-hold PD loop against the new intermediate.
+///
+/// When the remaining angle drops below the KALCMANU convergence threshold
+/// (≈ 0.006°), the mode transitions automatically to `AttitudeHold`.
+///
+/// AGC source: `Comanche055/RCS_CSM_DIGITAL_AUTOPILOT.agc` — KALCMANU routine
+/// (§15.4 in O'Brien, *The Apollo Guidance Computer*).
+fn dispatch_kalcmanu(state: &mut crate::AgcState, rates: Vec3) {
+    use crate::control::attitude::kalcmanu_step;
+
+    let rate = state.dap_state.maneuver_rate[0].max(1e-6); // scalar eigenaxis rate
+    let (new_intermediate, converged) = kalcmanu_step(
+        state.dap_state.commanded_attitude,
+        state.dap_state.maneuver_target,
+        rate,
+        DAP_PERIOD_S,
+    );
+
+    state.dap_state.commanded_attitude = new_intermediate;
+
+    if converged {
+        state.dap_state.mode = DapMode::AttitudeHold;
+        state.dap_state.maneuver_rate = [0.0; 3];
+    }
+
+    dispatch_attitude_hold(state, rates);
+}
 
 /// Dispatch: Gimbal-lock avoidance roll-away maneuver.
 ///
@@ -364,15 +402,24 @@ fn dispatch_gimbal_lock_roll_away(state: &mut crate::AgcState, rates: Vec3) {
     let shifted = roll_target + core::f64::consts::PI;
     let roll_target = libm::fmod(shifted, TAU) - core::f64::consts::PI;
 
-    // Preserve pitch/yaw commanded attitude; only override roll.
-    state.dap_state.commanded_attitude[0] = roll_target;
+    // Set the final maneuver target: roll-away on roll, preserve commanded pitch/yaw.
+    let cmd_pitch = state.dap_state.commanded_attitude[1];
+    let cmd_yaw = state.dap_state.commanded_attitude[2];
+    state.dap_state.maneuver_target = [roll_target, cmd_pitch, cmd_yaw];
 
-    // Engage Maneuver mode at 2°/s on the roll axis for the avoidance.
+    // Initialize the KALCMANU intermediate from the current CDU angles.
+    state.dap_state.commanded_attitude = [
+        state.current_cdu[0].to_radians(),
+        state.current_cdu[1].to_radians(),
+        state.current_cdu[2].to_radians(),
+    ];
+
+    // KALCMANU rate: 2°/s on the eigenaxis for the avoidance roll.
     const ROLL_RATE: f64 = 2.0 * core::f64::consts::PI / 180.0;
-    state.dap_state.maneuver_rate = [ROLL_RATE, 0.0, 0.0];
+    state.dap_state.maneuver_rate = [ROLL_RATE, ROLL_RATE, ROLL_RATE];
     state.dap_state.mode = DapMode::Maneuver;
 
-    dispatch_attitude_hold(state, rates);
+    dispatch_kalcmanu(state, rates);
 }
 
 /// Dispatch: Rate-Damping mode — null body rates via RCS.
@@ -715,45 +762,56 @@ mod tests {
         );
     }
 
-    // ── TC-DAP-07: Maneuver mode advances commanded_attitude by maneuver_rate * dt
+    // ── TC-DAP-07: KALCMANU eigenaxis maneuver steers along the shortest arc ──
 
-    /// In Maneuver mode, each call to dap_step must advance commanded_attitude
-    /// by exactly maneuver_rate × DAP_PERIOD_S.
+    /// KALCMANU eigenaxis property: for a pure yaw maneuver (target =
+    /// [0, 0, 90°]), each dap_step advances the yaw component while roll and
+    /// pitch remain zero — confirming single-axis (eigenaxis) steering rather
+    /// than independent per-axis ramping.
+    ///
+    /// Rate: 1°/s = 0.01745 rad/s × 0.1 s DAP period = 0.001745 rad/step.
     #[test]
-    fn tc_dap_07_maneuver_advances_commanded_attitude() {
+    fn tc_dap_07_kalcmanu_eigenaxis_yaw_maneuver() {
         let mut state = make_state();
         state.dap_state.mode = DapMode::Maneuver;
 
-        let mr: Vec3 = [0.1, 0.2, 0.3]; // rad/s
-        state.dap_state.maneuver_rate = mr;
-        state.dap_state.commanded_attitude = [0.0, 0.0, 0.0];
+        const RATE: f64 = 1.0 * core::f64::consts::PI / 180.0; // 1°/s
+        let target_yaw = 90.0_f64.to_radians();
+        state.dap_state.maneuver_target = [0.0, 0.0, target_yaw];
+        state.dap_state.commanded_attitude = [0.0, 0.0, 0.0]; // start at zero
+        state.dap_state.maneuver_rate = [RATE; 3];
 
-        // Set a large deadband so no jets fire and the test focuses on the advance.
-        state.dap_state.deadband = 1000.0;
-        state.current_cdu = [CduAngle(0), CduAngle(0), CduAngle(0)];
-        state.dap_state.prev_cdu = [CduAngle(0), CduAngle(0), CduAngle(0)];
+        state.dap_state.deadband = 1000.0; // wide — suppress jets
+        state.current_cdu = [CduAngle(0); 3];
+        state.dap_state.prev_cdu = [CduAngle(0); 3];
 
         dap_step(&mut state);
 
         let ca = state.dap_state.commanded_attitude;
-        let tol = 1e-12;
+        let expected_yaw = RATE * DAP_PERIOD_S; // ≈ 0.001745 rad
+
+        // Roll and pitch must remain zero (eigenaxis = pure yaw).
         assert!(
-            (ca[0] - mr[0] * DAP_PERIOD_S).abs() < tol,
-            "commanded_attitude[0] should advance by {}, got {}",
-            mr[0] * DAP_PERIOD_S,
+            ca[0].abs() < 1e-9,
+            "TC-DAP-07: roll must stay 0 during pure-yaw eigenaxis maneuver, got {}",
             ca[0]
         );
         assert!(
-            (ca[1] - mr[1] * DAP_PERIOD_S).abs() < tol,
-            "commanded_attitude[1] should advance by {}, got {}",
-            mr[1] * DAP_PERIOD_S,
+            ca[1].abs() < 1e-9,
+            "TC-DAP-07: pitch must stay 0 during pure-yaw eigenaxis maneuver, got {}",
             ca[1]
         );
+        // Yaw must advance by exactly rate × dt.
         assert!(
-            (ca[2] - mr[2] * DAP_PERIOD_S).abs() < tol,
-            "commanded_attitude[2] should advance by {}, got {}",
-            mr[2] * DAP_PERIOD_S,
+            (ca[2] - expected_yaw).abs() < 1e-9,
+            "TC-DAP-07: yaw must advance by {expected_yaw:.6} rad, got {:.6}",
             ca[2]
+        );
+        // Mode must remain Maneuver (not yet converged to 90°).
+        assert_eq!(
+            state.dap_state.mode,
+            DapMode::Maneuver,
+            "TC-DAP-07: mode must remain Maneuver while target not yet reached"
         );
     }
 

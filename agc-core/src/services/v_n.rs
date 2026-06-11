@@ -1448,8 +1448,15 @@ fn v33_proceed(state: &mut crate::AgcState) {
 fn v94_attitude_maneuver(state: &mut crate::AgcState) {
     use crate::control::dap::DapMode;
     if let Some(att) = state.p23_preferred_attitude {
-        state.dap_state.commanded_attitude = att;
-        // Rate-limited maneuver at 0.5°/s (≈ 0.00873 rad/s) on all axes.
+        // KALCMANU final target = the P23 preferred sextant attitude.
+        state.dap_state.maneuver_target = att;
+        // Initialize the KALCMANU intermediate from the current CDU angles.
+        state.dap_state.commanded_attitude = [
+            state.current_cdu[0].to_radians(),
+            state.current_cdu[1].to_radians(),
+            state.current_cdu[2].to_radians(),
+        ];
+        // Eigenaxis slew rate: 0.5°/s (nominal crew maneuver rate).
         const MANEUVER_RATE: f64 = 0.5_f64 * core::f64::consts::PI / 180.0;
         state.dap_state.maneuver_rate = [MANEUVER_RATE; 3];
         if state.dap_state.mode != DapMode::Off {
@@ -2279,8 +2286,13 @@ mod tests {
         );
     }
 
-    /// TC-VN-MB2-V94: `V94 ENTR` with a preferred P23 attitude loads the
-    /// DAP Maneuver mode and sets the commanded attitude.
+    /// TC-VN-MB2-V94: `V94 ENTR` with a preferred P23 attitude engages KALCMANU
+    /// Maneuver mode and loads the FINAL target into `maneuver_target`.
+    ///
+    /// With KALCMANU, V94 sets `maneuver_target` = preferred attitude and
+    /// initialises `commanded_attitude` from the current CDU angles (which
+    /// are [0, 0, 0] in this fixture).  The DSKY attitude displayed to the crew
+    /// is the target, not the intermediate.
     #[test]
     fn tc_vn_mb2_v94_commands_dap_maneuver() {
         let mut state = AgcState::new();
@@ -2302,10 +2314,18 @@ mod tests {
             crate::control::dap::DapMode::Maneuver,
             "TC-VN-MB2-V94: DAP must enter Maneuver mode"
         );
+        // KALCMANU target is the preferred attitude.
         for (i, &expected) in att.iter().enumerate() {
             assert!(
-                (state.dap_state.commanded_attitude[i] - expected).abs() < 1e-10,
-                "TC-VN-MB2-V94: commanded_attitude[{i}] must match preferred attitude"
+                (state.dap_state.maneuver_target[i] - expected).abs() < 1e-10,
+                "TC-VN-MB2-V94: maneuver_target[{i}] must equal preferred attitude"
+            );
+        }
+        // Intermediate starts at current CDU = [0, 0, 0].
+        for i in 0..3 {
+            assert!(
+                state.dap_state.commanded_attitude[i].abs() < 1e-10,
+                "TC-VN-MB2-V94: commanded_attitude[{i}] must be initialized from CDU (≈ 0)"
             );
         }
         assert_eq!(state.dsky.verb, 94, "TC-VN-MB2-V94: DSKY verb must reflect 94");

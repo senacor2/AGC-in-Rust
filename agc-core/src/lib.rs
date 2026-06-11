@@ -306,6 +306,7 @@ impl AgcState {
                 failed_jets: 0,
                 num_jets: 2,
                 commanded_attitude: [0.0; 3],
+                maneuver_target: [0.0; 3],
                 maneuver_rate: [0.0; 3],
                 restart_phase: 0,
             },

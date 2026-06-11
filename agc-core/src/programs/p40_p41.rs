@@ -365,12 +365,20 @@ mod tests {
         // DAP stays in Maneuver until the ignition gate transitions it.
         assert_eq!(state.dap_state.mode, DapMode::Maneuver);
 
-        // Run the DAP at a time still before TIG: gate must not fire.
+        // Run the DAP at a time still before TIG: ignition gate must not fire.
+        // Mode may have transitioned to AttitudeHold if KALCMANU already
+        // converged (test maneuver uses an identity burn attitude = no slew needed).
         state.time = Met(360_000 - 10);
         dap_step(&mut state);
         assert!(state.burn.armed);
         assert!(!state.engine_thrusting);
-        assert_eq!(state.dap_state.mode, DapMode::Maneuver);
+        assert!(
+            matches!(
+                state.dap_state.mode,
+                DapMode::Maneuver | DapMode::AttitudeHold
+            ),
+            "DAP must be in Maneuver or AttitudeHold before TIG"
+        );
 
         // Cross TIG: the next dap_step ignites the engine and switches to Tvc.
         state.time = Met(360_000);
