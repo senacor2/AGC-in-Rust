@@ -276,6 +276,16 @@ pub struct AgcState {
     /// sextant-drive angles on the fly from CDU counts.
     pub p23_preferred_attitude: Option<types::Vec3>,
 
+    // ── Launch-site geodesy ──────────────────────────────────────────────────
+    /// Launch-site geodetic latitude (radians).
+    ///
+    /// Used by P02 to compute the Earth-rate horizontal component for
+    /// gyrocompassing.  Uploaded from Mission Control before launch; defaults
+    /// to Kennedy Space Center (28.573° N ≈ 0.4986 rad).
+    ///
+    /// AGC erasable: `LATITUDE` (DP, scale 1 revolution = 2π rad).
+    pub launch_lat_rad: f64,
+
     // ── Downlink driver ───────────────────────────────────────────────────────
     /// MSFN downlink driver — tracks position in the 2-second CMCSTADL cycle.
     ///
@@ -408,6 +418,7 @@ impl AgcState {
             vn: VnState::new(),
             tpi_arrival_epoch: None,
             p23_preferred_attitude: None,
+            launch_lat_rad: 0.4986, // Kennedy Space Center default
             downlink: DownlinkDriver::new(),
         }
     }

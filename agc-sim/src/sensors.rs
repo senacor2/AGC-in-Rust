@@ -1,4 +1,5 @@
-//! Sensor simulation helpers for P51/P52 star sightings and P22 landmark sightings.
+//! Sensor simulation helpers for P51/P52 star sightings, P22 landmark sightings,
+//! and P02 gyrocompass Earth-rate injection.
 //!
 //! Computes platform-frame line-of-sight (LOS) unit vectors from simulator
 //! truth state (attitude quaternion + REFSMMAT) for use by the scenario
@@ -32,6 +33,9 @@
 //!   biased the inertial landmark position by up to ~150 km).
 
 use agc_core::math::linalg::{mxv, unit, vsub};
+use agc_core::navigation::time::OMEGA_EARTH;
+use agc_core::programs::p01_p02::{earth_rate_horizontal, earth_rate_vertical};
+use agc_core::types::CduAngle;
 use agc_core::navigation::star_catalog::STAR_CATALOG;
 use agc_core::programs::p22::{
     landmark_inertial_pos, lunar_landmark_inertial_at, LANDMARK_TABLE, LUNAR_LANDMARK_TABLE,
@@ -282,5 +286,135 @@ mod tests {
             "LOS·up should equal −1 when CSM is radially above the landmark; got {dot}"
         );
         let _ = R_MOON_M; // ensure the still-shared import stays referenced
+    }
+}
+
+// ── SimEarthRate ──────────────────────────────────────────────────────────────
+
+/// Software Earth-rate provider for the P02 gyrocompass loop.
+///
+/// Encapsulates the launch-site geodetic latitude and provides:
+/// - The Earth rotation vector in the ECI frame (always `[0, 0, Ω_E]`).
+/// - Helpers to inject a specified CDU misalignment into `AgcState` so the
+///   gyrocompass loop can be exercised from a realistic starting condition.
+///
+/// AGC correspondence: `ERTHRVSE` in
+/// `Comanche055/IMU_CALIBRATION_AND_ALIGNMENT.agc` which builds `ERVECTOR`
+/// from `LATITUDE` and the constant `OMEG/MS`.
+pub struct SimEarthRate {
+    /// Launch-site geodetic latitude (radians).
+    pub launch_lat_rad: f64,
+}
+
+impl SimEarthRate {
+    /// Kennedy Space Center latitude: 28.573° N ≈ 0.4986 rad.
+    pub const KSC_LAT_RAD: f64 = 0.4986;
+
+    pub fn ksc() -> Self {
+        Self { launch_lat_rad: Self::KSC_LAT_RAD }
+    }
+
+    pub fn new(launch_lat_rad: f64) -> Self {
+        Self { launch_lat_rad }
+    }
+
+    /// Earth rotation vector in the ECI frame (rad/s).  Always `[0, 0, Ω_E]`.
+    pub fn earth_rate_eci(&self) -> [f64; 3] {
+        [0.0, 0.0, OMEGA_EARTH]
+    }
+
+    /// Horizontal (North) Earth rate component at the launch latitude (rad/s).
+    pub fn horizontal_rate(&self) -> f64 {
+        earth_rate_horizontal(self.launch_lat_rad)
+    }
+
+    /// Vertical (Up) Earth rate component at the launch latitude (rad/s).
+    pub fn vertical_rate(&self) -> f64 {
+        earth_rate_vertical(self.launch_lat_rad)
+    }
+
+    /// Prime `state` with the launch latitude and inject `misalignment_deg`
+    /// degrees of CDU offset on all three axes.
+    ///
+    /// Call before `init_p02` to exercise the gyrocompass from a realistic
+    /// starting condition.
+    pub fn prime_state(
+        &self,
+        state: &mut agc_core::AgcState,
+        misalignment_deg: f64,
+    ) {
+        state.launch_lat_rad = self.launch_lat_rad;
+        let counts = (misalignment_deg / 360.0 * 65536.0).round() as i16;
+        for c in state.current_cdu.iter_mut() {
+            c.0 = counts;
+        }
+    }
+
+    /// Convert degrees to a `CduAngle` count value.
+    pub fn deg_to_counts(misalignment_deg: f64) -> CduAngle {
+        CduAngle((misalignment_deg / 360.0 * 65536.0).round() as i16)
+    }
+}
+
+#[cfg(test)]
+mod sim_earth_rate_tests {
+    use super::*;
+    use agc_core::control::imu_control::{ImuAlignmentState, COARSE_ALIGN_THRESHOLD};
+    use agc_core::programs::p01_p02::init_p02;
+    use agc_core::AgcState;
+
+    /// TC-SER-1: KSC provider gives Earth rate along ECI +Z.
+    #[test]
+    fn tc_ser_1_earth_rate_eci_points_north_pole() {
+        let er = SimEarthRate::ksc();
+        let v = er.earth_rate_eci();
+        assert_eq!(v[0], 0.0);
+        assert_eq!(v[1], 0.0);
+        assert!((v[2] - OMEGA_EARTH).abs() < 1e-15);
+    }
+
+    /// TC-SER-2: prime_state sets launch_lat_rad and CDU offset correctly.
+    #[test]
+    fn tc_ser_2_prime_state_sets_cdu_and_lat() {
+        let er = SimEarthRate::ksc();
+        let mut state = AgcState::new();
+        er.prime_state(&mut state, 10.0);
+        assert!((state.launch_lat_rad - SimEarthRate::KSC_LAT_RAD).abs() < 1e-10);
+        let expected = SimEarthRate::deg_to_counts(10.0).0;
+        for c in state.current_cdu.iter() {
+            assert_eq!(c.0, expected);
+        }
+    }
+
+    /// TC-SER-3: P02 convergence from 30° misalignment using SimEarthRate.
+    #[test]
+    fn tc_ser_3_p02_convergence_via_sim_earth_rate() {
+        let er = SimEarthRate::ksc();
+        let mut state = AgcState::new();
+        state.imu_alignment_state = ImuAlignmentState::Caged;
+        er.prime_state(&mut state, 30.0);
+        init_p02(&mut state);
+
+        let mut steps = 0usize;
+        while state.imu_alignment_state != ImuAlignmentState::CoarseAligned
+            && steps < 200
+        {
+            let Some((task_fn, _)) = state.waitlist.pop_task() else { break };
+            task_fn(&mut state);
+            steps += 1;
+        }
+
+        assert_eq!(
+            state.imu_alignment_state,
+            ImuAlignmentState::CoarseAligned,
+            "TC-SER-3: must reach CoarseAligned within 200 steps (took {steps})"
+        );
+        for (i, c) in state.current_cdu.iter().enumerate() {
+            assert!(
+                c.0.unsigned_abs() <= COARSE_ALIGN_THRESHOLD,
+                "TC-SER-3: CDU[{i}] = {} exceeds threshold {COARSE_ALIGN_THRESHOLD}",
+                c.0
+            );
+        }
     }
 }
