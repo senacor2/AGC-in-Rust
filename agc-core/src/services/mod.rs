@@ -1,4 +1,5 @@
 pub mod alarm;
+pub mod downlink;
 pub mod average_g;
 pub mod backup;
 pub mod display;

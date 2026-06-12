@@ -38,7 +38,7 @@ use navigation::StateVector;
 use programs::p20::RendezvousNavState;
 use programs::p22::CsmNavState;
 use programs::p61_p67::EntryState;
-use services::{average_g::PipaCalibration, v_n::VnState, AlarmState, DskyState};
+use services::{average_g::PipaCalibration, downlink::DownlinkDriver, v_n::VnState, AlarmState, DskyState};
 use types::{CduAngle, Mat3x3, Met};
 
 /// Central mutable state of the guidance computer.
@@ -275,6 +275,15 @@ pub struct AgcState {
     /// AGC correspondence: no direct equivalent; the real AGC computed the
     /// sextant-drive angles on the fly from CDU counts.
     pub p23_preferred_attitude: Option<types::Vec3>,
+
+    // ── Downlink driver ───────────────────────────────────────────────────────
+    /// MSFN downlink driver — tracks position in the 2-second CMCSTADL cycle.
+    ///
+    /// Driven by `t4rupt_step` every 20 ms (DOWNRUPT cadence).  Publishes
+    /// word-pairs via `hw.telemetry().send_word()`.
+    ///
+    /// AGC source: `Comanche055/DOWN-TELEMETRY_PROGRAM.agc` — DODOWNTM handler.
+    pub downlink: DownlinkDriver,
 }
 
 impl Default for AgcState {
@@ -399,6 +408,7 @@ impl AgcState {
             vn: VnState::new(),
             tpi_arrival_epoch: None,
             p23_preferred_attitude: None,
+            downlink: DownlinkDriver::new(),
         }
     }
 }

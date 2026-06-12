@@ -82,8 +82,46 @@ pub struct SimRcs {
     pub visual_sm_jets: u16,
     pub visual_cm_jets: u16,
 }
+/// Simulated MSFN telemetry downlink sink.
+///
+/// Words are always appended to `log` for test inspection.  When
+/// `file` is `Some`, each word is also written as two big-endian bytes
+/// to a timestamped binary file — one word per two-byte write, 50 pairs
+/// per second at the DOWNRUPT cadence.
+///
+/// Open a file sink with [`SimTelemetry::with_file`].
 pub struct SimTelemetry {
     pub log: Vec<u16>,
+    file: Option<std::io::BufWriter<std::fs::File>>,
+}
+
+impl SimTelemetry {
+    /// Create a memory-only sink (default for tests).
+    pub fn new() -> Self {
+        Self { log: Vec::new(), file: None }
+    }
+
+    /// Create a sink that additionally streams downlink words to a
+    /// timestamped binary file `downlink_<unix_secs>.bin` in `dir`.
+    ///
+    /// Each 15-bit AGC word is written as 2 bytes big-endian.
+    /// The file is flushed automatically when `SimTelemetry` is dropped.
+    ///
+    /// # Errors
+    /// Returns `Err` if the file cannot be created.
+    pub fn with_file(dir: &std::path::Path) -> std::io::Result<Self> {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let path = dir.join(format!("downlink_{ts}.bin"));
+        let f = std::fs::File::create(path)?;
+        Ok(Self { log: Vec::new(), file: Some(std::io::BufWriter::new(f)) })
+    }
+}
+
+impl Default for SimTelemetry {
+    fn default() -> Self { Self::new() }
 }
 /// Simulated Sequential Events Control System pyro driver.
 ///
@@ -198,6 +236,10 @@ impl SimRcs {
 impl Telemetry for SimTelemetry {
     fn send_word(&mut self, word: u16) {
         self.log.push(word);
+        if let Some(ref mut f) = self.file {
+            use std::io::Write as _;
+            let _ = f.write_all(&word.to_be_bytes());
+        }
     }
 }
 
@@ -264,9 +306,25 @@ impl SimHardware {
             },
             secs: SimSecs::default(),
             uplink: ScriptedUplink::new(),
-            telemetry: SimTelemetry { log: Vec::new() },
+            telemetry: SimTelemetry::new(),
             spacecraft: Spacecraft::new(),
         }
+    }
+
+    /// Open a timestamped MSFN downlink log file in `dir`.
+    ///
+    /// Replaces the current `SimTelemetry` sink with one that streams every
+    /// downlink word to `downlink_<unix_secs>.bin` in addition to the
+    /// in-memory `log`.  Call once after construction, before the run loop.
+    ///
+    /// # Errors
+    /// Returns `Err` if the file cannot be created.
+    pub fn open_downlink_log(
+        &mut self,
+        dir: &std::path::Path,
+    ) -> std::io::Result<()> {
+        self.telemetry = SimTelemetry::with_file(dir)?;
+        Ok(())
     }
 
     /// Advance the simulator by `dt_seconds`.
