@@ -1,0 +1,22 @@
+{
+  "description": "CMCSTADL downlink fixture — analytically derived fresh-start state. All navigation state zero; REFSMMAT = identity. Generated from the Rust encoder; pending yaAGC TCP fixture capture (blocked on hostname resolution on SEN000521 — add '127.0.0.1 SEN000521' to /etc/hosts to unblock capture_downlink binary).",
+  "state": "fresh_start",
+  "notes": [
+    "Pair 0 (index 0): CMCSTADL_ID=0x00FE, LOWIDCOD=0x7EE0 (octal 77340).",
+    "Pair 51 (index 51): TIME2=0, TIME1=0 (t=0).",
+    "Pairs 30, 34 (REFSMMAT diagonal): (0x3FFF, 0x3FFE) = +1.0 in DP B-0.",
+    "All other pairs: (0x0000, 0x0000).",
+    "To regenerate: cargo run --features vagc-capture --bin capture_downlink -- agc-test/fixtures/downlink_fresh_start.json",
+    "  (requires hostname SEN000521 to resolve — see description)"
+  ],
+  "pairs": [
+    {"index": 0,  "w34": 254,   "w35": 32480, "comment": "CMCSTADL_ID + LOWIDCOD"},
+    {"index": 30, "w34": 16383, "w35": 16382, "comment": "REFSMMAT M[0][0]=1.0 DP high/low"},
+    {"index": 31, "w34": 0,     "w35": 0,     "comment": "REFSMMAT M[0][1]=0.0"},
+    {"index": 32, "w34": 0,     "w35": 0,     "comment": "REFSMMAT M[0][2]=0.0"},
+    {"index": 33, "w34": 0,     "w35": 0,     "comment": "REFSMMAT M[1][0]=0.0"},
+    {"index": 34, "w34": 16383, "w35": 16382, "comment": "REFSMMAT M[1][1]=1.0 DP high/low"},
+    {"index": 35, "w34": 0,     "w35": 0,     "comment": "REFSMMAT M[1][2]=0.0"},
+    {"index": 51, "w34": 0,     "w35": 0,     "comment": "TIME2=0, TIME1=0"}
+  ]
+}

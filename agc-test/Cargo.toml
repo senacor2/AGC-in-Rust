@@ -30,3 +30,8 @@ required-features = ["vagc-capture"]
 name = "capture_entry_template"
 path = "src/bin/capture_entry_template.rs"
 required-features = ["vagc-capture"]
+
+[[bin]]
+name = "capture_downlink"
+path = "src/bin/capture_downlink.rs"
+required-features = ["vagc-capture"]
