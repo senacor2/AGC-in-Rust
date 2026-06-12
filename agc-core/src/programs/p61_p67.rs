@@ -238,8 +238,7 @@ impl EntryState {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn raise(state: &mut crate::AgcState, code: u16) {
-    state.alarm.code = code;
-    state.alarm.lit = true;
+    state.alarm.raise(code, crate::tables::alarm_codes::SITE_P61_P67);
 }
 
 fn set_display(state: &mut crate::AgcState, prog: u8, verb: u8, noun: u8) {

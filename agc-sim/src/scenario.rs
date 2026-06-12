@@ -2134,7 +2134,7 @@ mod tests {
             .build();
         let mut state = AgcState::new();
         let mut hw = SimHardware::new();
-        state.alarm.raise(0x0102);
+        state.alarm.raise(0x0102, agc_core::tables::alarm_codes::SITE_NONE);
         run_scenario(&scenario, &mut state, &mut hw);
     }
 

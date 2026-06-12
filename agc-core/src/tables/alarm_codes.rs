@@ -46,3 +46,42 @@ pub const LANDMARK_REJECT: u16 = 0o01422;
 pub const BAD_LANDMARK_INDEX: u16 = 0o01424;
 /// CSM-to-landmark slant range below the safety floor (P22).
 pub const LANDMARK_RANGE_ZERO: u16 = 0o01425;
+
+// ── Call-site tags (ADRES field on AlarmState) ────────────────────────────────
+//
+// Each module/program that raises an alarm is assigned a small octal tag.
+// The tag is passed to `AlarmState::raise(code, adres)` and displayed by
+// V05N08 R1 so the crew (and Mission Control) can identify *where* the
+// alarm fired in addition to *what* code was raised.
+//
+// AGC erasable correspondence: ADRES (the ADRES field of the alarm-raise
+// macro in `ALARM_AND_ABORT.agc`). The real AGC stored a 12-bit BBANK+ECADR
+// here; we use a synthetic small integer scheme because the Rust port has
+// no bank addressing.
+
+pub const SITE_NONE: u16 = 0o0;
+pub const SITE_EXECUTIVE: u16 = 0o1;
+pub const SITE_WAITLIST: u16 = 0o2;
+pub const SITE_UPLINK: u16 = 0o3;
+pub const SITE_AVG_G: u16 = 0o4;
+pub const SITE_FRESH_START: u16 = 0o5;
+pub const SITE_POODOO: u16 = 0o6;
+
+pub const SITE_P01_P02: u16 = 0o11;
+pub const SITE_P11: u16 = 0o12;
+pub const SITE_P15: u16 = 0o13;
+pub const SITE_P20: u16 = 0o14;
+pub const SITE_P21: u16 = 0o15;
+pub const SITE_P22: u16 = 0o16;
+pub const SITE_P23: u16 = 0o17;
+pub const SITE_P29: u16 = 0o20;
+pub const SITE_P30: u16 = 0o21;
+pub const SITE_P31: u16 = 0o22;
+pub const SITE_P32: u16 = 0o23;
+pub const SITE_P33: u16 = 0o24;
+pub const SITE_P34: u16 = 0o25;
+pub const SITE_P37: u16 = 0o26;
+pub const SITE_P40_P41: u16 = 0o27;
+pub const SITE_P51_P52: u16 = 0o30;
+pub const SITE_P61_P67: u16 = 0o31;
+pub const SITE_VN: u16 = 0o32;

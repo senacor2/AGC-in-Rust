@@ -106,8 +106,7 @@ pub fn p21_init(state: &mut AgcState) -> JobPriority {
     // display_noun call after the alarm raise still leaves the
     // DSKY in a consistent V06 N43 layout.
     if state.csm_state.epoch.to_seconds() == 0.0 {
-        state.alarm.code = ALARM_NO_CSM_SV;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_NO_CSM_SV, crate::tables::alarm_codes::SITE_P21);
         crate::services::v_n::display_noun(state, 43);
         return P21_PRIORITY;
     }

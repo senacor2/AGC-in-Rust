@@ -29,8 +29,7 @@ const ALARM_HYPERBOLIC: u16 = 237;
 /// Entry point registered in `PROGRAM_TABLE[15]`.
 pub fn init(state: &mut crate::AgcState) -> JobPriority {
     if state.csm_state.frame != Frame::EarthInertial {
-        state.alarm.code = ALARM_WRONG_FRAME;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_WRONG_FRAME, crate::tables::alarm_codes::SITE_P15);
         return PRIORITY;
     }
 
@@ -51,8 +50,7 @@ pub fn p15_update(state: &mut crate::AgcState) {
     let elements = sv_to_elements(state.csm_state);
 
     if elements.is_hyperbolic() {
-        state.alarm.code = ALARM_HYPERBOLIC;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_HYPERBOLIC, crate::tables::alarm_codes::SITE_P15);
         return;
     }
 

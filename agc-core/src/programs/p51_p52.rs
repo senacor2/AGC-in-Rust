@@ -99,8 +99,7 @@ pub fn p51_mark_align(
             state.dsky.r[0] = 1.0;
         }
         None => {
-            state.alarm.code = ALARM_COLLINEAR_STARS;
-            state.alarm.lit = true;
+            state.alarm.raise(ALARM_COLLINEAR_STARS, crate::tables::alarm_codes::SITE_P51_P52);
         }
     }
 }
@@ -114,8 +113,7 @@ pub fn p51_mark_align(
 /// 221 and does not change the major mode.
 pub fn p52_init(state: &mut crate::AgcState) -> JobPriority {
     if state.imu_alignment_state == ImuAlignmentState::Caged {
-        state.alarm.code = ALARM_PLATFORM_CAGED;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_PLATFORM_CAGED, crate::tables::alarm_codes::SITE_P51_P52);
         return PRIORITY;
     }
 
@@ -148,8 +146,7 @@ pub fn p52_mark_align(
             state.dsky.r[0] = 1.0;
         }
         None => {
-            state.alarm.code = ALARM_COLLINEAR_STARS;
-            state.alarm.lit = true;
+            state.alarm.raise(ALARM_COLLINEAR_STARS, crate::tables::alarm_codes::SITE_P51_P52);
         }
     }
 }

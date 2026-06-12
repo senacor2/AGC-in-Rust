@@ -44,8 +44,7 @@ const ALARM_WRONG_FRAME: u16 = 230;
 /// executive needs a priority to slot the program).
 pub fn init(state: &mut crate::AgcState) -> JobPriority {
     if state.csm_state.frame != Frame::EarthInertial {
-        state.alarm.code = ALARM_WRONG_FRAME;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_WRONG_FRAME, crate::tables::alarm_codes::SITE_P11);
         return PRIORITY;
     }
 
@@ -71,8 +70,7 @@ pub fn p11_update(state: &mut crate::AgcState) {
     let elements = sv_to_elements(state.csm_state);
 
     if elements.is_hyperbolic() {
-        state.alarm.code = ALARM_HYPERBOLIC_ORBIT;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_HYPERBOLIC_ORBIT, crate::tables::alarm_codes::SITE_P11);
         return;
     }
 

@@ -88,7 +88,7 @@ pub fn init_p01(state: &mut crate::AgcState) -> JobPriority {
 /// convergence, then transitions `imu_alignment_state` to `CoarseAligned`.
 pub fn init_p02(state: &mut crate::AgcState) -> JobPriority {
     if state.imu_alignment_state != ImuAlignmentState::Caged {
-        state.alarm.raise(ALARM_GYROCOMPASS_WRONG_STATE);
+        state.alarm.raise(ALARM_GYROCOMPASS_WRONG_STATE, crate::tables::alarm_codes::SITE_P01_P02);
         // soft alarm — continue so the crew can observe the transition
     }
 

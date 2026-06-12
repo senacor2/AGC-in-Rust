@@ -10,25 +10,53 @@
 //! AGC source: `Comanche055/ALARM_AND_ABORT.agc`
 
 /// Current alarm state.
+///
+/// Holds a 3-deep FIFO of recent alarm codes (oldest → middle → newest) plus
+/// the call-site tag, BBANK reserve, and a counter that increments on every
+/// alarm raise or RESTART.  These are surfaced via the diagnostic display
+/// nouns V05N08 (call-site info) and V05N09 (alarm-code history).
+///
+/// AGC erasable correspondence (`ERASABLE_ASSIGNMENTS.agc`):
+///   FAILREG/+1/+2 — the 3-deep alarm-code FIFO (here: `code1`, `code2`, `code`).
+///   ERCOUNT       — alarm/restart counter.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AlarmState {
-    /// The most recent alarm code (0 = none).
+    /// The most recent alarm code (0 = none). Displayed in V05N09 R3.
     pub code: u16,
-    /// Secondary alarm code (stores the previous alarm when a new one fires).
+    /// Middle alarm code in the 3-deep FIFO. Displayed in V05N09 R2.
     pub code2: u16,
+    /// Oldest alarm code in the 3-deep FIFO. Displayed in V05N09 R1.
+    pub code1: u16,
+    /// Call-site / module tag captured at raise time. Displayed in V05N08 R1.
+    /// Values come from `tables::alarm_codes` (`SITE_*` constants).
+    pub adres: u16,
+    /// BBANK at raise time. Reserved for AGC-fidelity display — always 0 in
+    /// this port because the Rust model has no bank addressing.
+    /// Displayed in V05N08 R2.
+    pub bbank: u16,
+    /// Alarm/restart counter. Incremented by every `raise` and every
+    /// `services::fresh_start::restart`. Displayed in V05N08 R3.
+    pub ercount: u16,
     /// True when the PROG alarm lamp is lit.
     pub lit: bool,
 }
 
 impl AlarmState {
-    /// Raise an alarm. Saves the current code to `code2` and lights the lamp.
-    pub fn raise(&mut self, code: u16) {
+    /// Raise an alarm with an associated call-site tag.
+    ///
+    /// Shifts the FIFO: `code1 ← code2 ← code ← code`, sets `adres`,
+    /// increments `ercount`, and lights the PROG alarm lamp.
+    pub fn raise(&mut self, code: u16, adres: u16) {
+        self.code1 = self.code2;
         self.code2 = self.code;
         self.code = code;
+        self.adres = adres;
+        self.ercount = self.ercount.saturating_add(1);
         self.lit = true;
     }
 
-    /// Clear the alarm lamp (crew pressed RSET).
+    /// Clear the alarm lamp (crew pressed RSET). FIFO and counters are
+    /// preserved so the crew can still pull up V05N08/N09 to inspect them.
     pub fn reset(&mut self) {
         self.lit = false;
     }
@@ -55,8 +83,9 @@ impl AlarmState {
 /// AGC source: `ALARM_AND_ABORT.agc` — `POODOO` label and `GOTOPOOH` branch.
 /// Alarm codes: table in `ASSEMBLY_AND_OPERATION_INFORMATION.agc` §8.
 pub fn poodoo(state: &mut crate::AgcState, alarm_code: u16) {
+    use crate::tables::alarm_codes::SITE_POODOO;
     // Step 1: raise the alarm.
-    state.alarm.raise(alarm_code);
+    state.alarm.raise(alarm_code, SITE_POODOO);
 
     // Step 2: abort — return to P00 without a full FRESH START.
     // Preserve navigation state; discard scheduler and guidance state.
@@ -142,26 +171,60 @@ mod tests {
     /// TC-ALARM-1: AlarmState::raise stacks codes and lights the lamp.
     #[test]
     fn tc_alarm_1_raise_stacks_and_lights() {
+        use crate::tables::alarm_codes::SITE_EXECUTIVE;
         let mut a = AlarmState::default();
-        a.raise(0o1202);
+        a.raise(0o1202, SITE_EXECUTIVE);
         assert_eq!(a.code, 0o1202);
         assert_eq!(a.code2, 0);
+        assert_eq!(a.code1, 0);
+        assert_eq!(a.adres, SITE_EXECUTIVE);
+        assert_eq!(a.ercount, 1);
         assert!(a.lit);
 
-        a.raise(0o1211);
+        a.raise(0o1211, SITE_EXECUTIVE);
         assert_eq!(a.code, 0o1211);
         assert_eq!(a.code2, 0o1202);
+        assert_eq!(a.code1, 0);
+        assert_eq!(a.ercount, 2);
         assert!(a.lit);
     }
 
-    /// TC-ALARM-2: AlarmState::reset clears the lamp without erasing the code.
+    /// TC-ALARM-2: AlarmState::reset clears the lamp without erasing the FIFO.
     #[test]
     fn tc_alarm_2_reset_clears_lamp_not_code() {
         let mut a = AlarmState::default();
-        a.raise(0o1410);
+        a.raise(0o1410, 0o11);
         a.reset();
         assert!(!a.lit);
         assert_eq!(a.code, 0o1410);
+        assert_eq!(a.adres, 0o11);
+        assert_eq!(a.ercount, 1);
+    }
+
+    /// TC-ALARM-1b: 3-deep FIFO — four raises drop the oldest entry.
+    ///
+    /// Per #141 acceptance criterion: three successive raises leave
+    /// (code1, code2, code) = (oldest, middle, newest) and ercount == 3.
+    /// A fourth raise drops the original code1 out of the window.
+    #[test]
+    fn tc_alarm_1b_three_deep_fifo() {
+        let mut a = AlarmState::default();
+        a.raise(0o1100, 0o01);
+        a.raise(0o1200, 0o02);
+        a.raise(0o1300, 0o03);
+
+        assert_eq!(a.code1, 0o1100, "oldest in code1");
+        assert_eq!(a.code2, 0o1200, "middle in code2");
+        assert_eq!(a.code, 0o1300, "newest in code");
+        assert_eq!(a.ercount, 3, "ercount must equal raise count");
+        assert_eq!(a.adres, 0o03, "adres reflects most recent raise");
+
+        // Fourth raise: 1100 falls off.
+        a.raise(0o1400, 0o04);
+        assert_eq!(a.code1, 0o1200, "after 4th raise: 1200 is oldest");
+        assert_eq!(a.code2, 0o1300, "middle = 1300");
+        assert_eq!(a.code, 0o1400, "newest = 1400");
+        assert_eq!(a.ercount, 4);
     }
 
     /// TC-ALARM-3: poodoo ends in P00 with restart group consistent with spec.

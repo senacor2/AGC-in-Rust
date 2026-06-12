@@ -140,7 +140,9 @@ pub fn restart_with_table(state: &mut AgcState, table: &[RestartGroupEntry; NUM_
     state.dsky.flashing = false;
     state.dsky.opr_err = false;
 
-    // Alarm — preserve existing code but do not clear.
+    // Alarm — preserve existing code FIFO but bump the alarm/restart counter
+    // (ERCOUNT) so V05N08 R3 reflects the new restart event.
+    state.alarm.ercount = state.alarm.ercount.saturating_add(1);
 
     // Re-dispatch active restart groups from their saved phases.
     for (group, entry) in table.iter().enumerate() {
@@ -217,7 +219,7 @@ mod tests {
     #[test]
     fn tc_fs_3_clears_alarms() {
         let mut state = AgcState::new();
-        state.alarm.raise(1202);
+        state.alarm.raise(1202, crate::tables::alarm_codes::SITE_EXECUTIVE);
 
         fresh_start(&mut state);
 
@@ -397,6 +399,25 @@ mod tests {
         let mut state = AgcState::new();
         restart(&mut state);
         assert!(state.dsky.restart_flag);
+    }
+
+    /// TC-RS-2b: restart bumps `ercount` so V05N08 R3 reflects the event.
+    ///
+    /// Per #141 acceptance criterion: `services::fresh_start::restart`
+    /// increments `ercount`. The alarm FIFO and code are preserved.
+    #[test]
+    fn tc_rs_2b_restart_increments_ercount() {
+        let mut state = AgcState::new();
+        state.alarm.raise(0o1202, crate::tables::alarm_codes::SITE_EXECUTIVE);
+        let er_before = state.alarm.ercount;
+        let code_before = state.alarm.code;
+        let adres_before = state.alarm.adres;
+
+        restart(&mut state);
+
+        assert_eq!(state.alarm.ercount, er_before + 1, "ercount must increment on restart");
+        assert_eq!(state.alarm.code, code_before, "alarm code must be preserved");
+        assert_eq!(state.alarm.adres, adres_before, "adres must be preserved");
     }
 
     // TC-RS-3: restart clears scheduler

@@ -137,7 +137,7 @@ pub fn start_servicer(state: &mut AgcState) {
     if state.waitlist.schedule(200, servicer_task) == ScheduleResult::Full {
         set_servicer_active(state, false);
         state.restart.set_phase(GROUP_2, Phase::IDLE);
-        state.alarm.raise(WAITLIST_OVERFLOW);
+        state.alarm.raise(WAITLIST_OVERFLOW, crate::tables::alarm_codes::SITE_AVG_G);
     }
 }
 
@@ -260,7 +260,7 @@ pub fn servicer_task(state: &mut AgcState) {
                 // Waitlist full — stop the SERVICER and raise alarm 1211.
                 set_servicer_active(state, false);
                 state.restart.set_phase(GROUP_2, Phase::IDLE);
-                state.alarm.raise(WAITLIST_OVERFLOW);
+                state.alarm.raise(WAITLIST_OVERFLOW, crate::tables::alarm_codes::SITE_AVG_G);
             }
         }
     } else {

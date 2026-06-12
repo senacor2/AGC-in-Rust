@@ -55,7 +55,7 @@ pub const NOMINAL_CSM_MASS_KG: f64 = 20_000.0;
 /// 1411 (`ALARM_P37_WRONG_FRAME`) and returns without entering P37.
 pub fn p37_init(state: &mut crate::AgcState) -> JobPriority {
     if state.csm_state.frame != Frame::MoonInertial {
-        state.alarm.raise(ALARM_P37_WRONG_FRAME);
+        state.alarm.raise(ALARM_P37_WRONG_FRAME, crate::tables::alarm_codes::SITE_P37);
         return PRIORITY;
     }
 
@@ -86,11 +86,11 @@ pub fn init(state: &mut crate::AgcState) -> JobPriority {
 /// - `state.csm_state.frame != Frame::MoonInertial` → alarm 1411 (`ALARM_P37_WRONG_FRAME`).
 pub fn p37_compute_tei(state: &mut crate::AgcState, tig: Met, tof: f64) {
     if !(MIN_TEI_TOF_S..=MAX_TEI_TOF_S).contains(&tof) {
-        state.alarm.raise(ALARM_P37_BAD_TOF);
+        state.alarm.raise(ALARM_P37_BAD_TOF, crate::tables::alarm_codes::SITE_P37);
         return;
     }
     if state.csm_state.frame != Frame::MoonInertial {
-        state.alarm.raise(ALARM_P37_WRONG_FRAME);
+        state.alarm.raise(ALARM_P37_WRONG_FRAME, crate::tables::alarm_codes::SITE_P37);
         return;
     }
 

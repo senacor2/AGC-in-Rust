@@ -144,8 +144,7 @@ pub fn p29_compute_and_display(state: &mut AgcState) {
 }
 
 fn raise_alarm(state: &mut AgcState, code: u16) {
-    state.alarm.code = code;
-    state.alarm.lit = true;
+    state.alarm.raise(code, crate::tables::alarm_codes::SITE_P29);
     state.dsky.verb = 6;
     state.dsky.noun = 34;
     state.dsky.r[0] = 0.0;

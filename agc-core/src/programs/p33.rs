@@ -164,16 +164,14 @@ pub fn p33_init(state: &mut AgcState) -> JobPriority {
 pub fn p33_run(state: &mut AgcState, dt_tpi: f64) -> JobPriority {
     // Step 0 — Guard checks.
     if norm(state.rendezvous_nav.target_pos) < 1.0 {
-        state.alarm.code = ALARM_P33_NO_TARGET;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_P33_NO_TARGET, crate::tables::alarm_codes::SITE_P33);
         return P33_PRIORITY;
     }
 
     let tig_cs = match state.vn.pending_tig.take() {
         Some(t) => t,
         None => {
-            state.alarm.code = ALARM_P33_NO_TIG;
-            state.alarm.lit = true;
+            state.alarm.raise(ALARM_P33_NO_TIG, crate::tables::alarm_codes::SITE_P33);
             return P33_PRIORITY;
         }
     };
@@ -182,8 +180,7 @@ pub fn p33_run(state: &mut AgcState, dt_tpi: f64) -> JobPriority {
     let target_epoch_cs = (state.rendezvous_nav.target_epoch * 100.0) as u64;
     let tig_cs_u64 = tig_cs.0 as u64;
     if tig_cs_u64 > target_epoch_cs && (tig_cs_u64 - target_epoch_cs) > TPI_STALE_TARGET_CS {
-        state.alarm.code = ALARM_P33_STALE_TARGET;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_P33_STALE_TARGET, crate::tables::alarm_codes::SITE_P33);
         // Non-fatal: proceed with computation.
     }
 
@@ -199,8 +196,7 @@ pub fn p33_run(state: &mut AgcState, dt_tpi: f64) -> JobPriority {
     let chaser_epoch_s = state.csm_state.epoch.to_seconds();
     let dt_chaser = tig_s - chaser_epoch_s;
     if dt_chaser < 0.0 {
-        state.alarm.code = ALARM_P33_DEGENERATE;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_P33_DEGENERATE, crate::tables::alarm_codes::SITE_P33);
         return P33_PRIORITY;
     }
     let (r_c_tig, v_c_tig) = kepler_step(
@@ -236,18 +232,15 @@ pub fn p33_run(state: &mut AgcState, dt_tpi: f64) -> JobPriority {
     // Step 7 — Compute Lambert intercept.
     match compute_lambert_intercept(r_c_tig, v_c_tig, r_t_arrive, dt_tpi, MU_EARTH) {
         Err(InterceptError::DegenerateState) => {
-            state.alarm.code = ALARM_P33_NO_TARGET;
-            state.alarm.lit = true;
+            state.alarm.raise(ALARM_P33_NO_TARGET, crate::tables::alarm_codes::SITE_P33);
             return P33_PRIORITY;
         }
         Err(InterceptError::InvalidTimeInterval) | Err(InterceptError::DegenerateGeometry) => {
-            state.alarm.code = ALARM_P33_DEGENERATE;
-            state.alarm.lit = true;
+            state.alarm.raise(ALARM_P33_DEGENERATE, crate::tables::alarm_codes::SITE_P33);
             return P33_PRIORITY;
         }
         Err(InterceptError::AntiParallelVectors) | Err(InterceptError::LambertNotConverged) => {
-            state.alarm.code = ALARM_P33_LAMBERT;
-            state.alarm.lit = true;
+            state.alarm.raise(ALARM_P33_LAMBERT, crate::tables::alarm_codes::SITE_P33);
             return P33_PRIORITY;
         }
         Ok(res) => {

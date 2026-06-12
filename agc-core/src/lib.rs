@@ -382,6 +382,10 @@ impl AgcState {
             alarm: AlarmState {
                 code: 0,
                 code2: 0,
+                code1: 0,
+                adres: 0,
+                bbank: 0,
+                ercount: 0,
                 lit: false,
             },
             flagwords: [0u16; 12],

@@ -57,7 +57,7 @@ pub fn poll_uplink<U: Uplink>(state: &mut AgcState, uplink: &mut U) {
         // through. Any other key arriving while the V/N is locked in
         // OprErr is uplink-too-fast.
         if matches!(state.vn.phase, VnPhase::OprErr) && key != Key::Rset {
-            state.alarm.raise(UPLINK_TOO_FAST);
+            state.alarm.raise(UPLINK_TOO_FAST, crate::tables::alarm_codes::SITE_UPLINK);
             continue;
         }
         feed_key(state, key);

@@ -74,8 +74,7 @@ enum Validation {
 
 /// Raise an alarm and return `Validation::Rejected`.
 fn raise(state: &mut crate::AgcState, code: u16) -> Validation {
-    state.alarm.code = code;
-    state.alarm.lit = true;
+    state.alarm.raise(code, crate::tables::alarm_codes::SITE_P40_P41);
     Validation::Rejected
 }
 
@@ -136,8 +135,7 @@ pub fn p40_init(state: &mut crate::AgcState) -> JobPriority {
     };
 
     if dv_mag < SPS_MIN_DV {
-        state.alarm.code = ALARM_P40_WRONG_REGIME;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_P40_WRONG_REGIME, crate::tables::alarm_codes::SITE_P40_P41);
         return PRIORITY;
     }
 
@@ -196,8 +194,7 @@ pub fn p41_init(state: &mut crate::AgcState) -> JobPriority {
     };
 
     if dv_mag >= SPS_MIN_DV {
-        state.alarm.code = ALARM_P41_WRONG_REGIME;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_P41_WRONG_REGIME, crate::tables::alarm_codes::SITE_P40_P41);
         return PRIORITY;
     }
 

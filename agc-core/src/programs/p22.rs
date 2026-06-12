@@ -394,8 +394,7 @@ pub fn p22_init(state: &mut AgcState) -> JobPriority {
     match state.csm_state.frame {
         Frame::EarthInertial | Frame::MoonInertial => {}
         Frame::StableMember => {
-            state.alarm.code = FRAME_MISMATCH;
-            state.alarm.lit = true;
+            state.alarm.raise(FRAME_MISMATCH, crate::tables::alarm_codes::SITE_P22);
             state.csm_nav.tracking_active = false;
             return P22_PRIORITY;
         }
@@ -403,8 +402,7 @@ pub fn p22_init(state: &mut AgcState) -> JobPriority {
 
     // Precondition: non-zero CSM epoch (sanity check for initialised state vector).
     if state.csm_state.epoch.to_seconds() == 0.0 {
-        state.alarm.code = NO_CSM_SV;
-        state.alarm.lit = true;
+        state.alarm.raise(NO_CSM_SV, crate::tables::alarm_codes::SITE_P22);
         state.csm_nav.tracking_active = false;
         return P22_PRIORITY;
     }
@@ -425,8 +423,7 @@ pub fn p22_init(state: &mut AgcState) -> JobPriority {
 
     // Install the periodic nav-cycle hook via the Waitlist.
     if state.waitlist.schedule(P22_CYCLE_CS_U16, p22_cycle_task) == ScheduleResult::Full {
-        state.alarm.code = WAITLIST_OVERFLOW;
-        state.alarm.lit = true;
+        state.alarm.raise(WAITLIST_OVERFLOW, crate::tables::alarm_codes::SITE_P22);
     }
 
     P22_PRIORITY
@@ -459,8 +456,7 @@ pub fn p22_cycle_task(state: &mut AgcState) {
     match state.csm_state.frame {
         Frame::EarthInertial | Frame::MoonInertial => {}
         Frame::StableMember => {
-            state.alarm.code = FRAME_MISMATCH;
-            state.alarm.lit = true;
+            state.alarm.raise(FRAME_MISMATCH, crate::tables::alarm_codes::SITE_P22);
             state.csm_nav.tracking_active = false;
             reschedule_if_active(state);
             return;
@@ -518,8 +514,7 @@ pub fn p22_incorporate_landmark_mark(state: &mut AgcState, mark: LandmarkMark) {
 
     // Edge case (g): landmark index out of range.
     if mark.landmark_index == 0 || mark.landmark_index > 8 {
-        state.alarm.code = BAD_LANDMARK_INDEX;
-        state.alarm.lit = true;
+        state.alarm.raise(BAD_LANDMARK_INDEX, crate::tables::alarm_codes::SITE_P22);
         return;
     }
 
@@ -536,8 +531,7 @@ pub fn p22_incorporate_landmark_mark(state: &mut AgcState, mark: LandmarkMark) {
 
     // Edge case: range too small (safety floor).
     if rng < MIN_LANDMARK_RANGE_M {
-        state.alarm.code = LANDMARK_RANGE_ZERO;
-        state.alarm.lit = true;
+        state.alarm.raise(LANDMARK_RANGE_ZERO, crate::tables::alarm_codes::SITE_P22);
         return;
     }
 
@@ -695,8 +689,7 @@ fn p22_scalar_update(
     }
 
     if outcome == UpdateOutcome::AcceptedWOverflow {
-        state.alarm.code = CSM_W_OVERFLOW;
-        state.alarm.lit = true;
+        state.alarm.raise(CSM_W_OVERFLOW, crate::tables::alarm_codes::SITE_P22);
         p22_rectify_w_matrix(state);
         return UpdateOutcome::Accepted;
     }
@@ -712,8 +705,7 @@ fn p22_scalar_update(
 /// Spec: p21_p22-spec.md §8.2; edge case (f)
 fn check_consecutive_rejects(state: &mut AgcState) {
     if state.csm_nav.consecutive_reject_count >= 5 {
-        state.alarm.code = LANDMARK_REJECT;
-        state.alarm.lit = true;
+        state.alarm.raise(LANDMARK_REJECT, crate::tables::alarm_codes::SITE_P22);
         state.csm_nav.tracking_active = false;
     }
 }
@@ -724,8 +716,7 @@ fn reschedule_if_active(state: &mut AgcState) {
         return;
     }
     if state.waitlist.schedule(P22_CYCLE_CS_U16, p22_cycle_task) == ScheduleResult::Full {
-        state.alarm.code = WAITLIST_OVERFLOW;
-        state.alarm.lit = true;
+        state.alarm.raise(WAITLIST_OVERFLOW, crate::tables::alarm_codes::SITE_P22);
     }
 }
 
