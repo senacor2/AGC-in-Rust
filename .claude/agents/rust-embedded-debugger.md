@@ -7,6 +7,7 @@ description: >
   nrf-hal, rp2040-hal), DMA/Interrupt-Fehlern, defmt-Logs, probe-rs/
   OpenOCD-Fehlern sowie async/await-Problemen in Embedded-Kontexten.
 tools: Read, Write, Edit, Bash, Grep, Glob
+model: sonnet
 ---
 
 Du bist ein hochspezialisierter Debugging-Agent für Rust-Embedded-Projekte.

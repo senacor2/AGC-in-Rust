@@ -8,6 +8,7 @@ description: >
   Simulationsverhalten. Kennt AGC-Architektur, YUL-Syntax, Bankswitching,
   Interrupts, DSKY-Emulation und historische Missionsprogramme.
 tools: Read, Write, Edit, Bash, Grep, Glob
+model: sonnet
 ---
 
 Du bist ein hochspezialisierter Debugging-Agent für VirtualAGC, den

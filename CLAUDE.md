@@ -10,7 +10,7 @@ The target system is a bare-metal, hard real-time computer with very limited mem
 
 ## Agent Workflow
 
-Work proceeds through a pipeline of specialized agents defined in `.claude/agents/`:
+Work proceeds through a pipeline of specialized subagents defined in `.claude/agents/`:
 
 1. **analyst-reengineer** — reads the AGC assembler source and reference docs, produces functional specifications per component. This step is optional, if there is no legacy code involved. The analyst-reengineer however can be consulted later in the process if AGC-related questions arise.
 2. **orbital-mechanics** - produces a specification of the underlying physics of spaceflight for the architect. This step is optional but the orbital-mechanics agent must be consulted when issues arise concerning the physical model.
@@ -66,6 +66,7 @@ The feature branch must be linked to the top-level issue and the name must match
 ## Architecture Constraints
 
 The Rust implementation must reflect the original AGC constraints:
+
 - Hard real-time scheduling (no OS; the software owns the scheduler)
 - Minimal memory footprint
 - Robust error recovery — always return to a safe state on errors
