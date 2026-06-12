@@ -89,7 +89,7 @@ fn tc_msfn_3_id_sync_pair() {
     assert_eq!(buf[1], LOWIDCOD, "w35 of pair 0 must be LOWIDCOD");
 }
 
-/// TC-MSFN-4: TIME2/TIME1 at pair 51 reflect mission elapsed time.
+/// TC-MSFN-4: TIME2/TIME1 at pair 50 reflect mission elapsed time.
 #[test]
 fn tc_msfn_4_time_pair() {
     use agc_core::types::Met;
@@ -101,30 +101,26 @@ fn tc_msfn_4_time_pair() {
     let buf = build_cmcstadl(&state);
     let (expected_t2, expected_t1) = encode_time(50_000);
 
-    assert_eq!(buf[2 * 51], expected_t2, "TIME2 must match encode_time high");
-    assert_eq!(buf[2 * 51 + 1], expected_t1, "TIME1 must match encode_time low");
+    assert_eq!(buf[2 * 50], expected_t2, "TIME2 must match encode_time high (pair 50)");
+    assert_eq!(buf[2 * 50 + 1], expected_t1, "TIME1 must match encode_time low (pair 50)");
 }
 
 /// TC-MSFN-5: REFSMMAT identity diagonal encodes to near-full-scale positive.
 ///
-/// For a fresh-start AgcState, REFSMMAT = identity.  The diagonal elements
-/// (1.0) encode to (0x3FFF, 0x3FFE) in DP B-0 scale.
+/// REFSMMAT is at pairs 33–38. Diagonal M[0][0] (pair 33) and M[1][1] (pair 37)
+/// both encode to (0x3FFF, 0x3FFE) in DP B-0 scale.
 #[test]
 fn tc_msfn_5_refsmmat_identity_diagonal() {
     let state = AgcState::new();
     let buf = build_cmcstadl(&state);
 
-    // Pair 30 = REFSMMAT M[0][0] = 1.0
-    let (h30, l30) = (buf[60], buf[61]);
-    // High word: 0x3FFF (= +16383, near full-scale positive)
-    assert_eq!(h30, 0x3FFF, "REFSMMAT[0][0] high word must be 0x3FFF");
-    // Low word: 0x3FFE (= +16382, near full-scale — DP round-off from 2^28-2)
-    assert_eq!(l30, 0x3FFE, "REFSMMAT[0][0] low word must be 0x3FFE");
+    let (h33, l33) = (buf[66], buf[67]); // pair 33 = M[0][0]
+    assert_eq!(h33, 0x3FFF, "REFSMMAT[0][0] high must be 0x3FFF");
+    assert_eq!(l33, 0x3FFE, "REFSMMAT[0][0] low must be 0x3FFE");
 
-    // Pair 34 = REFSMMAT M[1][1] = 1.0 — same encoding
-    let (h34, l34) = (buf[68], buf[69]);
-    assert_eq!(h34, 0x3FFF, "REFSMMAT[1][1] high word must be 0x3FFF");
-    assert_eq!(l34, 0x3FFE, "REFSMMAT[1][1] low word must be 0x3FFE");
+    let (h37, l37) = (buf[74], buf[75]); // pair 37 = M[1][1]
+    assert_eq!(h37, 0x3FFF, "REFSMMAT[1][1] high must be 0x3FFF");
+    assert_eq!(l37, 0x3FFE, "REFSMMAT[1][1] low must be 0x3FFE");
 }
 
 /// TC-MSFN-6: REFSMMAT off-diagonal elements (0.0) encode to zero.
@@ -133,8 +129,8 @@ fn tc_msfn_6_refsmmat_offdiagonal_zero() {
     let state = AgcState::new();
     let buf = build_cmcstadl(&state);
 
-    // Pairs 31, 32, 33, 35 are off-diagonal elements = 0.0
-    for idx in [31, 32, 33, 35] {
+    // Pairs 34, 35, 36, 38 are off-diagonal = 0.0
+    for idx in [34, 35, 36, 38] {
         let (h, l) = (buf[2 * idx], buf[2 * idx + 1]);
         assert_eq!(h, 0, "REFSMMAT off-diagonal pair {idx} high must be 0");
         assert_eq!(l, 0, "REFSMMAT off-diagonal pair {idx} low must be 0");

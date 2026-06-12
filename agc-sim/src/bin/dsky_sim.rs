@@ -54,6 +54,12 @@ fn main() -> io::Result<()> {
 fn run<W: Write>(out: &mut W) -> io::Result<()> {
     let mut state = AgcState::new();
     let mut hw = SimHardware::new();
+
+    // Open a timestamped MSFN downlink log in the current directory.
+    // Failures are soft — the sim continues without file logging.
+    if let Err(e) = hw.open_downlink_log(std::path::Path::new(".")) {
+        eprintln!("downlink log: {e} (continuing without file)");
+    }
     let mut last_frame = Instant::now();
     let mut last_physics = Instant::now();
     let mut flash_on = true;
