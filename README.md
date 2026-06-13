@@ -11,7 +11,7 @@ Aside from the `input` documents, practically all code and documentation has bee
 | Directory | Content |
 | --- | --- |
 | `agc-core` | Rust code for the AGC command module code |
-| `agc-sim ` | a simulator for the AGC with all devices virtualized. Runs on any platform |
+| [`agc-sim`](agc-sim/README.md) | a simulator for the AGC with all devices virtualized. Runs on any platform |
 | `agc-protocol` | Implements a serial line protocol used by agc-core to communicate with agc-bridge-pico |
 | `agc-board-nucleo-f767` | Bare metal port of the AGC to a NUCLEO-F767ZI |
 | `agc-bridge-pico` | Firmware for the Raspberry Pi Pico that acts as a bridge between all peripherals (except the IMU) and the AGC software |
