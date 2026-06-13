@@ -29,7 +29,7 @@
 //!    result via `V06 N34` or raises one of three alarms.
 //!
 //! AGC source: `Comanche055/P20-P25.agc` (P29 entry sequence).
-//! Spec: `specs/p29-plan.md`.
+//! Spec: `specs/p29-spec.md`.
 
 use crate::executive::job::JobPriority;
 use crate::navigation::conics::{time_of_longitude, P29Error};
