@@ -1,5 +1,9 @@
 # Specification: `programs/p20` — Rendezvous Navigation
 
+## Change Log
+
+- **2026-06-13** — Audited under issue #159 by analyst-reengineer agent. Corrected field names `state.target` → `state.target_state` and `state.csm` → `state.csm_state` throughout; added `consecutive_reject_count: u8` to `RendezvousNavState` struct and Default impl; updated §4.1/§4.2 docstrings to reflect Waitlist scheduling (not `servicer_exit` hook); resolved open questions §13 items 3 and 5 as implemented.
+
 **Status**: Ready for implementation (Milestone 5 Phase 2)
 **Module path**: `agc-core/src/programs/p20.rs`
 **Split from**: `agc-core/src/programs/p20_p22.rs` stub (the existing file contains only
@@ -63,11 +67,11 @@ Noun = 20). This triggers the program dispatch table entry for major mode 20. Th
 can also be re-entered after a restart if the restart phase register is set (see §10).
 
 **Preconditions on entry**:
-- `state.target` must be a non-zero `StateVector` (a target state uplinked by Mission
-  Control or set by a prior P31/P34 computation). If `state.target` is `StateVector::ZERO`,
+- `state.target_state` must be a non-zero `StateVector` (a target state uplinked by Mission
+  Control or set by a prior P31/P34 computation). If `state.target_state` is `StateVector::ZERO`,
   P20 raises alarm 00404 (no radar data valid) and requests a crew go-ahead before starting
   the update loop.
-- `state.csm` must be a valid, up-to-date own-vehicle state (maintained by the SERVICER).
+- `state.csm_state` must be a valid, up-to-date own-vehicle state (maintained by the SERVICER).
 - The rendezvous radar (R22) must be powered and tracking; if not, P20 still initialises but
   marks `tracking_active = false` and only updates the display from the propagated state.
 
@@ -128,7 +132,7 @@ This struct is added as a field of `AgcState`:
 #[derive(Clone, Debug)]
 pub struct RendezvousNavState {
     /// Estimated inertial position of the target vehicle (m).
-    /// Frame must match `AgcState::csm.frame` (ECI or MCI).
+    /// Frame must match `AgcState::csm_state.frame` (ECI or MCI).
     /// Corresponds to AGC erasable `RONE` (scale B+28 m).
     pub target_pos: Vec3,
 
@@ -163,8 +167,12 @@ pub struct RendezvousNavState {
     /// Corresponds to AGC erasable `REJECTCNT`.
     pub reject_count: u16,
 
+    /// Count of consecutive rejected marks since the last accepted mark.
+    /// Reset to 0 on any accepted mark. Raises alarm 00405 when it reaches 5.
+    pub consecutive_reject_count: u8,
+
     /// Most recently computed relative state in the rendezvous LVLH frame.
-    /// Derived from `target_pos`/`target_vel` and `AgcState::csm`; recomputed
+    /// Derived from `target_pos`/`target_vel` and `AgcState::csm_state`; recomputed
     /// each nav cycle. Displayed via V16 N54 (range, range-rate, LOS angle).
     /// Type defined in `guidance::rendezvous` (Phase 1).
     pub lvlh_state: LvlhState,
@@ -182,15 +190,16 @@ pub struct RendezvousNavState {
 impl Default for RendezvousNavState {
     fn default() -> Self {
         Self {
-            target_pos:      Vec3::ZERO,
-            target_vel:      Vec3::ZERO,
-            target_epoch:    0.0,
-            w_matrix:        [[0.0; 6]; 6],
-            last_mark_time:  0.0,
-            mark_count:      0,
-            reject_count:    0,
-            lvlh_state:      LvlhState { rho: Vec3::ZERO, rho_dot: Vec3::ZERO },
-            tracking_active: false,
+            target_pos:               [0.0; 3],
+            target_vel:               [0.0; 3],
+            target_epoch:             0.0,
+            w_matrix:                 [[0.0; 6]; 6],
+            last_mark_time:           0.0,
+            mark_count:               0,
+            reject_count:             0,
+            consecutive_reject_count: 0,
+            lvlh_state:               LvlhState { rho: [0.0; 3], rho_dot: [0.0; 3] },
+            tracking_active:          false,
         }
     }
 }
@@ -214,8 +223,8 @@ pub rendezvous_nav: RendezvousNavState,
 /// Entry point for P20 (Rendezvous Navigation).  Registered in PROGRAM_TABLE[20].
 ///
 /// Sets major_mode = 20, validates preconditions, initialises `RendezvousNavState`
-/// from the current `state.target` uplinked state vector, and installs the
-/// periodic nav-cycle hook.
+/// from the current `state.target_state` uplinked state vector, and schedules the
+/// periodic nav-cycle hook via the Waitlist.
 ///
 /// # Returns
 /// `P20_PRIORITY` if initialisation succeeds.
@@ -223,26 +232,26 @@ pub rendezvous_nav: RendezvousNavState,
 /// exists so the crew can take corrective action without a full program abort).
 ///
 /// # Preconditions
-/// - `state.target` must have a non-zero epoch; otherwise alarm 00404 is raised.
-/// - `state.csm.frame == state.target.frame`; otherwise alarm 00400 is raised.
+/// - `state.target_state` must have a non-zero position/velocity; otherwise alarm 00404 is raised.
+/// - `state.csm_state.frame == state.target_state.frame`; otherwise alarm 00400 is raised.
 ///
 /// # Post-conditions
 /// - `state.major_mode == 20`
 /// - `state.dsky.prog == 20`
 /// - `state.rendezvous_nav.tracking_active == true` (if preconditions met)
-/// - `state.servicer_exit` is set to `p20_rendezvous_nav_cycle`
+/// - Waitlist entry scheduled for `NAV_CYCLE_CS` (200 cs = 2 s) calling `p20_rendezvous_nav_cycle`
 pub fn p20_init(state: &mut AgcState) -> JobPriority
 ```
 
 **Priority**: `P20_PRIORITY: JobPriority = 8` — lower than the DAP (priority 37) and the
 SERVICER/Average-G (priority 20), but higher than background targeting jobs. The nav cycle
-runs as a servicer-exit hook, not as an independent job.
+runs as a Waitlist-scheduled task, not as a `servicer_exit` hook.
 
 ### 4.2 `p20_rendezvous_nav_cycle`
 
 ```rust
-/// Periodic rendezvous navigation update.  Called by the SERVICER exit hook
-/// (approximately every 2 seconds via `servicer_exit`).
+/// Periodic rendezvous navigation update.  Scheduled via the Waitlist
+/// (approximately every 2 seconds; 200 centiseconds).
 ///
 /// Steps performed each cycle (see §6 for the state-update math):
 /// 1. Apply covariance growth (process noise) proportional to elapsed time
@@ -251,6 +260,7 @@ runs as a servicer-exit hook, not as an independent job.
 ///    `math::kepler::kepler_step`.  Update `target_epoch`.
 /// 3. Recompute `lvlh_state` from propagated target SV and current CSM SV.
 /// 4. Update DSKY display registers (V16 N54; see §8).
+/// 5. Re-schedule itself in the Waitlist for the next cycle (if major_mode == 20).
 ///
 /// # Invariants
 /// - Does not modify `w_matrix` beyond the process-noise growth step.
@@ -278,9 +288,11 @@ pub fn p20_rendezvous_nav_cycle(state: &mut AgcState)
 /// - `state.rendezvous_nav.w_matrix` rank-1 updated.
 /// - `state.rendezvous_nav.mark_count` incremented.
 /// - `state.rendezvous_nav.last_mark_time` updated to `mark.time`.
+/// - `state.rendezvous_nav.consecutive_reject_count` reset to 0.
 ///
 /// # Post-conditions (on rejection)
 /// - `state.rendezvous_nav.reject_count` incremented.
+/// - `state.rendezvous_nav.consecutive_reject_count` incremented.
 /// - No other fields modified.
 ///
 /// # Alarms
@@ -562,9 +574,10 @@ where `sigma_sq` is the measurement noise variance for this mark type:
 
 If `|residual| > 3 * sqrt(S)`, the mark is a statistical outlier:
 - Increment `reject_count`.
+- Increment `consecutive_reject_count`.
 - Do NOT update `x` or `W`.
-- If `reject_count` reaches 5 consecutive rejects, raise alarm 00405 (persistent tracking
-  failure; crew attention required).
+- If `consecutive_reject_count` reaches 5, raise alarm 00405 (persistent tracking
+  failure; crew attention required) and set `tracking_active = false`.
 - Return early.
 
 This gate is documented in O'Brien p. 323: "marks with residuals greater than 3 standard
@@ -627,6 +640,7 @@ re-initialised and `REJECTCNT` is incremented." This port raises alarm 01421 as 
 
 ```
 mark_count += 1
+consecutive_reject_count = 0
 last_mark_time = mark.time
 ```
 
@@ -729,9 +743,9 @@ When the crew keys V32 (mark reject / W rectification request), P20 calls
 | Code | Mnemonic | Trigger | Recovery |
 |------|----------|---------|---------|
 | 01421 | W_OVERFLOW | A diagonal element of `w_matrix` goes negative or NaN after a measurement update. Indicates numerical overflow or a degenerate measurement geometry. | `p20_rectify_w_matrix` is called automatically; alarm displayed on DSKY; nav cycle continues from re-initialised W. O'Brien p. 323. |
-| 00404 | NO_RADAR | P20 entered with `state.target == StateVector::ZERO` or radar not providing valid marks for > 60 s. | P20 sets `tracking_active = false`, displays alarm, continues propagating target SV from last known state. Crew must verify radar lock. O'Brien p. 333. |
+| 00404 | NO_RADAR | P20 entered with `state.target_state` position/velocity all zero or radar not providing valid marks for > 60 s. | P20 sets `tracking_active = false`, displays alarm, continues propagating target SV from last known state. Crew must verify radar lock. O'Brien p. 333. |
 | 00405 | REJECT_OVERRIDE | Five consecutive marks rejected by 3-sigma gate. Indicates the stored state may be grossly wrong (large bias) rather than just noisy marks. | Alarm displayed on DSKY. `tracking_active` set false. Crew must either rectify W (V32) or re-uplink target SV and restart P20. O'Brien p. 334. |
-| 00400 | FRAME_MISMATCH | `state.csm.frame != state.target.frame` on entry. The CSM and target state vectors are in different coordinate frames, making relative-state computation invalid. | Alarm displayed; init aborts without setting `tracking_active = true`. Crew must ensure both state vectors are updated to the same frame (usually triggered by an SOI transition that updated CSM but not target SV). |
+| 00400 | FRAME_MISMATCH | `state.csm_state.frame != state.target_state.frame` on entry. The CSM and target state vectors are in different coordinate frames, making relative-state computation invalid. | Alarm displayed; init aborts without setting `tracking_active = true`. Crew must ensure both state vectors are updated to the same frame (usually triggered by an SOI transition that updated CSM but not target SV). |
 
 ---
 
@@ -778,12 +792,12 @@ following the standard restart-safe coding pattern from `specs/executive-spec.md
 |-----------|---------------------|--------------------|
 | (a) Radar not tracking (`range_valid == false`, `range_rate_valid == false`) | `p20_incorporate_radar_mark` | Skip all mark incorporation; do NOT increment `mark_count`. If this persists > 60 s raise alarm 00404 and set `tracking_active = false`. |
 | (b) Range < `MIN_TRACKING_RANGE_M` (50 m) | `p20_incorporate_radar_mark`, `p20_rendezvous_nav_cycle` | Terminal-phase proximity; set `tracking_active = false` and display alarm. The measurement model (linear range, LOS angle) becomes unreliable at very short range; the crew should transition to visual guidance. |
-| (c) Mark rejected by 3-sigma gate | `p20_incorporate_radar_mark`, `p20_incorporate_sextant_mark` | Increment `reject_count`; do not update state or W. Track consecutive-reject count; raise alarm 00405 after 5 consecutive rejects. Reset consecutive-reject counter on any accepted mark. |
+| (c) Mark rejected by 3-sigma gate | `p20_incorporate_radar_mark`, `p20_incorporate_sextant_mark` | Increment `reject_count` and `consecutive_reject_count`; do not update state or W. Raise alarm 00405 after 5 consecutive rejects; reset `consecutive_reject_count` to 0 on any accepted mark. |
 | (d) W-matrix diagonal entry zero or negative | `p20_incorporate_radar_mark`, `p20_incorporate_sextant_mark` | Raise alarm 01421; call `p20_rectify_w_matrix`; return without further update. This prevents subsequent marks from using a degenerate W and producing NaN state values. |
-| (e) Frame mismatch (ECI vs MCI during cislunar) | `p20_init`, `p20_rendezvous_nav_cycle` | Raise alarm 00400; set `tracking_active = false`; do not call `guidance::rendezvous` functions. The SOI transition (managed by the integrator) must update both `csm` and `target` state vectors to MCI before P20 can resume. P20 checks `frame` consistency on every nav cycle, not just at init. |
+| (e) Frame mismatch (ECI vs MCI during cislunar) | `p20_init`, `p20_rendezvous_nav_cycle` | Raise alarm 00400; set `tracking_active = false`; do not call `guidance::rendezvous` functions. The SOI transition (managed by the integrator) must update both `csm_state` and `target_state` state vectors to MCI before P20 can resume. P20 checks `frame` consistency on every nav cycle, not just at init. |
 | (f) Zero relative position vector | `p20_rendezvous_nav_cycle` | If `range(csm_pos, target_pos) < 1.0 m` (docking contact), skip the LVLH state update and suppress N54 display (range display would be zero or undefined). Do not call `range_rate` or `los_angles_lvlh` (both panic on zero range per `specs/rendezvous-spec.md` §8). |
 | (g) `Δt > 3600 s` in process-noise growth | `p20_rendezvous_nav_cycle` | Cap `Δt` at 3600 s and call `p20_rectify_w_matrix`. Log the condition (DEBUG build) so the tester can detect unexpectedly long gaps between marks during simulation. |
-| (h) `target` SV epoch in the future | `p20_rendezvous_nav_cycle` | `kepler_step` with a negative `Δt` is valid (backward propagation) but unusual. No special case; propagate normally. |
+| (h) `target_state` SV epoch in the future | `p20_rendezvous_nav_cycle` | `kepler_step` with a negative `Δt` is valid (backward propagation) but unusual. No special case; propagate normally. |
 
 ---
 
@@ -791,12 +805,12 @@ following the standard restart-safe coding pattern from `specs/executive-spec.md
 
 ### TC-P20-1: Init with valid uplinked target SV
 
-**Purpose**: Verify that `p20_init` correctly initialises state and installs the nav cycle hook.
+**Purpose**: Verify that `p20_init` correctly initialises state and installs the nav cycle hook in the Waitlist.
 
 **Input**:
-- `state.csm`: circular LEO at 300 km, ECI frame.
+- `state.csm_state`: circular LEO at 300 km, ECI frame.
   `r = [6_671_000.0, 0.0, 0.0]` m, `v = [0.0, 7726.0, 0.0]` m/s, epoch = 1000.0 s.
-- `state.target`: target in circular LEO 2 km behind (same altitude), ECI frame.
+- `state.target_state`: target in circular LEO 2 km behind (same altitude), ECI frame.
   `r_t = [6_671_000.0, -2000.0, 0.0]` m, `v_t = [0.0, 7726.0, 0.0]` m/s, epoch = 1000.0 s.
 - `state.time = 1000.0` s.
 
@@ -811,14 +825,14 @@ following the standard restart-safe coding pattern from `specs/executive-spec.md
 - `state.rendezvous_nav.w_matrix[0][0] == W_INIT_POS_VARIANCE` (250_000.0 m²).
 - `state.rendezvous_nav.w_matrix[3][3] == W_INIT_VEL_VARIANCE` (1.0 m²/s²).
 - `state.rendezvous_nav.mark_count == 0`.
-- `state.servicer_exit` is `Some(p20_rendezvous_nav_cycle)`.
+- Waitlist has a pending entry for `p20_rendezvous_nav_cycle`.
 - No program alarm raised.
 
 ---
 
 ### TC-P20-2: Init with zero target SV raises alarm 00404
 
-**Input**: `state.target == StateVector::ZERO`. All other state valid as in TC-P20-1.
+**Input**: `state.target_state` has zero position and velocity. All other state valid as in TC-P20-1.
 
 **Action**: Call `p20_init(&mut state)`.
 
@@ -878,6 +892,7 @@ Deliver five consecutive radar marks each with `range_m = 1_000_000.0` m (wildly
 
 **Expected after fifth mark**:
 - `reject_count == 5`.
+- `consecutive_reject_count == 5`.
 - Program alarm `00405` present in `state.alarm`.
 - `tracking_active == false`.
 
@@ -921,9 +936,9 @@ before the simulated restart.
 
 ### TC-P20-8: Frame mismatch on nav cycle raises alarm 00400
 
-**Setup**: `p20_init` completes normally (ECI). Then update `state.csm.frame` to
+**Setup**: `p20_init` completes normally (ECI). Then update `state.csm_state.frame` to
 `Frame::MoonInertial` (simulating a mid-flight SOI crossing where only CSM SV was
-updated) without updating `state.target.frame`.
+updated) without updating `state.target_state.frame`.
 
 **Action**: Call `p20_rendezvous_nav_cycle(&mut state)`.
 
@@ -963,19 +978,17 @@ Set `last_mark_time = 1000.0`, `state.time = 1100.0` (Δt = 100 s).
    to be ISR-safe) or via a shared queue polled by the nav cycle. An ISR-safe bounded queue
    (`heapless::Queue`) is the recommended pattern for `no_std` bare-metal.
 
-3. **`servicer_exit` hook discipline**: This spec installs `p20_rendezvous_nav_cycle` as a
-   `servicer_exit` hook. If P40/P41 are simultaneously active they also use `servicer_exit`.
-   The `AgcState` currently has a single `servicer_exit: Option<fn(&mut AgcState)>` field.
-   If multiple hooks are needed simultaneously, the architect must either (a) introduce a
-   small array of hooks (`[Option<fn(&mut AgcState)>; 4]`) or (b) compose hooks via a
-   chain. The P40/P41 spec has the same issue; this should be resolved uniformly.
+3. **Waitlist hook discipline** (resolved): The implementation uses the Waitlist
+   (`waitlist.schedule(NAV_CYCLE_CS, p20_rendezvous_nav_cycle)`) for the periodic nav cycle,
+   rather than a `servicer_exit` hook. The `servicer_exit` field is used exclusively by
+   P40/P41 burn management. The `p20_rendezvous_nav_cycle` function re-schedules itself at
+   the end of each cycle when `major_mode == 20`.
 
 4. **`RendezvousNavState` in `AgcState`**: Adding a new 306-byte struct field to `AgcState`
    (288 bytes for W-matrix + other fields) will increase the total `AgcState` size. Verify
    that the Cortex-M7 BSS/data section budget is still met.
 
-5. **Consecutive-reject counter**: The spec mentions a "5 consecutive rejects" threshold for
-   alarm 00405 but the `RendezvousNavState` struct as written only holds a cumulative
-   `reject_count`. A separate `consecutive_reject_count: u8` field should be added (and
-   reset on any accepted mark). The architect should confirm whether to add this field to
-   `RendezvousNavState` or handle it as a local in the mark incorporation function.
+5. **Consecutive-reject counter** (resolved): The `RendezvousNavState` struct includes a
+   `consecutive_reject_count: u8` field. It is incremented on each rejected mark, reset to 0
+   on any accepted mark, and triggers alarm 00405 with `tracking_active = false` when it
+   reaches 5. This is handled inside the mark incorporation functions.
