@@ -1,5 +1,9 @@
 # Specification: `navigation/state_vector` Module
 
+## Change Log
+
+**2026-06-14**: Added specifications for the four ECI ↔ ECEF frame-transform helpers (`inertial_to_earth_fixed`, `earth_fixed_to_inertial`, `inertial_to_earth_fixed_vel`, `earth_fixed_to_inertial_vel`) that are implemented in `state_vector.rs` and were absent from the spec. Updated §9 API Surface and §10 Dependencies accordingly.
+
 **Status**: Approved for implementation
 **Module path**: `agc-core/src/navigation/state_vector.rs`
 **Architecture reference**: `docs/architecture.md` §7.4 "SERVICER (Average-G)", §9.4 "Gravity Model", §6.3 "Erasable Memory Protection"
@@ -32,6 +36,13 @@ The module is the lowest-level dependency in the navigation sub-tree. It is used
 - `StateVector::ZERO`: a safe default for initialization.
 - The documented mapping from AGC erasable-memory fixed-point words to `f64` SI
   values so that fixture tests and uplink data decode correctly.
+- `inertial_to_earth_fixed` — rotate an ECI position vector to the Earth-fixed
+  (ECEF) frame using `Rz(+gha_rad)`.
+- `earth_fixed_to_inertial` — inverse rotation ECEF → ECI using `Rz(−gha_rad)`.
+- `inertial_to_earth_fixed_vel` — rotate an ECI velocity to the ECEF frame,
+  subtracting the Earth-rotation term `ω × r` before rotation.
+- `earth_fixed_to_inertial_vel` — rotate an ECEF velocity to the ECI frame,
+  adding back the Earth-rotation term after rotation.
 
 ### What this module does NOT provide
 
@@ -552,6 +563,7 @@ impl StateVector {
 
 ```rust
 // agc-core/src/navigation/state_vector.rs
+use crate::navigation::time::OMEGA_EARTH;
 use crate::types::{Met, Vec3};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -579,6 +591,32 @@ impl StateVector {
 
     pub fn debug_assert_valid(&self);
 }
+
+/// Rotate an ECI position vector to the Earth-fixed (ECEF) frame.
+///
+/// Applies `Rz(+gha_rad)`. At `gha = 0` this is the identity. At `gha = π/2`
+/// the ECI unit x-vector maps to ECEF `[0, -1, 0]`.
+///
+/// AGC source: `Comanche055/LAT-LONG_SUBROUTINES.agc`.
+pub fn inertial_to_earth_fixed(pos: Vec3, gha_rad: f64) -> Vec3;
+
+/// Rotate an Earth-fixed (ECEF) position vector to the ECI frame.
+///
+/// Applies `Rz(−gha_rad)`. Inverse of `inertial_to_earth_fixed`.
+pub fn earth_fixed_to_inertial(pos: Vec3, gha_rad: f64) -> Vec3;
+
+/// Rotate an ECI velocity vector to the Earth-fixed frame.
+///
+/// Subtracts the Earth-rotation term `ω × r_eci` (with `r_eci` the ECI position)
+/// before applying the `Rz(+gha_rad)` rotation, so the result is the velocity
+/// as observed in the rotating Earth-fixed frame.
+pub fn inertial_to_earth_fixed_vel(pos: Vec3, vel: Vec3, gha_rad: f64) -> Vec3;
+
+/// Rotate an Earth-fixed velocity vector to the ECI frame.
+///
+/// Adds back the Earth-rotation term after the `Rz(−gha_rad)` rotation.
+/// Inverse of `inertial_to_earth_fixed_vel`.
+pub fn earth_fixed_to_inertial_vel(pos: Vec3, vel: Vec3, gha_rad: f64) -> Vec3;
 ```
 
 The module re-exports `StateVector` via `navigation::mod.rs`:
@@ -598,11 +636,15 @@ callers as needed. It is not currently re-exported from `navigation::mod`.
 |------------|-----------|-----|
 | `crate::types::Vec3` | `[f64; 3]` type alias | Represents position and velocity |
 | `crate::types::Met` | `u32` centisecond counter | Represents the state epoch |
+| `crate::navigation::time::OMEGA_EARTH` | Earth rotation rate (rad/s) | Used in the ECEF velocity transforms |
+| `libm` | `libm::cos`, `libm::sin` | Trig for `Rz(gha)` rotation in ECEF helpers (no_std) |
 | `crate::navigation::gravity` | `MU_EARTH`, `MU_MOON`, `R_EARTH`, `J2_EARTH` | Used in §5 to document which constants govern each frame; not imported by `state_vector.rs` itself |
 | `math::linalg` | `mxv`, `vadd`, `vscale` | Used in §5 to document the SERVICER calling convention; not imported by `state_vector.rs` itself |
 
-`state_vector.rs` imports only `crate::types::{Met, Vec3}`. All other modules
-listed above call into `state_vector`, not the reverse.
+`state_vector.rs` imports `crate::navigation::time::OMEGA_EARTH` and `libm`
+(for the ECEF helpers) in addition to `crate::types::{Met, Vec3}`. All
+navigation-computation modules listed above call into `state_vector`, not the
+reverse.
 
 ---
 
@@ -874,4 +916,6 @@ Expected: assertion passes with error below 10⁻⁶ m/s.
 | FRESH START / RESTART state-vector preservation | `docs/architecture.md` §6.4 |
 | `navigation::conics` propagation | `agc-core/src/navigation/conics.rs` |
 | `navigation::integration` (Cowell/Encke) | `agc-core/src/navigation/integration.rs` |
+| ECEF transforms / GHA convention | `specs/gmst-ecef-plan.md`; `Comanche055/LAT-LONG_SUBROUTINES.agc` |
+| `navigation::time::OMEGA_EARTH` | `agc-core/src/navigation/time.rs` |
 | Module declaration | `agc-core/src/navigation/mod.rs` |

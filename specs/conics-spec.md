@@ -1,5 +1,9 @@
 # Specification: `navigation/conics` Module
 
+## Change Log
+
+**2026-06-14**: Added specifications for `time_to_radius_descending` (§5.11) and the P29 `time_of_longitude` solver with `TimeOfLongitudeResult` and `P29Error` types (§5.12), which are implemented in `conics.rs` but were absent from the spec.
+
 **Status**: Approved for implementation
 **Module path**: `agc-core/src/navigation/conics.rs`
 **Architecture reference**: `docs/architecture.md` §9.2 "Function Granularity", §9.4 "Gravity Model"
@@ -43,6 +47,13 @@ rendezvous targeting (P31–P34) and midcourse correction (P37).
   surface.
 - Re-export of `kepler_step` from `math::kepler` for callers that only need conic
   propagation without the full elements conversion.
+- `time_to_radius_descending` — closed-form time until the spacecraft next descends
+  through a target radius, used by V82 and P29 to compute free-fall time (§5.11).
+- `TimeOfLongitudeResult` struct and `P29Error` enum — result and error types for
+  the P29 solver.
+- `time_of_longitude` — P29 time-of-longitude solver: given the current CSM state
+  and a target geographic longitude, returns the next ground-track crossing time,
+  latitude, and altitude (§5.12).
 
 ### What this module does NOT provide
 
@@ -749,6 +760,124 @@ wrapping or dispatch is performed here.
 
 ---
 
+### 5.11 `time_to_radius_descending`
+
+```rust
+pub fn time_to_radius_descending(el: &OrbitalElements, r_target: f64, mu: f64) -> Option<f64>
+```
+
+#### Purpose
+
+Compute the time from the elements' epoch until the spacecraft next descends
+through `r_target` (i.e., crosses the target radius on the inward leg). Used by
+V82 (Orbital Parameters display) to produce the "Time of Free Fall" quantity
+(NOUN 44 R3 in the original AGC display), and by `time_of_longitude` to seed its
+Newton-Raphson longitude solver.
+
+#### Algorithm
+
+1. Return `None` for hyperbolic or circular orbits (no recurring radius crossings),
+   and when `r_target` is outside `[periapsis_radius(el), apoapsis_radius(el)]`.
+2. Compute `cos ν = (p/r_target − 1) / e` using the semi-latus rectum
+   `p = a(1−e²)`. Clamp to `[−1, 1]` before `acos`.
+3. The descending true anomaly is `ν_desc = 2π − acos(cos ν)` (the solution
+   where the spacecraft is moving inward, i.e. past apoapsis).
+4. Convert true anomaly → eccentric anomaly via
+   `E = 2·atan2(√(1−e)·sin(ν/2), √(1+e)·cos(ν/2))`, then
+   `M = E − e·sin E` for both the current and target anomalies.
+5. Compute `ΔM = M_target − M_now`, wrapping forward by `2π` as needed.
+6. Return `Some(ΔM / n)` where `n = √(μ/a³)` is the mean motion (seconds).
+
+#### Preconditions / return values
+
+- Returns `None` for `el.is_hyperbolic()`, `el.is_circular()`, or when
+  `r_target < periapsis_radius(el)` or `r_target > apoapsis_radius(el)`.
+- Returns `Some(Δt)` in seconds with `Δt ∈ [0, T)` for all valid elliptic cases.
+
+AGC source: `Comanche055/P20-P25.agc` (P29 free-fall time computation).
+
+---
+
+### 5.12 P29 Time-of-Longitude Solver
+
+#### Types
+
+```rust
+/// Result of a successful `time_of_longitude` call.
+#[derive(Clone, Copy, Debug)]
+pub struct TimeOfLongitudeResult {
+    /// MET at which the CSM ground track crosses the target longitude (seconds).
+    pub time_of_crossing_s: f64,
+    /// Geocentric latitude at the crossing (rad). Computed as `asin(z/r)` of
+    /// the ECEF position.
+    pub lat_rad: f64,
+    /// Altitude above Earth mean radius at the crossing (m).
+    pub alt_m: f64,
+}
+
+/// Reasons a `time_of_longitude` call may fail.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum P29Error {
+    /// Hyperbolic or parabolic trajectory — no recurring ground-track crossings.
+    Hyperbolic,
+    /// Newton iteration did not converge within 20 iterations.
+    NoConvergence,
+    /// Zero angular momentum (degenerate radially-falling input).
+    ZeroAngularMomentum,
+}
+```
+
+#### Function
+
+```rust
+pub fn time_of_longitude(
+    csm_pos: Vec3,
+    csm_vel: Vec3,
+    epoch_s: f64,
+    target_lon_rad: f64,
+    gha_epoch_rad: f64,
+) -> Result<TimeOfLongitudeResult, P29Error>
+```
+
+#### Purpose
+
+Given the current CSM state (`csm_pos`, `csm_vel` in ECI), the current mission
+elapsed time in seconds (`epoch_s`), the target geographic longitude
+(`target_lon_rad`), and the Greenwich Hour Angle of Aries at MET = 0
+(`gha_epoch_rad`), return the next time after `epoch_s` at which the CSM ground
+track crosses that longitude, together with the geodetic latitude and altitude at
+the crossing.
+
+#### Algorithm
+
+1. Compute specific orbital energy to detect hyperbolic trajectories. Return
+   `P29Error::Hyperbolic` if `energy ≥ 0`.
+2. Derive the orbital period `T = 2π√(a³/MU_EARTH)`.
+3. Determine prograde/retrograde from the z-component of angular momentum `h`.
+   Return `P29Error::ZeroAngularMomentum` if `‖h‖ < 1e-9`.
+4. Compute the ground-track longitude drift rate:
+   `dlon/dt = sign(h_z) · 2π/T − OMEGA_EARTH`.
+5. Compute the current ECEF longitude from
+   `inertial_to_earth_fixed(csm_pos, gha_epoch_rad + OMEGA_EARTH * epoch_s)`.
+6. Build an initial time guess `t₀ = epoch_s + Δlon / (dlon/dt)`, wrapping
+   `Δlon` into the direction of drift so the crossing is in the future.
+7. Newton iterate: propagate to candidate `t` via `kepler_step`, rotate to
+   ECEF, extract longitude, wrap residual to `(−π, π]`, and update
+   `t ← t − err / (dlon/dt)`. Convergence criterion: `|err| < 1e-5 rad`.
+   Maximum 20 iterations; failure returns `P29Error::NoConvergence`.
+8. Return `TimeOfLongitudeResult { time_of_crossing_s: t, lat_rad, alt_m }`.
+
+#### Limitations
+
+- Only the next single crossing is returned; the AGC P29 did not support a
+  crew-selectable crossing count.
+- Newton convergence degrades for orbits inclined above ~30° near the inclination-
+  limit longitude, where the ground track is non-monotonic in time.
+
+AGC source: `Comanche055/P20-P25.agc` (P29 program entry sequence).
+
+---
+
 ## 6. Mu Dispatch Helpers
 
 To simplify the common call pattern where the caller has a `StateVector` but
@@ -1046,7 +1175,7 @@ verify:
       epoch carried as `Met` in `StateVector`)
 - [x] Scale factors documented for all fixed-point values (§2.3, §9)
 - [x] Corresponding `f64` SI units documented (§3, §9)
-- [x] Input/output preconditions and postconditions stated (§5.1–§5.9)
+- [x] Input/output preconditions and postconditions stated (§5.1–§5.12)
 - [x] Edge cases and error handling specified (§8)
 - [x] Five test cases with expected values (§12)
 - [x] Rust API signatures designed: types (`Vec3`, `f64`, `Met`, `Frame`,
