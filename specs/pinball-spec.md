@@ -1,5 +1,9 @@
 # Specification: `services/pinball` — DSKY Display Formatting
 
+## Change Log
+
+**2026-06-14**: Added `tracker: bool` field to `Lamps` struct and its corresponding mapping in `decode_dsky`; matches `DskyState::tracker` field added for star-tracker lamp (IMU optical alignment activity).
+
 **Status**: Approved for implementation (Milestone 6 Phase 3)
 **Module path**: `agc-core/src/services/pinball.rs`
 **HAL reference**: `specs/hal-spec.md` §6 (`Dsky::write_row`, `set_lamp`)
@@ -70,6 +74,8 @@ pub struct Lamps {
     pub temp: bool,
     pub prog_alarm: bool,
     pub comp_acty: bool,
+    /// Star tracker lamp (IMU optical alignment activity).
+    pub tracker: bool,
 }
 ```
 
@@ -130,6 +136,7 @@ DskyFrame {
         temp:            state.temp,
         prog_alarm:      state.prog_alarm,
         comp_acty:       state.comp_acty,
+        tracker:         state.tracker,
     },
     lamp_test: state.lamp_test_active,
     flashing:  state.flashing,
@@ -218,4 +225,5 @@ Every digit 0..9 returns the table value; digit 10..255 returns 0.
 ### TC-PB-13: decode_dsky end-to-end
 Construct a DskyState with prog=37, verb=6, noun=40, r=[100.0, -2.5, 0.0],
 opr_err=true; call decode_dsky; verify prog/verb/noun split, register
-values, and the opr_err lamp bit.
+values, and the opr_err lamp bit. Also verify `lamps.tracker` matches
+`state.tracker`.

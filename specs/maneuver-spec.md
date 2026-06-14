@@ -1,5 +1,9 @@
 # Specification: `guidance/maneuver` Module
 
+## Change Log
+
+**2026-06-14**: Added `armed: bool` field to `BurnState` (the crew-PRO engine-arm flag that delays SPS ignition until TIG); updated `burn_init` postconditions to document `armed == false` on construction; updated `§9 Rust API Summary` to include the field; added invariant note for `armed`.
+
 **Status**: Approved for implementation
 **Module path**: `agc-core/src/guidance/maneuver.rs`
 **Architecture reference**: `docs/architecture.md` §7.2 (P40 SPS thrusting), §7.4 (SERVICER), §11.1 (Thrust DAP / TVC)
@@ -214,7 +218,7 @@ The Rust port stores all values as plain `f64` m/s with no scaling.
 /// AGC correspondence: the set of erasable variables `DELVEET1/2/3`, `DVTOTAL`,
 /// `TGO`, and the P40 phase flags in the restart group 3 phase table.
 /// Source: Comanche055/ERASABLE_ASSIGNMENTS.agc and P40-P47.agc.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct BurnState {
     /// Target delta-V vector in the inertial (ECI or MCI) frame, m/s.
     ///
@@ -263,6 +267,25 @@ pub struct BurnState {
     /// Once true, `is_burn_complete` returns `true` regardless of accumulated
     /// delta-V.
     pub cutoff_time_met: bool,
+
+    /// True after the crew presses PRO in response to the V50 N99 engine-arm
+    /// prompt but before TIG has been reached.
+    ///
+    /// Real-flight semantics: the crew arms the engine in the last few seconds
+    /// before TIG; the AGC must hold off on actually commanding `SPS_ENABLE`
+    /// until the time of ignition is reached (firing early would consume burn
+    /// duration before the targeting solution intended). The DAP's per-cycle
+    /// ignition gate clears this flag and sets `state.engine_thrusting = true`
+    /// when `state.time >= burn.tig`. See `dap_step` in
+    /// `agc-core/src/control/dap.rs`.
+    ///
+    /// Set to `false` by `burn_init`. Set to `true` by P40 when the crew
+    /// presses PRO at the V50 N99 engine-arm prompt.
+    ///
+    /// AGC correspondence: the "TIG-5" countdown logic in
+    /// Comanche055/P40-P47.agc that holds off the engine ON discrete
+    /// until TIME1 reaches `tig`.
+    pub armed: bool,
 }
 ```
 
@@ -272,8 +295,11 @@ pub struct BurnState {
   targeting error and must not reach `burn_init`.
 - `accumulated_dv_inertial` components are finite. They are bounded in practice
   by the maximum SPS delta-V (~3000 m/s for a trans-earth injection burn).
-- `tig` is the absolute MET at which the SPS engine was commanded on. It is set
-  before `burn_update` is ever called.
+- `tig` is the absolute MET at which the SPS engine is planned to ignite. It is
+  set by `burn_init` from the targeting solution.
+- `armed` transitions from `false` to `true` exactly once (when the crew presses
+  PRO). It is never reset to `false` during a burn. After restart, if `armed` is
+  `true` and `burn_active` is `true`, the DAP will re-enable the engine at TIG.
 - When `burn_active` is `false` and `cutoff_time_met` is `false`, the burn has
   been cleanly completed by the primary criterion. Both being `false` is the
   terminal state.
@@ -297,11 +323,13 @@ ignition time.
 ```rust
 /// Construct a `BurnState` ready for ignition from a completed targeting solution.
 ///
-/// Called by P40 immediately before asserting `SPS_ENABLE`. After `burn_init`
+/// Called by P40 immediately before the crew arm prompt (V50 N99). After `burn_init`
 /// returns, P40 must:
-///   1. Call `hw.engine().sps_enable(true)`.
-///   2. Set `state.servicer_exit = Some(burn_servicer_exit)`.
-///   3. Call `services::average_g::start_servicer(state, hw)` if not already
+///   1. Wait for crew PRO (sets `state.burn.armed = true`).
+///   2. At TIG (detected by `dap_step` checking `state.time >= burn.tig`):
+///      the DAP sets `state.engine_thrusting = true` automatically.
+///   3. Set `state.servicer_exit = Some(burn_servicer_exit)`.
+///   4. Call `services::average_g::start_servicer(state, hw)` if not already
 ///      running.
 ///
 /// AGC correspondence: the initialisation sequence at the beginning of P40
@@ -319,6 +347,7 @@ ignition time.
 /// - `result.tig == target.tig`.
 /// - `result.burn_active == true`.
 /// - `result.cutoff_time_met == false`.
+/// - `result.armed == false` (crew PRO not yet pressed).
 pub fn burn_init(target: Maneuver) -> BurnState
 ```
 
@@ -331,6 +360,7 @@ BurnState {
     tig:                     target.tig,
     burn_active:             true,
     cutoff_time_met:         false,
+    armed:                   false,
 }
 ```
 
@@ -689,8 +719,9 @@ registers a closure or function pointer that the SERVICER calls on every cycle.
 1.  Receive Maneuver from targeting (P30/uplink).
 2.  Display V06N85 (delta-V components) for crew confirmation.
 3.  state.burn = burn_init(maneuver).
-4.  At TIG (counted down via Waitlist or T3 interrupt):
-    a. hw.engine().sps_enable(true).
+4.  Crew presses PRO at V50 N99 engine-arm prompt → state.burn.armed = true.
+5.  At TIG (detected by dap_step when state.time >= state.burn.tig):
+    a. dap_step sets state.engine_thrusting = true automatically.
     b. state.servicer_exit = Some(burn_servicer_exit).
     c. services::average_g::start_servicer(state, hw).   // if not already running
     d. state.dap_state.mode = DapMode::Tvc.              // switch from Coast to TVC DAP
@@ -886,13 +917,14 @@ use crate::types::{DeltaV, Met, Vec3};
 use crate::guidance::targeting::Maneuver;
 use crate::math::linalg;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct BurnState {
     pub target_dv_inertial:      Vec3,
     pub accumulated_dv_inertial: Vec3,
     pub tig:                     Met,
     pub burn_active:             bool,
     pub cutoff_time_met:         bool,
+    pub armed:                   bool,
 }
 
 pub fn burn_init(target: Maneuver) -> BurnState;
@@ -938,6 +970,7 @@ let state = burn_init(target);
 - `state.tig == Met(180_000)`
 - `state.burn_active == true`
 - `state.cutoff_time_met == false`
+- `state.armed == false`
 
 **Tolerance**: exact (no floating-point arithmetic in `burn_init`).
 

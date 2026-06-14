@@ -1,5 +1,9 @@
 # Specification: `types/` Module
 
+## Change Log
+
+- **2026-06-14**: Updated `CduAngle` inner type from `u16` to `i16` (signed twos-complement, range [-32768, +32767], `to_radians()` returns [-π, +π)); added `from_radians` constructor; updated encoding table and test cases TC-CDU-3 through TC-CDU-5 accordingly.
+
 **Status**: Approved for implementation  
 **Module path**: `agc-core/src/types/`  
 **Source files**: `mod.rs`, `angle.rs`, `vector.rs`, `matrix.rs`  
@@ -19,7 +23,7 @@ The five public types are:
 
 | Rust type  | Physical quantity                         | Primitive representation |
 |------------|-------------------------------------------|--------------------------|
-| `CduAngle` | IMU/optics CDU gimbal angle               | `u16` (twos-complement counts) |
+| `CduAngle` | IMU/optics CDU gimbal angle               | `i16` (twos-complement signed counts) |
 | `Met`      | Mission elapsed time                      | `u32` (centiseconds)     |
 | `DeltaV`   | Maneuver delta-velocity vector            | `Vec3` (m/s)             |
 | `Vec3`     | Position, velocity, acceleration, delta-V | `[f64; 3]` (SI units)    |
@@ -70,11 +74,11 @@ form").
   — 1 full revolution = 2^15 = 32768 counts in a signed 15-bit word. The most
   significant bit is the sign bit; negative angles are stored as counts in the
   range [32768, 65535] in twos-complement.
-- **Rust port** (`u16`, 16-bit unsigned): A full revolution maps to
-  **2^16 = 65536 counts**, giving uniform angular resolution across the full
-  circle. Count 0 = 0°, count 32768 = 180° (= -180° in twos-complement
-  convention), count 65535 = one step below 360°. The `u16` wraps at exactly
-  one revolution, so wrapping arithmetic on counts is always correct.
+- **Rust port** (`i16`, 16-bit signed): The inner `i16` holds the twos-complement
+  signed angle value. A full revolution spans 2^16 = 65536 counts across the
+  signed range: `i16::MIN` (−32768) = −180°, `0` = 0°, `i16::MAX` (32767) ≈ +180° − 1 LSB.
+  `to_radians()` returns values in `[−π, +π)`. Wrapping arithmetic on `i16`
+  counts correctly handles the ±180° boundary.
 
   > Comanche055 CDU erasable cells: `CDUX` (octal 0033), `CDUY` (octal 0034),
   > `CDUZ` (octal 0035) — IMU gimbal angles (outer, inner, middle).
@@ -142,33 +146,31 @@ directly).
 ```rust
 // agc-core/src/types/angle.rs
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
-pub struct CduAngle(pub u16);
+pub struct CduAngle(pub i16);
 ```
 
 #### Semantics
 
 `CduAngle` wraps a raw hardware CDU count delivered by the IMU or optics
-subsystem via I/O channels. The inner `u16` is the twos-complement angle value
-exactly as read from the hardware register (I/O channel 30–33 octal range for
-CDU read-back in Comanche055).
+subsystem via I/O channels. The inner `i16` is the twos-complement signed angle
+value exactly as read from the hardware register (I/O channel 30–33 octal range
+for CDU read-back in Comanche055).
 
-In the Rust `u16` representation, a full revolution is encoded as 2^16 = 65536
-counts (see §2.2 above and `docs/architecture.md` §3.2). Count 32768 (0x8000)
-represents exactly 180° / π radians, which is also -180° in the twos-complement
-angular convention. Counts in the range [32768, 65535] represent the negative
-half of the angular range (-π, 0) in the hardware convention but are stored as
-unsigned values in `u16`.
+In the Rust `i16` representation, the full signed range spans one revolution:
+`i16::MIN` (−32768) = −180°, `0` = 0°, `i16::MAX` (32767) ≈ +180° − 1 LSB.
+`to_radians()` returns values in `[−π, +π)`. Wrapping addition/subtraction on
+`i16` counts correctly handles the ±180° angular boundary.
 
 #### Valid range and invariants
 
-- **Storage invariant**: All `u16` values are structurally valid. There is no
+- **Storage invariant**: All `i16` values are structurally valid. There is no
   illegal bit pattern.
-- **Semantic invariant**: Angles are only meaningful modulo 2^16 counts (one
-  full revolution). Callers must not interpret a count of 32768–65535 as "more
-  than one revolution"; it represents a negative angle in the range (-π, 0) in
-  the twos-complement convention.
+- **Semantic invariant**: Angles are meaningful modulo 2^16 counts (one full
+  revolution). The signed `i16` value directly encodes the angle: positive counts
+  are positive angles (0 to +180° exclusive), negative counts are negative angles
+  (−180° to 0).
 - **Wrapping**: Arithmetic on counts must use wrapping addition/subtraction
-  (`u16::wrapping_add`, `u16::wrapping_sub`) to preserve the angular modular
+  (`i16::wrapping_add`, `i16::wrapping_sub`) to preserve the angular modular
   arithmetic. No saturation or panic on overflow is correct.
 
 #### Scale factor conversion
@@ -176,43 +178,45 @@ unsigned values in `u16`.
 | AGC representation | Scale factor | Rust `f64` unit |
 |--------------------|--------------|-----------------|
 | 1 CDU count (1 LSB) | B-1 revolutions | TAU / 65536 radians ≈ 9.587e-5 rad |
-| 32768 counts | B-1 revolutions = 0.5 rev | π radians |
-| 65536 counts (wraps to 0) | 1.0 rev | 2π radians = TAU |
+| 16384 counts | 0.25 rev | π/2 radians (= +90°) |
+| −32768 counts (`i16::MIN`) | −0.5 rev | −π radians (= −180°) |
+| 32767 counts (`i16::MAX`) | ≈ +0.5 rev − 1 LSB | ≈ +π − TAU/65536 radians |
 
 Conversion formula:
 
 ```
-radians = counts * (TAU / 65536)
-        = counts * (2π / 2^16)
+radians = (count as f64) * (TAU / 65536)
+        = (count as f64) * (2π / 2^16)
 ```
+
+This is the same scale as the `u16` encoding but the cast to `f64` preserves
+the sign of the `i16` count, giving a result in `[−π, +π)`.
 
 #### Methods
 
 ```rust
 impl CduAngle {
     /// Convert raw CDU count to radians (f64).
-    /// Precondition: none (all u16 values are valid).
-    /// Postcondition: result is in [0, TAU) when count is in [0, 32767],
-    ///                result is in [TAU/2, TAU) when count is in [32768, 65535]
-    ///                (negative angles arrive as large positive counts).
+    /// Precondition: none (all i16 values are valid).
+    /// Postcondition: result is in [-π, +π).
     pub fn to_radians(self) -> f64 {
         (self.0 as f64) * (core::f64::consts::TAU / 65536.0)
     }
 
     /// Convert raw CDU count to degrees (f64).
-    /// Postcondition: result is in [0.0, 360.0).
+    /// Postcondition: result is in [-180.0, +180.0).
     pub fn to_degrees(self) -> f64 {
         self.to_radians() * (180.0 / core::f64::consts::PI)
     }
+
+    /// Encode a radian angle as a `CduAngle`, wrapping at ±π just like the
+    /// hardware counter. Used by the sextant CDU pipeline to inject truth
+    /// angles into the simulation.
+    /// Precondition: `rad` is a finite f64.
+    /// Postcondition: `CduAngle::from_radians(r).to_radians()` ≈ r mod 2π
+    ///                (within ½ count = TAU/131072 radians).
+    pub fn from_radians(rad: f64) -> Self { ... }
 }
-```
-
-No `from_radians` constructor is provided in the core type. Construction from
-a physical angle belongs in the HAL simulation layer (`agc-sim/`), which must
-perform the inverse scaling:
-
-```
-count = (radians * 65536.0 / TAU).round() as u16
 ```
 
 #### Debug format
@@ -236,11 +240,11 @@ Source: Comanche055/`ERASABLE_ASSIGNMENTS.agc`
 
 | Test | Input count | Expected `to_radians()` | Expected `to_degrees()` | Rationale |
 |------|-------------|-------------------------|-------------------------|-----------|
-| TC-CDU-1 | `0x0000` (0) | 0.0 | 0.0 | Zero angle |
-| TC-CDU-2 | `0x4000` (16384) | π/2 ≈ 1.5707963… | 90.0 | Quarter revolution |
-| TC-CDU-3 | `0x8000` (32768) | π ≈ 3.1415926… | 180.0 | Half revolution (also -180° in twos-complement) |
-| TC-CDU-4 | `0xC000` (49152) | 3π/2 ≈ 4.7123889… | 270.0 | Three-quarter revolution (= -90° in twos-complement) |
-| TC-CDU-5 | `0xFFFF` (65535) | TAU × (65535/65536) ≈ 6.28278… | ≈ 359.9945… | One count below full revolution |
+| TC-CDU-1 | `CduAngle(0)` | 0.0 | 0.0 | Zero angle |
+| TC-CDU-2 | `CduAngle(16384)` | π/2 ≈ 1.5707963… | 90.0 | Quarter revolution (+90°) |
+| TC-CDU-3 | `CduAngle(i16::MIN)` = `CduAngle(-32768)` | −π ≈ −3.1415926… | −180.0 | Negative half revolution (−180°) |
+| TC-CDU-4 | `CduAngle(-16384)` | −π/2 ≈ −1.5707963… | −90.0 | Negative quarter revolution (−90°) |
+| TC-CDU-5 | `CduAngle(-1)` | −TAU/65536 ≈ −9.587e-5 | ≈ −0.00549…° | One count below zero (−1 LSB) |
 
 Tolerance for all floating-point comparisons: ±1 × 10^-10 radians.
 
@@ -634,11 +638,11 @@ Cross-reference with `docs/architecture.md` §3:
 | Architecture §3 statement | Spec section confirming compliance |
 |---------------------------|------------------------------------|
 | §3.1: No `AgcWord` type; `f64` for nav math | §1, §3.3–3.5 (no fixed-point arithmetic types defined) |
-| §3.1: `u16` for CDU gimbal angles | §3.1 (CduAngle inner field is `u16`) |
+| §3.1: `i16` for CDU gimbal angles (signed twos-complement) | §3.1 (CduAngle inner field is `i16`) |
 | §3.1: `i16` for signed hardware quantities (PIPA, gyro) | Not in this module — belongs in `hal/imu.rs` |
 | §3.1: `u32` centiseconds for MET | §3.2 (Met inner field is `u32`) |
-| §3.2: `CduAngle` with full revolution = 2^16 = 65536 counts in u16 | §2.2, §3.1 |
-| §3.2: `CduAngle` newtype with `to_radians` using `TAU / 65536.0` | §3.1 |
+| §3.2: `CduAngle` spanning one revolution as signed i16 | §2.2, §3.1 |
+| §3.2: `CduAngle` newtype with `to_radians` using `TAU / 65536.0` and signed cast | §3.1 |
 | §3.2: `Met` with `to_seconds` / `from_seconds` | §3.2 |
 | §3.2: `DeltaV(Vec3)` newtype | §3.3 |
 | §3.3: `Vec3 = [f64; 3]` type alias | §3.4 |

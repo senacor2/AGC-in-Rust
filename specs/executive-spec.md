@@ -1,5 +1,9 @@
 # Specification: `executive/` Module — Executive, Waitlist, and Restart Protection
 
+## Change Log
+
+**2026-06-14**: Corrected `Executive::run` signature from `&mut self` receiver to free associated function `pub fn run<H: AgcHardware>(state: &mut AgcState, hw: &mut H) -> !`, matching the implementation (split borrow avoidance).
+
 **Status**: Approved for implementation
 **Module path**: `agc-core/src/executive/`
 **Source files**: `mod.rs`, `job.rs`, `scheduler.rs`, `waitlist.rs`, `restart.rs`
@@ -212,7 +216,7 @@ pub struct Executive {
 - `current_priority` holds the priority of the currently executing job.
   Between job invocations (inside the `run` loop but not inside a job function),
   `current_priority` is 0.
-- The `run` method never returns (return type `!`).
+- The `run` function never returns (return type `!`).
 
 ### 3.4 WaitlistEntry
 
@@ -387,10 +391,15 @@ lowest-priority non-critical job.
 ### 4.4 `Executive::run`
 
 ```rust
-pub fn run(&mut self, state: &mut AgcState, hw: &mut impl AgcHardware) -> !
+pub fn run<H: AgcHardware>(state: &mut AgcState, hw: &mut H) -> !
 ```
 
 The main scheduling loop. Never returns in normal operation.
+
+This is a free associated function (not `&mut self`) so the caller can pass
+the full `&mut AgcState` — `executive` lives inside `AgcState`, and a
+`&mut self` receiver would cause a split-borrow conflict when dispatching a
+job that mutates other fields of `state`.
 
 **Preconditions**:
 - Called exactly once, at system startup, after FRESH START or RESTART
@@ -457,7 +466,7 @@ pub const fn new() -> Self
 ### 4.6 `Waitlist::schedule`
 
 ```rust
-pub fn schedule(&mut self, centiseconds: u16, task: fn(&mut AgcState)) -> bool
+pub fn schedule(&mut self, centiseconds: u16, task: fn(&mut AgcState)) -> ScheduleResult
 ```
 
 Insert a new task to fire `centiseconds` from now.
@@ -473,7 +482,7 @@ Insert a new task to fire `centiseconds` from now.
   permitted for follow-on tasks, but must target a different entry point).
 
 **Implementation — sorted insertion**:
-1. If `count >= MAX_WAITLIST_TASKS`, return `false` (alarm 1211 condition).
+1. If `count >= MAX_WAITLIST_TASKS`, return `ScheduleResult::Full` (alarm 1211 condition).
 2. Find the insertion position `k` such that the new task's absolute time is
    between `entries[k-1]` and `entries[k]`.
 3. Adjust `entries[k].delta_time` by subtracting `centiseconds` (the new
@@ -481,31 +490,10 @@ Insert a new task to fire `centiseconds` from now.
 4. Insert `WaitlistEntry { delta_time: adjusted_delta, task }` at position `k`.
 5. Shift entries `[k+1..count]` one position right.
 6. Increment `count`.
-7. If `k == 0` (new task fires before all existing tasks), reload TIME3:
-   call `hw.timers().arm_t3(centiseconds)`.
+7. If `k == 0` (new task fires before all existing tasks), return
+   `ScheduleResult::OkReloadT3(centiseconds)`.
 
-**Note on TIME3 reload**: The `schedule` function signature as specified above
-does not take `hw` as a parameter. For cases where `k == 0`, the TIME3 reload
-must be performed by the caller after `schedule` returns `true`, using the new
-`centiseconds` value. Alternatively, an `arm_t3` signal flag can be returned.
-The implementation must document which convention it uses. The recommended
-approach is to have `schedule` return `Some(new_t3_load)` when a TIME3 reload
-is needed, or `None` otherwise (replacing the `bool` return type with
-`Option<u16>`). The caller (T3RUPT handler or job creating a task) then calls
-`hw.timers().arm_t3(new_t3_load)`.
-
-**Implementation note — return type adjustment**: The `bool` return type shown
-in the current skeleton is a simplification. The full specification requires:
-
-```rust
-pub fn schedule(
-    &mut self,
-    centiseconds: u16,
-    task: fn(&mut AgcState),
-) -> ScheduleResult
-```
-
-where:
+**Return type**:
 
 ```rust
 pub enum ScheduleResult {

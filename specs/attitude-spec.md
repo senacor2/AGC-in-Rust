@@ -1,5 +1,9 @@
 # Specification: `control/attitude` Module — Attitude Control
 
+## Change Log
+
+- **2026-06-14**: Updated `CduAngle` inner type to `i16` throughout (encoding, algorithm, test cases); added `gimbal_matrix_from_euler` and `kalcmanu_step` to Public API (§3); corrected `linalg::scale` to `linalg::vscale` in §8; added `math::quaternion` dependency for `kalcmanu_step`.
+
 **Status**: Approved for implementation
 **Module path**: `agc-core/src/control/attitude.rs`
 **Architecture reference**: `docs/architecture.md` §11 "Digital Autopilot (DAP)", §11.1 "CSM DAP Modes", §11.2 "RCS Jet Selection", §11.3 "Timing"
@@ -101,23 +105,23 @@ sequence.
 
 ### 2.3 CDU Angle Encoding
 
-`CduAngle` is a `u16` value where a full revolution = 65 536 counts (2^16),
-giving a scale factor of `TAU / 65536.0` radians per count. Two's-complement
-representation means:
+`CduAngle` is an `i16` value (signed twos-complement) where a full revolution
+spans 2^16 = 65536 counts across the signed range. The scale factor is
+`TAU / 65536.0` radians per count, and `to_radians()` returns values in
+`[-π, +π)`:
 
 - `CduAngle(0)` → 0 rad
 - `CduAngle(16384)` → π/2 rad (90°)
-- `CduAngle(32768)` → π rad (180°) — also represented as `CduAngle(32768)` = −π
-  when interpreted as a signed angle
-- `CduAngle(49152)` → 3π/2 rad (270°) or equivalently −π/2
+- `CduAngle(i16::MIN)` = `CduAngle(-32768)` → −π rad (−180°)
+- `CduAngle(-16384)` → −π/2 rad (−90°)
 
-The conversion method `CduAngle::to_radians(self) -> f64` returns the angle in
-`[0, TAU)` and is defined in `specs/types-module-spec.md` §3.1.
+The conversion method `CduAngle::to_radians(self) -> f64` is defined in
+`specs/types-module-spec.md` §3.1.
 
-For finite-difference body-rate computation (§4.3), angle differences must be
-computed using **two's-complement subtraction** on the raw `u16` counts and then
-converting the signed difference to radians. This correctly handles wrap-around
-at 0/2π.
+For finite-difference body-rate computation (§4.3), angle differences are
+computed using **signed wrapping subtraction** on the `i16` counts
+(`i16::wrapping_sub`), converting the result to `f64`. This correctly handles
+the ±180° wrap-around.
 
 ### 2.4 REFSMMAT and the Attitude Error Computation
 
@@ -161,7 +165,7 @@ all persistent state between cycles.
 
 | Quantity          | AGC representation             | Rust `f64` SI unit |
 |-------------------|--------------------------------|--------------------|
-| CDU angle         | `u16` counts (2^16 = 1 rev)   | radians (`to_radians()`) |
+| CDU angle         | `i16` counts (2^16 = 1 rev)   | radians (`to_radians()`) |
 | Body rate         | rad/centisec (B+14)            | rad/s              |
 | Attitude error    | radians (DP)                   | radians            |
 | Torque demand     | dimensionless normalized       | Nm (sign + magnitude) |
@@ -184,6 +188,17 @@ pub struct AttitudeError {
     pub pitch: f64,   // radians; positive = nose-up (Y-axis rotation)
     pub yaw:   f64,   // radians; positive = nose-right (Z-axis rotation)
 }
+
+impl AttitudeError {
+    /// Convert to a `Vec3` as `[roll, pitch, yaw]`.
+    pub fn as_vec3(self) -> Vec3;
+    /// Construct from a `Vec3` `[roll, pitch, yaw]`.
+    pub fn from_vec3(v: Vec3) -> Self;
+}
+
+/// Build the body-frame rotation matrix for the CM IMU gimbal triple.
+/// `euler = [roll, pitch, yaw]` in radians. Returns Rx(roll)·Ry(pitch)·Rz(yaw).
+pub fn gimbal_matrix_from_euler(euler: Vec3) -> Mat3x3;
 
 /// Compute attitude error from current CDU angles and commanded attitude.
 pub fn compute_attitude_error(
@@ -216,6 +231,16 @@ pub fn maneuver_rate(
     target:   Mat3x3,
     max_rate: f64,
 ) -> Vec3;
+
+/// KALCMANU: advance the intermediate commanded attitude one step toward the
+/// final target along the eigenaxis (optimal-arc / minimum-rotation path).
+/// Returns `(new_intermediate_euler, converged)`.
+pub fn kalcmanu_step(
+    intermediate: Vec3,   // current intermediate Euler angles [roll, pitch, yaw] (radians)
+    target:       Vec3,   // final target Euler angles (radians)
+    rate_rad_s:   f64,    // maximum slew rate in rad/s
+    dt:           f64,    // time step in seconds
+) -> (Vec3, bool);
 ```
 
 **Gimbal lock detection is NOT part of this API.** Use
@@ -253,8 +278,8 @@ pub struct AttitudeError {
   clockwise about the body X-axis relative to desired. Similarly for pitch
   (Y-axis) and yaw (Z-axis).
 
-**Conversion to Vec3**: `[error.roll, error.pitch, error.yaw]` is a valid
-`Vec3` for passing to torque functions.
+**Conversion to Vec3**: `error.as_vec3()` returns `[error.roll, error.pitch, error.yaw]`,
+a valid `Vec3` for passing to torque functions.
 
 ---
 
@@ -352,7 +377,7 @@ is responsible for selecting the appropriate control law based on `DapMode`.
   checked by P52 alignment; `control::attitude` does not re-verify).
 - `current_cdu` must contain valid CDU readings from a powered, uncaged IMU.
 - No element of `current_cdu` has an implementation-defined range restriction
-  (all 2^16 values are valid).
+  (all 2^16 `i16` values are valid).
 
 **Postconditions**:
 - Returns `AttitudeError` with no `NaN` or `±Inf` components.
@@ -361,7 +386,7 @@ is responsible for selecting the appropriate control law based on `DapMode`.
 - Magnitudes ≤ π/2 rad for attitudes reachable without gimbal lock.
 - **Sign-convention postcondition (CI-10)**: When `desired == REFSMMAT == Identity`
   and `current_cdu[0]` encodes a positive outer-gimbal rotation of θ° (e.g.,
-  `CduAngle(round(θ * 65536 / 360))`), the returned `error.roll ≈ +θ° in radians`
+  `CduAngle((θ * 65536.0 / 360.0) as i16)`), the returned `error.roll ≈ +θ° in radians`
   (positive). This is the "current-relative-to-desired" sign required by
   `attitude_hold_torque`'s restoring-torque convention (negative torque for
   positive error). Verify this identity in TC-ATT-02.
@@ -395,20 +420,20 @@ successive CDU angle readings separated by time interval `dt` seconds.
 
 For each axis `i` in {0, 1, 2}:
 
-1. Compute the raw count difference using two's-complement (wrapping) arithmetic
-   on the `u16` counts:
+1. Compute the raw count difference using signed wrapping arithmetic on the
+   `i16` counts:
 
    ```
-   delta_counts_i = (cdu_new[i].0).wrapping_sub(cdu_old[i].0) as i16
+   delta_counts_i = cdu_new[i].0.wrapping_sub(cdu_old[i].0) as f64
    ```
 
-   Casting to `i16` after wrapping subtraction gives the signed angular change
-   in `(-32768, +32767]` counts, correctly handling the 0/65536 wrap-around.
+   Wrapping subtraction on `i16` gives the signed angular change in
+   `(-32768, +32767]` counts, correctly handling the ±180° wrap-around.
 
 2. Convert to radians:
 
    ```
-   delta_rad_i = (delta_counts_i as f64) * TAU / 65536.0
+   delta_rad_i = delta_counts_i * TAU / 65536.0
    ```
 
 3. Divide by the cycle period:
@@ -609,7 +634,7 @@ Step 4 — If `angle < 1e-9` rad (effectively zero error), return
 Step 5 — Compute the unit rotation axis:
 
 ```
-axis = normalize(e)   // unit vector via linalg::unit
+axis = unit(e)   // unit vector via linalg::unit
 ```
 
 Step 6 — Clamp the angular rate to `max_rate`:
@@ -624,7 +649,7 @@ This ensures the commanded rate never exceeds the hardware-limited slew rate
 Step 7 — Return the commanded rate vector in the body frame:
 
 ```
-commanded_rate = scale(axis, rate_magnitude)
+commanded_rate = vscale(axis, rate_magnitude)
 ```
 
 This rate vector is returned to the DAP, which uses it as the desired rate and
@@ -652,7 +677,39 @@ must not interpret this as a rate error; it is the full rate setpoint.
 
 ---
 
-### 4.7 Gimbal Lock Detection (Cross-Reference)
+### 4.7 `kalcmanu_step`
+
+**Signature**:
+
+```rust
+pub fn kalcmanu_step(
+    intermediate: Vec3,   // current intermediate Euler angles [roll, pitch, yaw] (radians)
+    target:       Vec3,   // final target Euler angles (radians)
+    rate_rad_s:   f64,    // maximum slew rate in rad/s
+    dt:           f64,    // time step in seconds
+) -> (Vec3, bool)
+```
+
+**Purpose**: KALCMANU algorithm — advance the intermediate commanded attitude
+one step toward the final target along the eigenaxis (shortest-arc) path.
+Returns `(new_intermediate, converged)`.
+
+**Algorithm**:
+1. Convert `intermediate` and `target` Euler angles to quaternions.
+2. Ensure shortest-arc interpolation (negate quaternion if dot product < 0).
+3. Compute total remaining rotation angle `φ = 2 · acos(|q_int · q_tgt|)`.
+4. If `φ ≤ CONVERGENCE_EPS` (≈ 0.006°): return `(target, true)`.
+5. Advance by `step = min(rate_rad_s × dt, φ)` using spherical linear
+   interpolation (slerp) with fraction `α = step / φ`.
+6. Convert the resulting quaternion back to Euler angles and return with
+   `converged = false`.
+
+**AGC source reference**: KALCMANU routine in
+`Comanche055/RCS_CSM_DIGITAL_AUTOPILOT.agc`.
+
+---
+
+### 4.8 Gimbal Lock Detection (Cross-Reference)
 
 Gimbal lock detection is **not** implemented in this module. It is owned by
 `control::imu_control` (see `specs/imu-control-spec.md` §10), which defines:
@@ -812,7 +869,8 @@ The `mxm` tolerance of 1 × 10^-13 follows from `specs/linalg-spec.md` §7
 | `linalg::transpose`   | `crate::math::linalg`                  | Matrix transpose                   |
 | `linalg::norm`        | `crate::math::linalg`                  | Vector 2-norm                      |
 | `linalg::unit`        | `crate::math::linalg`                  | Normalize (panics on zero vector)  |
-| `linalg::scale`       | `crate::math::linalg`                  | Scalar-vector multiply             |
+| `linalg::vscale`      | `crate::math::linalg`                  | Scalar-vector multiply             |
+| `math::quaternion`    | `crate::math::quaternion`              | `euler_to_quat`, `quat_slerp`, `quat_to_euler` (used by `kalcmanu_step`) |
 | `libm::sin`           | `libm` crate                           | `no_std`-compatible sine           |
 | `libm::cos`           | `libm` crate                           | `no_std`-compatible cosine         |
 | `libm::atan2`         | `libm` crate                           | `no_std`-compatible atan2          |
@@ -880,8 +938,8 @@ to desired. Zero rates. Also validates the sign-convention postcondition from
 **Setup**:
 ```rust
 // Build desired = identity, refsmmat = identity.
-// Build M_gimbal = Rx(5°) using theta_x = 5° CDU counts.
-let five_deg_counts = (5.0_f64.to_radians() * 65536.0 / TAU) as u16;
+// Build M_gimbal = Rx(5°) using theta_x = 5° CDU counts (signed i16).
+let five_deg_counts = (5.0_f64.to_radians() * 65536.0 / TAU) as i16;
 let cdu = [CduAngle(five_deg_counts), CduAngle(0), CduAngle(0)];
 let error = compute_attitude_error(cdu, linalg::IDENTITY, linalg::IDENTITY);
 ```
@@ -941,8 +999,8 @@ assert!(torque[2].abs() < 1e-15);
 let dt = 0.1_f64;
 // One CDU count ≈ 0.000958 rad; 2°/s × 0.1 s = 0.003491 rad
 // delta_counts ≈ round(0.003491 / (TAU / 65536)) ≈ 36
-let delta: u16 = ((omega_roll * dt) * 65536.0 / TAU).round() as u16;
-let cdu_old = [CduAngle(0u16), CduAngle(0), CduAngle(0)];
+let delta: i16 = ((omega_roll * dt) * 65536.0 / TAU).round() as i16;
+let cdu_old = [CduAngle(0i16), CduAngle(0), CduAngle(0)];
 let cdu_new = [CduAngle(delta), CduAngle(0), CduAngle(0)];
 let estimated = compute_body_rates(cdu_new, cdu_old, dt);
 // Allow ½ count quantisation error
@@ -1028,7 +1086,7 @@ assert_eq!(zero_rate, [0.0, 0.0, 0.0]);
 | Condition                              | Behaviour                                                                 |
 |----------------------------------------|---------------------------------------------------------------------------|
 | `dt = 0` in `compute_body_rates`       | `debug_assert!` panics in debug; returns `[0,0,0]` in release            |
-| CDU wrap-around at 0/65535             | `wrapping_sub as i16` handles correctly; no special case needed           |
+| CDU wrap-around at ±180°               | `i16::wrapping_sub` handles correctly; no special case needed             |
 | `max_rate = 0` in `maneuver_rate`      | `debug_assert!` panics in debug; returns `[0,0,0]` in release            |
 | Error rotation angle > π/2             | Formula still valid up to π; error saturates gracefully above π           |
 | `refsmmat` not orthonormal             | Result undefined; caller (P52) must ensure valid REFSMMAT                 |
@@ -1048,7 +1106,8 @@ assert_eq!(zero_rate, [0.0, 0.0, 0.0]);
 - [x] Five test cases with expected values (§9)
 - [x] Rust API signature designed — types, ownership, lifetimes (§3)
 - [x] Invariants explicitly stated (§4.1 `AttitudeError` invariants, per-function postconditions)
-- [x] Consistency with `docs/architecture.md` checked — `Vec3`/`Mat3x3` type aliases, `no_std`, no heap, `f64` for control math, `CduAngle(u16)` for hardware (§8 dependencies)
+- [x] Consistency with `docs/architecture.md` checked — `Vec3`/`Mat3x3` type aliases, `no_std`, no heap, `f64` for control math, `CduAngle(i16)` for hardware (§8 dependencies)
 - [x] CI-5 resolved: §8 updated — `libm::sin`, `libm::cos`, `libm::atan2` replaces `f64::sin` etc.; `no_std` note added
-- [x] CI-8 resolved: §4.7 and §3 remove `gimbal_lock_warning` from this module; cross-reference to `imu_control::is_gimbal_lock_warning` / `is_gimbal_lock_critical` added; §1 updated
+- [x] CI-8 resolved: §4.8 and §3 remove `gimbal_lock_warning` from this module; cross-reference to `imu_control::is_gimbal_lock_warning` / `is_gimbal_lock_critical` added; §1 updated
 - [x] CI-10 resolved: §4.2 postconditions add sign-convention check; TC-ATT-02 extended to verify positive roll error for positive outer-gimbal rotation
+- [x] 2026-06-14 audit: `CduAngle` inner type corrected to `i16`; `gimbal_matrix_from_euler` and `kalcmanu_step` added to §3; `linalg::vscale` corrected from `linalg::scale`; `math::quaternion` dependency added

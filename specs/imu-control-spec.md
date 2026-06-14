@@ -1,5 +1,9 @@
 # Specification: `control/imu_control.rs` — IMU Control Module
 
+## Change Log
+
+**2026-06-14**: `GyroCompensation` field names corrected from `nbd_x/nbd_y/nbd_z` to `nbdx/nbdy/nbdz`; units updated from "pulse-counts per T4RUPT" to "rad/s" (matching implementation); `ZERO` constant removed (replaced by `#[derive(Default)]`); §6.1 example code updated to use correct field names and removed the `/12.0` division that was not present in the implementation.
+
 **Status**: Ready for implementation
 **Module path**: `agc-core/src/control/imu_control.rs`
 **Architecture reference**: `docs/architecture.md` §4.1 (HAL typestate for IMU), §13.4 (T4RUPT task list)
@@ -165,12 +169,13 @@ non-collinear vector pairs:
 ///
 /// AGC source: `IMU_CALIBRATION_AND_ALIGNMENT.agc` — alignment phase flags
 /// in erasable (IMODES33, channel 30 monitor bits).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum ImuAlignmentState {
     /// Platform caged (gimbals locked to zero).
     ///
     /// `hal::Imu::is_caged()` returns `true`. No navigation is possible.
     /// Gyro torque commands and fine-align operations are inhibited.
+    #[default]
     Caged,
 
     /// Platform uncaged and coarsely aligned.
@@ -209,40 +214,37 @@ field, initialized to `Caged` at FRESH START and preserved across RESTART.
 ## 4. `GyroCompensation` Struct
 
 ```rust
-/// Gyro drift bias constants for the three IMU gyroscope axes.
+/// Gyro drift bias compensation constants (NBD — Non-drift acceleration
+/// equivalent) for the three IMU gyroscope axes.
 ///
-/// These are the steady-state drift rates measured before launch and updated
-/// by Mission Control via uplink. They are stored separately from
-/// `PipaCalibration` because they serve a different purpose: `PipaCalibration`
-/// corrects accelerometer (PIPA) readings, while `GyroCompensation` drives
-/// compensating torque pulses to keep the platform inertially stabilised.
+/// These constants are measured pre-flight and uplinked from Mission Control
+/// when updated. Applied during each T4RUPT cycle to null accumulated drift.
 ///
-/// The physical units are pulse-counts per T4RUPT interval (120 ms).
-/// Positive counts produce positive torque in the gyro polarity convention
-/// used by `hal::Imu::torque_gyro`.
+/// The physical units are rad/s (gyro drift rate per axis). The T4RUPT handler
+/// passes these directly to `compute_gyro_drift(dt_cs, nbd)`, which multiplies
+/// by the elapsed centiseconds to produce signed torque pulse counts.
 ///
 /// AGC source: `Comanche055/IMU_COMPENSATION_PACKAGE.agc` — NBDX, NBDY, NBDZ
-/// erasable assignments; `Comanche055/ERASABLE_ASSIGNMENTS.agc` E1 bank.
-#[derive(Clone, Copy, Debug)]
+/// erasable assignments and the torquing loop.
+#[derive(Clone, Copy, Debug, Default)]
 pub struct GyroCompensation {
-    /// Non-drift acceleration equivalent, X gyro axis.
-    /// AGC name: `NBDX`. Erasable bank E1. Units: torque counts per T4RUPT.
-    pub nbd_x: f64,
+    /// X-axis gyro drift rate (rad/s).
+    /// AGC: NBDX (erasable, E1 bank).
+    pub nbdx: f64,
 
-    /// Non-drift acceleration equivalent, Y gyro axis.
-    /// AGC name: `NBDY`. Erasable bank E1. Units: torque counts per T4RUPT.
-    pub nbd_y: f64,
+    /// Y-axis gyro drift rate (rad/s).
+    /// AGC: NBDY (erasable, E1 bank).
+    pub nbdy: f64,
 
-    /// Non-drift acceleration equivalent, Z gyro axis.
-    /// AGC name: `NBDZ`. Erasable bank E1. Units: torque counts per T4RUPT.
-    pub nbd_z: f64,
-}
-
-impl GyroCompensation {
-    /// Zero drift — ideal gyroscope. Used at FRESH START.
-    pub const ZERO: Self = Self { nbd_x: 0.0, nbd_y: 0.0, nbd_z: 0.0 };
+    /// Z-axis gyro drift rate (rad/s).
+    /// AGC: NBDZ (erasable, E1 bank).
+    pub nbdz: f64,
 }
 ```
+
+`#[derive(Default)]` produces `GyroCompensation { nbdx: 0.0, nbdy: 0.0, nbdz: 0.0 }`,
+which corresponds to the ideal (zero-drift) gyroscope. This is the FRESH START
+initial value.
 
 ### 4.1 Relationship to `PipaCalibration::bias`
 
@@ -251,15 +253,15 @@ expressed in PIPA counts per 2-second SERVICER interval and is used to
 subtract systematic accelerometer zero-offset from PIPA readings.
 
 `GyroCompensation` carries the same physical NBD constants but expressed as
-gyro torque pulse counts per T4RUPT interval (120 ms). On the real AGC these
-are converted from the uplinked values and stored in separate erasable cells.
+gyro drift rates in rad/s. On the real AGC these are converted from the
+uplinked values and stored in separate erasable cells.
 
 The Rust port stores both representations. The uplink processor or P01/P02
 (gyrocompassing) is responsible for keeping them consistent whenever the
 constants are updated.
 
 **Storage**: `AgcState` must hold a `gyro_comp: GyroCompensation` field,
-initialized to `GyroCompensation::ZERO` at FRESH START and preserved across
+initialized to `GyroCompensation::default()` at FRESH START and preserved across
 RESTART.
 
 ---
@@ -358,9 +360,8 @@ pub fn apply_pipa_compensation(raw: [i16; 3], cal: &PipaCalibration) -> Vec3 {
 ///
 /// * `dt_cs` — elapsed time since the last drift-compensation call, in
 ///   centiseconds. Nominally 12 (= 120 ms T4RUPT cycle). Must be non-zero.
-/// * `nbd`   — gyro drift bias constants `[x, y, z]` in torque pulse counts
-///   per centisecond. Derive from `GyroCompensation`: convert the stored
-///   per-T4RUPT values by dividing by the nominal 12 cs period.
+/// * `nbd`   — gyro drift bias constants `[x, y, z]` from `GyroCompensation`
+///   (fields `nbdx`, `nbdy`, `nbdz`). Passed directly without unit conversion.
 ///
 /// # Returns
 ///
@@ -407,19 +408,21 @@ shim context** (not a Waitlist task function), is:
 // HAL reads and writes are permitted here because this is the ISR body,
 // not a fn(&mut AgcState) Waitlist task.
 if state.imu_alignment_state != ImuAlignmentState::Caged {
-    let dt_cs = hw.timers().mission_time() - state.last_drift_comp_time;
+    let dt_cs = state.time.elapsed_since(state.last_drift_comp_time);
     let nbd = [
-        state.gyro_comp.nbd_x / 12.0,   // convert per-T4RUPT to per-cs
-        state.gyro_comp.nbd_y / 12.0,
-        state.gyro_comp.nbd_z / 12.0,
+        state.gyro_comp.nbdx,
+        state.gyro_comp.nbdy,
+        state.gyro_comp.nbdz,
     ];
     // compute_gyro_drift is pure: no HAL access inside
     let pulses = compute_gyro_drift(dt_cs, nbd);
     // HAL writes happen here in the ISR shim, not inside compute_gyro_drift
-    hw.imu().torque_gyro(0, pulses[0]);
-    hw.imu().torque_gyro(1, pulses[1]);
-    hw.imu().torque_gyro(2, pulses[2]);
-    state.last_drift_comp_time = hw.timers().mission_time();
+    for (axis, &p) in pulses.iter().enumerate() {
+        if p != 0 {
+            hw.imu().torque_gyro(axis, p);
+        }
+    }
+    state.last_drift_comp_time = state.time;
 }
 ```
 
@@ -893,9 +896,9 @@ pub const T4RUPT_PERIOD_CS: u32 = 12;
 | `CDUYCMD`       | —             | 0051            | `hw.imu().coarse_align(cmds)[1]`      | Inner CDU drive command           |
 | `CDUZCMD`       | —             | 0052            | `hw.imu().coarse_align(cmds)[2]`      | Middle CDU drive command          |
 | `GYROCMD`       | —             | 0047            | `hw.imu().torque_gyro(axis, pulses)`  | Gyro torque command counter       |
-| `NBDX`          | E1            | uplinked        | `state.gyro_comp.nbd_x`               | X-axis gyro drift bias            |
-| `NBDY`          | E1            | uplinked        | `state.gyro_comp.nbd_y`               | Y-axis gyro drift bias            |
-| `NBDZ`          | E1            | uplinked        | `state.gyro_comp.nbd_z`               | Z-axis gyro drift bias            |
+| `NBDX`          | E1            | uplinked        | `state.gyro_comp.nbdx`                | X-axis gyro drift bias            |
+| `NBDY`          | E1            | uplinked        | `state.gyro_comp.nbdy`                | Y-axis gyro drift bias            |
+| `NBDZ`          | E1            | uplinked        | `state.gyro_comp.nbdz`                | Z-axis gyro drift bias            |
 | `REFSMMAT`      | E3            | 0306–0323       | `state.refsmmat: Mat3x3`              | Platform-to-inertial rotation     |
 | `IMODES33`      | E1            | varies          | `state.imu_alignment_state`           | IMU mode/status flags             |
 | `PIPAX/Y/Z`     | —             | 0037–0041       | `hw.imu().read_pipa()`                | PIPA pulse accumulators (read by SERVICER only) |

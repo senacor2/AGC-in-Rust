@@ -1,9 +1,13 @@
 # Specification: `hal/` Module — Hardware Abstraction Layer
 
+## Change Log
+
+**2026-06-14**: Added `Secs` associated type and accessor to `AgcHardware`; added `secs.rs` to module structure; updated `write_row` row range to 0–20 (per-field bridge encoding, ADR-019); updated import path to include `Secs`.
+
 **Status**: Approved for implementation
 **Module path**: `agc-core/src/hal/`
 **Source files**: `mod.rs`, `interrupts.rs`, `timers.rs`, `dsky.rs`, `imu.rs`,
-`optics.rs`, `engine.rs`, `rcs.rs`, `uplink.rs`, `telemetry.rs`
+`optics.rs`, `engine.rs`, `rcs.rs`, `secs.rs`, `uplink.rs`, `telemetry.rs`
 **Simulator implementation**: `agc-sim/src/hardware.rs`
 **Architecture reference**: `docs/architecture.md` §4 "Hardware Abstraction Layer (HAL)"
 **Types reference**: `specs/types-module-spec.md` — `CduAngle` definition
@@ -112,8 +116,10 @@ agc-core/src/hal/
   optics.rs       — Optics sub-trait
   engine.rs       — Engine sub-trait
   rcs.rs          — Rcs sub-trait
+  secs.rs         — Secs sub-trait (SECS pyrotechnic discretes)
   uplink.rs       — Uplink sub-trait
   telemetry.rs    — Telemetry sub-trait
+  runtime.rs      — Atomic interrupt-pending flags (T3/T4/T5/T6)
 ```
 
 All public items are re-exported from `hal/mod.rs` so the rest of the crate
@@ -121,7 +127,7 @@ uses a single import path:
 
 ```rust
 use crate::hal::{AgcHardware, Interrupt, Timers, Dsky, Lamp, Imu, Optics,
-                 Engine, Rcs, Uplink, Telemetry};
+                 Engine, Rcs, Secs, Uplink, Telemetry};
 ```
 
 ---
@@ -140,6 +146,7 @@ pub trait AgcHardware {
     type Optics:    Optics;
     type Engine:    Engine;
     type Rcs:       Rcs;
+    type Secs:      Secs;
     type Uplink:    Uplink;
     type Telemetry: Telemetry;
 
@@ -149,6 +156,7 @@ pub trait AgcHardware {
     fn optics(&mut self)    -> &mut Self::Optics;
     fn engine(&mut self)    -> &mut Self::Engine;
     fn rcs(&mut self)       -> &mut Self::Rcs;
+    fn secs(&mut self)      -> &mut Self::Secs;
     fn uplink(&mut self)    -> &mut Self::Uplink;
     fn telemetry(&mut self) -> &mut Self::Telemetry;
 
@@ -176,7 +184,7 @@ The full `AgcHardware` bound on a flight-software entry point looks like:
 pub fn run<H: AgcHardware>(hw: &mut H, state: &mut AgcState) -> ! { ... }
 ```
 
-All eight accessor methods return `&mut Self::SubType`, granting exclusive
+All accessor methods return `&mut Self::SubType`, granting exclusive
 mutable access to one peripheral at a time. The borrow checker statically
 prevents simultaneous mutable access to two peripherals (a proxy for preventing
 re-entrant channel writes that caused issues in the original hardware).
@@ -507,14 +515,12 @@ relay row-select matrix. Indicator lamps are driven by output channel 11
 > AGC source: `docs/AGC Symbolic Listing.md`, §IIE channel 10 and channel 11
 > tables; §IIJ Display System.
 
-**Channel 10 (OUTO) row encoding**:
-- Bits 15–12: row number (01–14 octal in the original; 1–14 decimal in the
-  Rust port)
-- Bits 11–1: segment relay settings for that row
-- Each row must be held for 20 ms, then cleared, before the next row is set
-- Full 11-row update cycle takes ~440 ms
-- The HAL implementation manages the 20 ms hold via a hardware timer; the
-  flight software calls `write_row` / `clear_row` freely
+**Row encoding (ADR-019 bridge convention)**: The Rust port uses a
+per-field row encoding rather than the original AGC relay matrix. 21 rows
+total are used: rows 0–2 carry PROG/VERB/NOUN, rows 3–8 carry R1 (sign +
+5 digits), rows 9–14 carry R2, rows 15–20 carry R3. Digits are raw BCD
+(0x0–0x9); 0xF blanks a digit. All 21 rows are re-emitted on every T4RUPT.
+Valid `row` range is therefore **0–20**.
 
 **Channel 11 (DSALMOUT) bit assignments** (relevant CM bits):
 
@@ -536,33 +542,27 @@ relay row-select matrix. Indicator lamps are driven by output channel 11
 
 | Attribute | Value |
 |-----------|-------|
-| AGC channel | Output channel 10 (OUTO); bits 15–12 = row, bits 11–1 = data |
-| Valid `row` range | 1–14 |
-| Side effect | Energises relay row `row` with segment pattern `data` for 20 ms (enforced in HAL implementation) |
-| Called from | `services/display.rs` (PINBALL display driver) during T4RUPT |
+| AGC channel | Output channel 10 (OUTO) in the original; per-field row 0–20 in the bridge encoding (ADR-019) |
+| Valid `row` range | 0–20 |
+| Side effect | Updates the display field selected by `row` with the BCD digits packed in `data` |
+| Called from | `services/pinball.rs` (`emit_dsky_to_hw`) during T4RUPT |
 
-**Preconditions**: `1 <= row <= 14`. Row 0 and rows 15+ do not exist in the
-hardware relay matrix; passing them is a programming error (undefined behaviour
-on bare metal).
+**Preconditions**: `0 <= row <= 20` per the bridge encoding. Rows outside this
+range are a programming error.
 
-**Postconditions**: The relay row is energised; the display segments
-corresponding to set bits in `data` are illuminated. The HAL implementation
-holds the relay for 20 ms before accepting the next `write_row` call for a
-different row.
+**Postconditions**: The display field for `row` is updated. The bridge
+implementation serialises the row data over UART to the DSKY display module.
 
-**Timing constraint**: The 20 ms hold is enforced by the HAL implementation
-(hardware timer ISR), not by the calling flight software. The flight software
-may call `write_row` for the next row immediately after returning; the
-implementation buffers and sequences the relay operations.
+**Timing constraint**: All 21 rows are re-emitted on every T4RUPT (120 ms);
+no hold timing is imposed at the HAL level for the bridge variant.
 
 #### `clear_row(row: u8)`
 
 | Attribute | Value |
 |-----------|-------|
-| AGC channel | Output channel 10 (OUTO), all segment bits = 0 for the selected row |
-| Valid `row` range | 1–14 |
-| Side effect | De-energises all segment relays in row `row` |
-| Called from | `services/display.rs` |
+| Valid `row` range | 0–20 |
+| Side effect | Blanks the display field for `row` (sends 0xF BCD digits) |
+| Called from | `services/pinball.rs` |
 
 **Preconditions**: Same as `write_row`.
 
@@ -725,9 +725,11 @@ of the hardware counter (if the SERVICER is delayed more than ~5 min) is
 clamped at `i16::MAX` / `i16::MIN` by the hardware; the flight software must
 detect and alarm on this condition.
 
-**Error condition**: Calling `read_pipa` more frequently than the 2-second
-SERVICER cycle would read partial counts and corrupt the navigation integration.
-The SERVICER must be the only caller.
+**Error condition**: The `Executive::run` foreground loop calls `read_pipa` on
+every iteration and saturating-adds the result into `AgcState::pipa_counts`.
+The SERVICER task reads and resets `pipa_counts` every 2 seconds. No other
+code must call `read_pipa` directly — doing so would steal counts and corrupt
+the navigation pipeline.
 
 #### `read_cdu() -> [CduAngle; 3]`
 
@@ -1219,11 +1221,50 @@ hw.rcs().quench_all();
 
 ---
 
-## 12. `Uplink` Sub-Trait
+## 12. `Secs` Sub-Trait
+
+**File**: `agc-core/src/hal/secs.rs`
+
+### 12.1 Declaration
+
+```rust
+pub trait Secs {
+    fn deploy_drogue(&mut self);
+    fn fire_csm_separation(&mut self);
+}
+```
+
+### 12.2 Purpose
+
+The Sequential Events Control System (SECS) interface provides one-shot
+pyrotechnic discrete outputs for CM/SM separation and drogue parachute
+deployment. These events are staged by entry programs (P62, P67) using
+`AgcState` flag fields (`csm_separation_pending`, `drogue_deploy_pending`)
+and consumed by `process_secs_staging` in the `Executive::run` foreground loop.
+
+### 12.3 Method Specifications
+
+#### `deploy_drogue()`
+
+| Attribute | Value |
+|-----------|-------|
+| Side effect | Latches the drogue-deploy pyro discrete. Idempotent once pyros have fired. |
+| Called from | `Executive::run` → `process_secs_staging` after P67 sets `drogue_deploy_pending` |
+
+#### `fire_csm_separation()`
+
+| Attribute | Value |
+|-----------|-------|
+| Side effect | Latches the CM/SM separation pyro discrete. Fires umbilical guillotines and spring-loaded SM pusher. Idempotent once pyros have fired. |
+| Called from | `Executive::run` → `process_secs_staging` after P62 sets `csm_separation_pending` |
+
+---
+
+## 13. `Uplink` Sub-Trait
 
 **File**: `agc-core/src/hal/uplink.rs`
 
-### 12.1 Declaration
+### 13.1 Declaration
 
 ```rust
 pub trait Uplink {
@@ -1231,7 +1272,7 @@ pub trait Uplink {
 }
 ```
 
-### 12.2 AGC Source Correspondence
+### 13.2 AGC Source Correspondence
 
 Uplink data from the ground arrives via the INLINK receiver. Each received bit
 is clocked into counter cell INLINK (octal 0045). When a complete 15-bit word
@@ -1247,7 +1288,7 @@ The uplink word format and command protocol are defined in
 `services/uplink.rs` (flight software, not HAL). The HAL exposes only the
 raw word delivery.
 
-### 12.3 Method Specification
+### 13.3 Method Specification
 
 #### `read_word() -> Option<u16>`
 
@@ -1270,12 +1311,12 @@ by the T4RUPT handler separately. If the uplink rate error flag is set, words
 received may be corrupt; the uplink processor checks this flag before
 processing.
 
-### 12.4 SimUplink Behaviour
+### 13.4 SimUplink Behaviour
 
 `SimUplink` stores `words: VecDeque<u16>`. `read_word()` pops the front.
 Tests inject uplink sequences by pushing words to `sim.uplink.words`.
 
-### 12.5 Test Cases
+### 13.5 Test Cases
 
 **TC-UPLINK-01**: `read_word` returns queued words and then `None`
 ```rust
@@ -1307,11 +1348,11 @@ assert_eq!(hw.uplink().read_word(), None);
 
 ---
 
-## 13. `Telemetry` Sub-Trait
+## 14. `Telemetry` Sub-Trait
 
 **File**: `agc-core/src/hal/telemetry.rs`
 
-### 13.1 Declaration
+### 14.1 Declaration
 
 ```rust
 pub trait Telemetry {
@@ -1319,7 +1360,7 @@ pub trait Telemetry {
 }
 ```
 
-### 13.2 AGC Source Correspondence
+### 14.2 AGC Source Correspondence
 
 The AGC downlinks telemetry via output channels 34 (DNTM1) and 35 (DNTM2).
 These two channels together form a 30-bit word pair that is transmitted when
@@ -1337,7 +1378,7 @@ The Rust HAL simplifies this to a single `send_word(u16)` call. The downlink
 formatter in `services/display.rs` is responsible for packing and ordering the
 two-word pairs; the HAL simply delivers each `u16` to the transmitter.
 
-### 13.3 Method Specification
+### 14.3 Method Specification
 
 #### `send_word(word: u16)`
 
@@ -1356,12 +1397,12 @@ to call `send_word` faster than the transmitter can accept it (channel 33
 bit 12 monitors this condition). If the error flag is set, the implementation
 should record the condition; the flight software must check and alarm.
 
-### 13.4 SimTelemetry Behaviour
+### 14.4 SimTelemetry Behaviour
 
 `SimTelemetry` appends each word to `log: Vec<u16>`. Tests verify the
 telemetry log contents.
 
-### 13.5 Test Cases
+### 14.5 Test Cases
 
 **TC-TELEMETRY-01**: `send_word` appends to log
 ```rust
@@ -1388,12 +1429,12 @@ assert_eq!(hw.telemetry.log[1], 0x0000);
 
 ---
 
-## 14. Implementor Guidance: `embedded-hal` v1 Integration
+## 15. Implementor Guidance: `embedded-hal` v1 Integration
 
 This section is for bare-metal HAL implementors only. The flight software in
 `agc-core` is not affected by these decisions.
 
-### 14.1 General Requirements
+### 15.1 General Requirements
 
 From `docs/architecture.md` §4.1:
 
@@ -1413,7 +1454,7 @@ From `docs/architecture.md` §4.1:
   pub use stm32f4 as pac;
   ```
 
-### 14.2 Timer Implementation
+### 15.2 Timer Implementation
 
 `arm_t3(cs)`, `arm_t5(cs)`, and `arm_t6(counts)` translate to MCU hardware
 timer counter/compare register writes. The specific registers depend on the
@@ -1428,7 +1469,7 @@ The `#[interrupt]` attribute for each timer handler must come from the device
 PAC crate (e.g. `use stm32f4::interrupt;`), not from `cortex-m-rt` directly,
 to get compile-time interrupt name verification.
 
-### 14.3 IMU Typestate Example
+### 15.3 IMU Typestate Example
 
 The typestate pattern prevents calling `torque_gyro` on an unaligned IMU:
 
@@ -1463,18 +1504,14 @@ break the simple `type Imu: Imu` associated type. The typestate is an
 implementation detail of the bare-metal crate that is resolved at compile time
 when the concrete `AgcHardware` type is chosen.
 
-### 14.4 DSKY Relay Timing
+### 15.4 DSKY Relay Timing
 
-The 20 ms relay hold must be implemented as a hardware timer ISR, not as a
-blocking `cortex_m::delay::Delay` call, because blocking inside the
-`write_row` method would stall the foreground Executive for 20 ms, violating
-the timing budget.
+For the bridge (ADR-019) UART variant, no relay-hold timing is applied by the
+HAL; the bridge handles all display sequencing. For a future bare-metal relay
+driver, the 20 ms hold per row must be implemented as a hardware timer ISR, not
+as a blocking `cortex_m::delay::Delay` call.
 
-Recommended implementation: double-buffer of (row, data) pairs in a static
-`Mutex<RefCell<[Option<(u8, u16)>; 2]>>`. The T4RUPT context writes to the
-buffer; a dedicated lower-priority timer ISR sequences the relays.
-
-### 14.5 Cortex-M Target Requirements
+### 15.5 Cortex-M Target Requirements
 
 - **Minimum**: Cortex-M7 with double-precision FPU (e.g., STM32H743,
   STM32F767). Hardware `f64` operations are required for the DAP's 100 ms
@@ -1491,7 +1528,7 @@ requirement and the rationale.
 
 ---
 
-## 15. Error Conditions Summary
+## 16. Error Conditions Summary
 
 | Scenario | Expected Behaviour |
 |---|---|
@@ -1499,8 +1536,8 @@ requirement and the rationale.
 | `arm_t3(> 16383)` | Programming error; timer wraps, fires too early. Use long-waitlist chaining. |
 | `arm_t6(0)` | Programming error; T6RUPT fires within one tick; jets may not fire or quench immediately. |
 | `torque_gyro` with `axis > 2` | Undefined on bare metal (channel 14 bits 8–7 are 2-bit). SimImu is a no-op. |
-| `write_row` with `row == 0` or `row > 14` | Undefined relay matrix behaviour. Flight software must validate. |
-| `read_pipa` called more often than every 2 s | Counter not saturated; partial accumulations corrupt navigation. SERVICER must be sole caller. |
+| `write_row` with `row > 20` | Out-of-range for bridge encoding; programming error. |
+| `read_pipa` called from outside `Executive::run` | Counter not saturated; partial accumulations corrupt navigation. Only the foreground loop may call `read_pipa`. |
 | `sps_enable(true)` without TVC enabled | Engine fires without gimbal authority. P40 program is responsible for sequence ordering. |
 | `hardware_restart()` in SimHardware | `panic!` — propagates as test failure, not a real restart. |
 | NEWJOB not sampled for > 1.92 s | Hardware triggers restart. `pet_watchdog` must be called at least once per Executive loop iteration. |
@@ -1508,7 +1545,7 @@ requirement and the rationale.
 
 ---
 
-## 16. Specification Quality Checklist
+## 17. Specification Quality Checklist
 
 Verified against `specs/README.md`:
 
@@ -1516,9 +1553,9 @@ Verified against `specs/README.md`:
 - [x] All erasable variables and their AGC addresses listed (TIME3/4/5/6, PIPA cells, CDU cells, INLINK, GYROCMD)
 - [x] Scale factors documented (CDU: B-1 revolutions original / 2^16 counts in Rust u16; PIPA: ~0.0585 m/s/count; TIME: 0.01 s/count; T6: 0.000625 s/count)
 - [x] Corresponding `f64` SI units documented (conversion noted at call sites)
-- [x] Input/output preconditions and postconditions stated (each method in §6–13)
-- [x] Edge cases and error handling specified (§15 and per-method error conditions)
-- [x] At least 3 test cases per sub-trait with expected values (§6.4, §7.5, §8.5, §9.5, §10.5, §11.5, §12.5, §13.5)
+- [x] Input/output preconditions and postconditions stated (each method in §6–14)
+- [x] Edge cases and error handling specified (§16 and per-method error conditions)
+- [x] At least 3 test cases per sub-trait with expected values (§6.4, §7.5, §8.5, §9.5, §10.5, §11.5, §13.5, §14.5)
 - [x] Rust API signatures designed (types, ownership — all methods take `&mut self` or `&self`)
 - [x] Invariants explicitly stated (destructive reads, relay timing, jet T6 pairing)
 - [x] Consistency with `docs/architecture.md` checked (§4.1, §4.2, §4.3, §11, §13, §14.1)
