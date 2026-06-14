@@ -1,5 +1,9 @@
 # Specification: `programs/p31` and `programs/p32` — CSI and CDH Rendezvous Targeting
 
+## Change Log
+
+- **2026-06-13** — Audited under issue #159 by analyst-reengineer agent. Corrected alarm codes throughout (P31 uses 01434/01435; P32 uses 01436/01437; the old 01430–01433 numbering was stale); corrected `state.csm_state.pos/vel` → `state.csm_state.position/velocity`; corrected `state.rendezvous_nav.target_epoch` type from `Met (centiseconds)` to `f64 (seconds)`; corrected `PROGRAM_TABLE` registration from `p31_init`/`p32_init` to `init_p31`/`init_p32`; removed non-existent alarm 01433 (stale-target, not implemented in P31/P32); corrected `CDH_MIN_DELTAH` constant docstring alarm reference.
+
 **Status**: Ready for implementation (Milestone 5 Phase 5)
 **Module paths**:
 - `agc-core/src/programs/p31.rs` — new file
@@ -102,8 +106,8 @@ pub mod p32;
 
 Entry points are registered in `PROGRAM_TABLE`:
 
-- `PROGRAM_TABLE[31] = p31_init`
-- `PROGRAM_TABLE[32] = p32_init`
+- `PROGRAM_TABLE[31] = p31::init_p31`
+- `PROGRAM_TABLE[32] = p32::init_p32`
 
 ---
 
@@ -116,13 +120,13 @@ programs write their result to the existing `state.pending_maneuver` field.
 
 | `AgcState` field | Type | Purpose |
 |-----------------|------|---------|
-| `state.csm_state.pos` | `Vec3` (m, inertial) | Chaser position at current epoch |
-| `state.csm_state.vel` | `Vec3` (m/s, inertial) | Chaser velocity at current epoch |
+| `state.csm_state.position` | `Vec3` (m, inertial) | Chaser position at current epoch |
+| `state.csm_state.velocity` | `Vec3` (m/s, inertial) | Chaser velocity at current epoch |
 | `state.csm_state.epoch` | `Met` (centiseconds) | Epoch of chaser state |
 | `state.rendezvous_nav.target_pos` | `Vec3` (m, inertial) | Target position (from P20) |
 | `state.rendezvous_nav.target_vel` | `Vec3` (m/s, inertial) | Target velocity (from P20) |
-| `state.rendezvous_nav.target_epoch` | `Met` (centiseconds) | Epoch of target state |
-| `state.vn.pending_tig` | `Met` (centiseconds) | Crew-entered TIG for the upcoming burn |
+| `state.rendezvous_nav.target_epoch` | `f64` (seconds) | Epoch of target state (seconds from mission epoch) |
+| `state.vn.pending_tig` | `Option<Met>` (centiseconds) | Crew-entered TIG for the upcoming burn |
 
 ### 3.2 Output field written
 
@@ -206,7 +210,7 @@ pub const P32_PRIORITY: JobPriority = 10;
 
 /// Minimum chaser-target radial separation at CDH TIG below which the geometry
 /// is considered degenerate (m). If |r_c_cdh| - |r_t_cdh| < CDH_MIN_DELTAH,
-/// alarm 01432 is raised.
+/// alarm 01437 is raised.
 pub const CDH_MIN_DELTAH: f64 = 1_000.0; // m
 ```
 
@@ -214,18 +218,17 @@ pub const CDH_MIN_DELTAH: f64 = 1_000.0; // m
 
 ```rust
 /// Entry point for P31 (Coelliptic Sequence Initiation).
-/// Registered in PROGRAM_TABLE[31].
+/// Registered in PROGRAM_TABLE[31] as `init_p31`.
 ///
-/// Sets `state.major_mode = 31`. Prompts the crew for CSI TIG (V06 N37),
-/// CDH TIG (V06 N37 — second entry), and desired Δh (V06 N58). On crew
-/// acceptance calls `compute_csi_delta_v` and displays the result via V06 N84.
-/// Stores the result in `state.pending_maneuver` with `mode = CsiBurn`.
+/// Sets `state.major_mode = 31`. Uses `state.vn.pending_tig` as the CSI TIG.
+/// Derives the CDH TIG by adding `CSI_TO_CDH_INTERVAL_S`. Calls
+/// `compute_csi_delta_v` and stores the result in `state.pending_maneuver`
+/// with `mode = CsiBurn`.
 ///
 /// # Preconditions
 /// - `state.rendezvous_nav.target_pos` and `target_vel` must be non-zero
-///   (target state must exist); otherwise alarm 01430 is raised.
-/// - `state.vn.pending_tig` must be set to the desired CSI TIG (crew-entered
-///   before `p31_init` is called in the current milestone implementation).
+///   (target state must exist); otherwise alarm 01434 is raised.
+/// - `state.vn.pending_tig` must be `Some(tig)` with the desired CSI TIG.
 ///
 /// # Post-conditions (success)
 /// - `state.major_mode == 31`
@@ -239,9 +242,8 @@ pub const CDH_MIN_DELTAH: f64 = 1_000.0; // m
 /// - DSKY displays the alarm code.
 ///
 /// # Alarms
-/// - 01430: target state is zero (P20 never ran or radar failure).
-/// - 01431: CSI Newton iteration did not converge in CSI_MAX_ITER steps.
-/// - 01433: chaser/target states have incompatible epochs after propagation.
+/// - 01434: target state is zero (P20 never ran or radar failure).
+/// - 01435: CSI Newton iteration did not converge in CSI_MAX_ITER steps.
 pub fn p31_init(state: &mut AgcState) -> JobPriority
 ```
 
@@ -302,7 +304,7 @@ pub struct CsiResult {
 /// Error conditions for the CSI computation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CsiError {
-    /// Newton iteration did not converge in CSI_MAX_ITER steps.
+    /// Newton iteration did not converge in `CSI_MAX_ITER` steps.
     NotConverged,
     /// Target or chaser position vector is zero (degenerate state).
     DegenerateState,
@@ -315,7 +317,7 @@ pub enum CsiError {
 
 ```rust
 /// Entry point for P32 (Constant Delta-Height).
-/// Registered in PROGRAM_TABLE[32].
+/// Registered in PROGRAM_TABLE[32] as `init_p32`.
 ///
 /// Sets `state.major_mode = 32`. Prompts the crew for CDH TIG (V06 N37).
 /// Calls `compute_cdh_delta_v` and displays the result via V06 N84.
@@ -323,7 +325,7 @@ pub enum CsiError {
 ///
 /// # Preconditions
 /// - `state.rendezvous_nav.target_pos` and `target_vel` must be non-zero;
-///   otherwise alarm 01430 is raised.
+///   otherwise alarm 01436 is raised.
 /// - `state.vn.pending_tig` must hold the CDH TIG (crew-entered before this call).
 ///
 /// # Post-conditions (success)
@@ -333,8 +335,8 @@ pub enum CsiError {
 ///   `cdh_maneuver.mode == TargetingMode::CdhBurn`
 ///
 /// # Alarms
-/// - 01430: target state zero.
-/// - 01432: degenerate CDH geometry (|Δr_radial| < CDH_MIN_DELTAH).
+/// - 01436: target state zero.
+/// - 01437: degenerate CDH geometry (|Δr_radial| < CDH_MIN_DELTAH).
 pub fn p32_init(state: &mut AgcState) -> JobPriority
 ```
 
@@ -733,12 +735,12 @@ Return `Ok(CdhResult { dv_lvlh })`.
 
 ```
 (r_c_cdh, v_c_cdh) = propagate_to_tig(
-    state.csm_state.pos, state.csm_state.vel,
+    state.csm_state.position, state.csm_state.velocity,
     state.csm_state.epoch, state.vn.pending_tig, MU_EARTH)
 
 (r_t_cdh, v_t_cdh) = propagate_to_tig(
     state.rendezvous_nav.target_pos, state.rendezvous_nav.target_vel,
-    state.rendezvous_nav.target_epoch, state.vn.pending_tig, MU_EARTH)
+    Met::from_seconds(state.rendezvous_nav.target_epoch), state.vn.pending_tig, MU_EARTH)
 
 cdh = compute_cdh_delta_v(r_c_cdh, v_c_cdh, r_t_cdh, v_t_cdh,
                           delta_h, MU_EARTH)?
@@ -833,23 +835,23 @@ interactive flow).
 
 | Alarm code | Condition | Program | Recovery |
 |------------|-----------|---------|----------|
-| 01430 | Target state is zero (`norm(target_pos) < 1 m`) — P20 never ran or tracking was lost. | P31, P32 | Raise alarm, do not modify `pending_maneuver`, return to idle. Crew must run P20 to establish target state before retrying. |
-| 01431 | CSI Newton iteration did not converge in `CSI_MAX_ITER` steps. | P31 | Raise alarm, do not store maneuver. Display last `dv_s` estimate on DSKY for crew awareness; crew may retry with a different TIG. |
-| 01432 | CDH geometry degenerate: `|r_c_mag - r_t_mag| < CDH_MIN_DELTAH` (chaser and target nearly at same altitude at CDH epoch). The burn cannot achieve the coelliptic condition. | P32 (and inner CDH call within P31 iteration) | Raise alarm, abort. Crew must re-enter a different CDH TIG or re-run P31 to establish a valid post-CSI orbit. |
-| 01433 | Target state epoch is more than 30 minutes stale relative to CSI/CDH TIG: `(tig - target_epoch) > 180_000 cs`. The propagated target state uncertainty is too large to trust. | P31, P32 | Raise alarm but proceed with computation; display staleness warning on DSKY. Crew may accept or re-run P20 for a fresher measurement. |
+| 01434 | Target state is zero (`norm(target_pos) < 1 m`) — P20 never ran or tracking was lost. | P31 | Raise alarm, do not modify `pending_maneuver`, return to idle. Crew must run P20 to establish target state before retrying. |
+| 01435 | CSI Newton iteration did not converge in `CSI_MAX_ITER` steps. | P31 | Raise alarm, do not store maneuver. Display last `dv_s` estimate on DSKY for crew awareness; crew may retry with a different TIG. |
+| 01436 | Target state is zero (`norm(target_pos) < 1 m`) — P20 never ran or tracking was lost. | P32 | Raise alarm, do not modify `pending_maneuver`. Crew must run P20 first. |
+| 01437 | CDH geometry degenerate: `|r_c_mag - r_t_mag| < CDH_MIN_DELTAH` (chaser and target nearly at same altitude at CDH epoch). The burn cannot achieve the coelliptic condition. | P32 (and inner CDH call within P31 iteration) | Raise alarm, abort. Crew must re-enter a different CDH TIG or re-run P31 to establish a valid post-CSI orbit. |
 
 Alarm codes follow the established rendezvous alarm numbering convention. Codes
-01420–01429 are used by P20/P21/P22/P23 (per `specs/p20-spec.md` §8). Codes
-01430–01439 are reserved for this phase.
+01420–01435 are used by P20–P22/P23/P31. Codes 01436–01437 are reserved for P32.
+Codes 01440–01445 are used by P33/P34 (see `specs/p33_p34-spec.md` §4).
 
 ---
 
 ## 8. Edge Cases
 
-### 8.1 CSI Newton non-convergence (alarm 01431)
+### 8.1 CSI Newton non-convergence (alarm 01435)
 
 If `CSI_MAX_ITER` is exhausted, the function returns `Err(NotConverged)`.
-`p31_init` raises alarm 01431 and does NOT store a maneuver.
+`p31_init` raises alarm 01435 and does NOT store a maneuver.
 
 The cause is typically one of:
 - The CDH TIG is so close to the CSI TIG that the propagation produces insufficient
@@ -887,7 +889,7 @@ This check is applied at the start of `compute_cdh_delta_v`.
 ### 8.4 Target state never set (`target_pos == [0, 0, 0]`)
 
 ```
-if norm(state.rendezvous_nav.target_pos) < 1.0  →  alarm 01430
+if norm(state.rendezvous_nav.target_pos) < 1.0  →  alarm 01434 (P31) or 01436 (P32)
 ```
 
 This check runs at the very start of both `p31_init` and `p32_init`, before any
@@ -898,7 +900,7 @@ possible LM orbit (barely above the lunar surface) has `r > 1.7e6 m`.
 
 In `p31_init`, after the crew enters both TIGs, the software computes
 `dt_csi_to_cdh = (cdh_tig - csi_tig) / 100.0 s`. If this value is ≤ 0, the
-function raises alarm 01431 (same as non-convergence, used as a generic targeting
+function raises alarm 01435 (same as non-convergence, used as a generic targeting
 failure) and returns without computing.
 
 ### 8.6 Zero-ΔV case
@@ -963,12 +965,12 @@ plane-change maneuver; the coelliptic sequence handles only in-plane geometry.
 
 **Expected**: returns `Err(DegenerateState)`.
 
-### TC-P31-5 — Alarm 01431 integration test (non-convergence through `p31_init`)
+### TC-P31-5 — Alarm 01434 integration test (target state zero through `p31_init`)
 
 **Setup**: Feed an `AgcState` with `target_pos = [0,0,0]`.
 
 **Expected**: `p31_init` does not modify `state.pending_maneuver`; DSKY program
-alarm 01430 is set.
+alarm 01434 is set.
 
 ---
 
@@ -1063,39 +1065,3 @@ The Newton step uses a relative epsilon `eps = max(0.01 * |dv_s| + 0.001, 0.01)`
 For very small `dv_s` (near-zero burn) this evaluates to `0.01 m/s`. For large
 burns (> 100 m/s) it uses 1% of the burn magnitude. The architect should validate
 that this strategy does not cause oscillation near convergence for small burns.
-
-### OQ-P31-4 — `delta_h` storage in `AgcState`
-
-P32 needs to use the same `delta_h` that P31 was computed with. Currently the
-spec has P32 re-use `DELTA_H_DEFAULT_M` unless the crew entered a custom value.
-The architect must decide whether to add a `state.pending_delta_h: f64` field to
-`AgcState`, or to pass `delta_h` explicitly from the P31→P32 session context.
-Adding a field is the simpler approach and matches the AGC erasable `DELTAH`.
-
-### OQ-P31-5 — `TargetingMode` enum modification
-
-Adding `CsiBurn` and `CdhBurn` to `TargetingMode` in `guidance::targeting.rs`
-requires a `match` arm update in `programs::p40_p41`. The architect should assess
-the blast radius of this change and decide whether to use a catch-all arm or
-explicit arms for all variants.
-
-### OQ-P32-1 — CDH W-axis component for out-of-plane cases
-
-The closed-form CDH formula in §5.2 assumes the CDH burn is in-plane (W-axis = 0).
-For non-coplanar orbits (target and chaser in slightly different planes after CSI),
-a small W-axis component is needed to achieve coplanarity. The Comanche055 CDH
-subroutine includes a plane-change component derived from the cross product of the
-two orbit normals. The architect should decide whether to include this refinement
-in Phase 5 or defer it. **Recommendation**: include it, because the P31 Newton
-iteration targets zero CDH W-axis residual under the in-plane CDH assumption; if
-CDH also corrects for residual out-of-plane, the P31 convergence criterion must be
-revised to target the total CDH ΔV magnitude rather than just the W-axis component.
-This is a design decision left for architect review.
-
-### OQ-P32-2 — `refsmmat` field on `AgcState`
-
-Both `p31_init` and `p32_init` call `guidance::targeting::burn_attitude(dv_inertial,
-state.refsmmat)`. The `refsmmat` field must exist on `AgcState` (it was introduced
-in the P51/P52 spec). If it has not yet been added, P31/P32 must use the identity
-matrix as a fallback. The architect should confirm `state.refsmmat` is available
-by Phase 5.

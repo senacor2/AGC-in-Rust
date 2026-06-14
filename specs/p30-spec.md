@@ -1,5 +1,9 @@
 # Specification: `programs/p30` — External Delta-V Targeting
 
+## Change Log
+
+- **2026-06-13** — Audited under issue #159 by analyst-reengineer agent. Corrected `P30_JOB_PRIORITY` constant declaration from `JobPriority(4)` to `4` (JobPriority is a type alias `u8`, not a newtype); fixed `m.delta_v` → `m.delta_v.0` in TC-P30-1 and TC-P30-2 test snippets to reflect the `DeltaV` newtype wrapper.
+
 **Status**: Ready for implementation
 **Module path**: `agc-core/src/programs/p30.rs`
 **Architecture reference**: `docs/architecture.md` §7.2 P30 row, §7.3 Program Trait
@@ -82,7 +86,7 @@ to Milestone 5.
 | `DELVEET1` | 0352 (E3) | B+7 m/s (DP) | `state.pending_maneuver.delta_v[0]` |
 | `DELVEET2` | 0354 (E3) | B+7 m/s (DP) | `state.pending_maneuver.delta_v[1]` |
 | `DELVEET3` | 0356 (E3) | B+7 m/s (DP) | `state.pending_maneuver.delta_v[2]` |
-| `DVTOTAL` | ~0360 (E3) | B+7 m/s (scalar) | `linalg::norm(maneuver.delta_v)` computed on demand |
+| `DVTOTAL` | ~0360 (E3) | B+7 m/s (scalar) | `linalg::norm(maneuver.delta_v.0)` computed on demand |
 | `VGBODY` | P40 erasable | B+7 m/s | Not stored by P30; set at P40 entry |
 
 Scale factor decode for test fixture data:
@@ -174,7 +178,8 @@ pub const P30_MAJOR_MODE: u8 = 30;
 /// Job priority for the P30 targeting computation job.
 /// P30 does not need to run at higher priority than other background jobs.
 /// Chosen consistent with other targeting programs (P31, P34).
-pub const P30_JOB_PRIORITY: JobPriority = JobPriority(4);
+/// Note: `JobPriority` is a type alias for `u8`, not a newtype.
+pub const P30_JOB_PRIORITY: JobPriority = 4;
 
 /// DSKY Noun used to display the burn summary.
 pub const P30_NOUN_BURN_SUMMARY: u8 = 45;
@@ -307,7 +312,7 @@ pub fn init(state: &mut crate::AgcState) -> JobPriority {
 ///
 /// - `state.pending_maneuver` is `Some(m)` where:
 ///   - `m.tig == tig`
-///   - `|m.delta_v| == |dv_crew|` (rotation preserves magnitude)
+///   - `|m.delta_v.0| == |dv_crew|` (rotation preserves magnitude)
 ///   - `m.mode == TargetingMode::ExternalDeltaV`
 ///   - `m.burn_attitude` is a valid rotation matrix
 /// - DSKY displays are updated to show the burn summary.
@@ -352,7 +357,7 @@ pub fn p30_load_dv_lvlh(state: &mut AgcState, tig: Met, dv_crew: Vec3)
 ///
 /// | Register | Content | Units |
 /// |----------|---------|-------|
-/// | R1 | Delta-V magnitude `|maneuver.delta_v|` | m/s (displayed as f32) |
+/// | R1 | Delta-V magnitude `|maneuver.delta_v.0|` | m/s (displayed as f32) |
 /// | R2 | TIG minus 35 minutes, in centiseconds | centiseconds (displayed as f32) |
 /// | R3 | TIG in centiseconds (for countdown display) | centiseconds (displayed as f32) |
 ///
@@ -386,7 +391,7 @@ pub fn p30_load_dv_lvlh(state: &mut AgcState, tig: Met, dv_crew: Vec3)
 /// ```
 /// state.dsky.verb  = VERB_DISPLAY_OCT   (6)
 /// state.dsky.noun  = P30_NOUN_BURN_SUMMARY   (45)
-/// state.dsky.r[0]  = |delta_v| as f32        (m/s)
+/// state.dsky.r[0]  = |delta_v.0| as f32        (m/s)
 /// state.dsky.r[1]  = tig_minus_35_cs as f32  (centiseconds)
 /// state.dsky.r[2]  = maneuver.tig.0 as f32   (centiseconds)
 /// state.dsky.flashing = false
@@ -473,7 +478,7 @@ state.pending_maneuver = Some(maneuver)
          v
 p30_display_summary(state)
          |
-         |-- norm(delta_v) -> |dv|
+         |-- norm(delta_v.0) -> |dv|
          |-- tig - 35 min -> R2
          |-- write dsky.r[0..2], noun=45, verb=6
          |
@@ -579,7 +584,8 @@ fn tc_p30_1_zero_delta_v() {
     let m = state.pending_maneuver.expect("pending_maneuver must be Some after p30_load_dv_lvlh");
 
     assert_eq!(m.tig, tig);
-    assert!(norm(m.delta_v) < 1e-9, "delta_v magnitude must be zero");
+    // delta_v is a DeltaV newtype wrapper; access the inner Vec3 via .0
+    assert!(norm(m.delta_v.0) < 1e-9, "delta_v magnitude must be zero");
     assert_eq!(m.mode, TargetingMode::ExternalDeltaV);
 
     // burn_attitude must be identity for zero delta-V
@@ -628,8 +634,9 @@ fn tc_p30_2_prograde_dv_maps_to_velocity_direction() {
 
     let m = state.pending_maneuver.expect("pending_maneuver must be Some");
 
+    // delta_v is a DeltaV newtype wrapper; access the inner Vec3 via .0
     // The inertial delta-V must be approximately [0, 100, 0] (parallel to +Y velocity)
-    let dv = m.delta_v;
+    let dv = m.delta_v.0;
     assert!((dv[0]).abs() < 1e-6, "inertial dv[0] (X) must be ~0, got {}", dv[0]);
     assert!((dv[1] - 100.0).abs() < 1e-6, "inertial dv[1] (Y) must be ~100 m/s, got {}", dv[1]);
     assert!((dv[2]).abs() < 1e-6, "inertial dv[2] (Z) must be ~0, got {}", dv[2]);

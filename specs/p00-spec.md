@@ -1,5 +1,9 @@
 # Specification: `programs/p00` Module — CMC Idle (P00)
 
+## Change Log
+
+- **2026-06-13** — Audited under issue #159 by analyst-reengineer agent. Corrected §3.2 docstring (step 4 no longer calls `dap_init`; instead it conditionally sets `dap_state.mode` only when DAP is not `Off`), added `state.burn.armed = false` to step 2 of §4.2 table to match implementation.
+
 **Status**: Approved for implementation
 **Module path**: `agc-core/src/programs/p00.rs`
 **Architecture reference**: `docs/architecture.md` §7.2 "Programs for the Command Module", §6 "Restart Protection"
@@ -43,8 +47,9 @@ job is present — that quiescent state is the "running" state of P00.
 - DSKY formatting. Display output (V16N65 MET monitor) is issued via the
   `services::display` module (M5). The current stub defers this to the display
   milestone; this spec documents intent only.
-- Any DAP mode computation. P00 calls `dap_init(AttitudeHold)` to hand off
-  attitude control, then departs. DAP logic lives in `control::dap`.
+- Any DAP mode computation. P00 conditionally sets the DAP mode to AttitudeHold
+  (only when the DAP is not already `Off`), then departs. DAP logic lives in
+  `control::dap`.
 
 ---
 
@@ -114,11 +119,12 @@ pub const PRIORITY: JobPriority = 1;
 ///
 /// # Actions performed (in order)
 /// 1. Sets `state.major_mode = 0`.
-/// 2. Sets `state.burn.burn_active = false` and `state.engine_thrusting = false`
-///    to cancel any active SPS burn.
+/// 2. Sets `state.burn.burn_active = false`, `state.burn.armed = false`, and
+///    `state.engine_thrusting = false` to cancel any active SPS burn.
 /// 3. Clears `state.servicer_exit` (removes the P40 burn-exit callback if set).
-/// 4. Activates the DAP in `AttitudeHold` mode via `control::dap::dap_init`.
-/// 5. Requests V16N65 MET monitor display via `services::display` (deferred to M5).
+/// 4. If `state.dap_state.mode != DapMode::Off`, sets it to `DapMode::AttitudeHold`.
+///    Does NOT call `dap_init` (which would reset the CDU baseline).
+/// 5. Sets `state.dsky.prog = 0` so the PROG indicator shows "00".
 ///
 /// # Returns
 /// `PRIORITY` (1) — the caller (V37 handler) passes this to `executive.create_job`
@@ -145,15 +151,18 @@ pub fn init(state: &mut AgcState) -> JobPriority
 | Step | Field(s) modified | Value | Rationale |
 |------|------------------|-------|-----------|
 | 1 | `state.major_mode` | `0` | MODREG ← 00; DSKY PROG display shows "00" |
-| 2 | `state.burn.burn_active` | `false` | Cancel any P40 burn arm/cutoff loop |
+| 2 | `state.burn.burn_active`, `state.burn.armed` | `false` | Cancel any P40 burn arm/cutoff loop |
 | 3 | `state.engine_thrusting` | `false` | Ensure ISR shim quenches SPS/TVC output |
 | 4 | `state.servicer_exit` | `None` | Remove P40 burn-exit hook (safe for SERVICER to run headless) |
-| 5 | `state.dap_state.mode` | `DapMode::AttitudeHold` | Via `control::dap::dap_init(state, DapMode::AttitudeHold)` |
+| 5 | `state.dap_state.mode` | `DapMode::AttitudeHold` (conditional) | Set only when `mode != DapMode::Off`; does not call `dap_init` to avoid resetting CDU baseline |
 | 6 | `state.dsky.prog` | `0` | PROG indicator shows "00" on DSKY |
 
 Step 5 does not modify `state.dap_state.commanded_attitude`. If a prior program
 commanded an attitude, P00 holds that attitude. If no attitude was commanded,
 the field retains its FRESH START zero (body-frame aligned with inertial frame).
+The conditional guard (`mode != Off`) means P00 leaves the DAP off if it was
+already off — this avoids unintentionally activating attitude hold when no IMU
+data is available.
 
 Step 6 is the only DSKY write in `init`. The V16N65 MET monitor display is
 requested via `services::display::request_monitor(state, 16, 65)` (deferred to
@@ -167,7 +176,10 @@ display milestone M5; a no-op in the current stub).
 - Does not reset `state.csm_state` or `state.target_state`.
 - Does not reset `state.refsmmat`.
 - Does not reset `state.flagwords` (these carry crew-configurable settings).
-- Does not call `dap_stop`. P00 transitions the DAP to AttitudeHold, not off.
+- Does not call `dap_stop`. P00 transitions the DAP to AttitudeHold if it was
+  active, but leaves it `Off` if it was already off.
+- Does not call `dap_init`. That would reset the CDU baseline. The DAP mode
+  transition is a direct field write: `state.dap_state.mode = DapMode::AttitudeHold`.
 
 ---
 

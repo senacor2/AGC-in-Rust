@@ -1,5 +1,9 @@
 # Specification: `programs/p21` and `programs/p22` — Ground-Track Determination and Orbital Navigation (Landmark Tracking)
 
+## Change Log
+
+- **2026-06-13** — Audited under issue #159 by analyst-reengineer agent. Corrected `state.csm_state.pos`/`.vel` → `state.csm_state.position`/`.velocity` throughout §4.2 docstring, §6.2 algorithm description, §10 test cases, and §11 open question 3; updated §11 open question 1 to note `scalar_measurement_update` was moved to `navigation::kalman` module.
+
 **Status**: Ready for implementation (Milestone 5 Phase 3)
 **Module paths**:
 - `agc-core/src/programs/p21.rs` — new file
@@ -411,7 +415,7 @@ pub fn p22_cycle_task(state: &mut AgcState)
 ///   for lunar landmarks (Moon-fixed → MCI via the IAU 2015 libration rotation).
 ///
 /// # Post-conditions (mark accepted)
-/// - `state.csm_state.pos` and `state.csm_state.vel` updated by the Kalman gain.
+/// - `state.csm_state.position` and `state.csm_state.velocity` updated by the Kalman gain.
 /// - `state.csm_nav.w_matrix` rank-1 downgraded.
 /// - `state.csm_nav.mark_count` incremented.
 /// - `state.csm_nav.last_mark_time` set to `mark.time`.
@@ -649,7 +653,7 @@ x = [ csm_pos[0], csm_pos[1], csm_pos[2],
       csm_vel[0], csm_vel[1], csm_vel[2] ]^T
 ```
 
-where `csm_pos` and `csm_vel` are read from `state.csm_state.pos` and `state.csm_state.vel`.
+where `csm_pos` and `csm_vel` are read from `state.csm_state.position` and `state.csm_state.velocity`.
 
 **Reference point redefinition**: The "observer" is now the **landmark** (the known fixed
 point), and the "observed vehicle" is the **CSM**. The relative position vector is:
@@ -681,18 +685,16 @@ b[3..6] = [0.0; 3]                        (LOS direction cosine does not depend 
 
 **W-matrix**: Use `state.csm_nav.w_matrix` (not `state.rendezvous_nav.w_matrix`).
 
-**State update target**: Apply Kalman gain corrections to `state.csm_state.pos` and
-`state.csm_state.vel` (not to `rendezvous_nav.target_pos`/`target_vel`).
+**State update target**: Apply Kalman gain corrections to `state.csm_state.position` and
+`state.csm_state.velocity` (not to `rendezvous_nav.target_pos`/`target_vel`).
 
 **Noise variance**: Use `SIGMA_LANDMARK_SQ` (= `1.0e-8` rad²).
 
 **Rejection bookkeeping**: Use `state.csm_nav.reject_count`,
 `state.csm_nav.consecutive_reject_count`, and `state.csm_nav.mark_count`.
 
-The internal helper `scalar_measurement_update` defined in `programs/p20.rs` is pub(crate)
-accessible; P22 calls it with the adapted state slice and sensitivity vector. If the
-architect prefers to move it to a shared location (e.g. `navigation::kalman`), that is an
-open question (see §11).
+The shared helper `scalar_measurement_update` lives in `navigation::kalman` and is called
+by P22 via `crate::navigation::kalman::scalar_measurement_update`.
 
 **Process-noise growth** (in `p22_cycle_task`):
 
@@ -1003,7 +1005,7 @@ Mark delivered with exact predicted LOS (zero residual — perfect measurement).
   (Improvement is small because `b[0]` is tiny — the slant range is 629 km.)
 - `state.csm_nav.mark_count == 1`.
 - `state.csm_nav.reject_count == 0`.
-- `state.csm_state.pos` changes by `k[0] * residual`; with zero residual, **pos is unchanged**.
+- `state.csm_state.position` changes by `k[0] * residual`; with zero residual, **position is unchanged**.
 
 ---
 
@@ -1014,7 +1016,7 @@ Mark delivered with exact predicted LOS (zero residual — perfect measurement).
 **Setup**: Same geometry as TC-P22-3, but introduce a 500 m position error in the
 CSM stored state:
 ```
-state.csm_state.pos = [7_000_500.0, 0.0, 0.0]   m  (500 m error along X)
+state.csm_state.position = [7_000_500.0, 0.0, 0.0]   m  (500 m error along X)
 ```
 
 LOS observation uses the **true** CSM position:
@@ -1038,7 +1040,7 @@ expected — a single range mark has no elevation/azimuth information.
 
 **Revised setup** to demonstrate non-zero residual: Offset CSM by 500 m in Y:
 ```
-state.csm_state.pos = [7_000_000.0, 500.0, 0.0]   m
+state.csm_state.position = [7_000_000.0, 500.0, 0.0]   m
 ```
 
 True LOS (from landmark [6_371_000, 0, 0]):
@@ -1058,7 +1060,7 @@ residual = 1.0 - 0.999999683 = 3.17e-7
 
 **Expected**:
 - `residual ≈ 3.17e-7` (positive; stored state offset causes positive residual).
-- State update moves `csm_state.pos[1]` from 500.0 toward 0.0 by `k[1] * residual`.
+- State update moves `csm_state.position[1]` from 500.0 toward 0.0 by `k[1] * residual`.
 - `mark_count == 1`, `reject_count == 0`, no alarm.
 
 (The exact correction is small for a single mark. Convergence requires multiple marks
@@ -1085,7 +1087,7 @@ The innovation variance `S ≈ 6.42e-7` (from TC-P22-3); `3*sqrt(S) ≈ 2.4e-3`.
 **Expected**:
 - `state.csm_nav.reject_count == 1`.
 - `state.csm_nav.consecutive_reject_count == 1`.
-- `state.csm_state.pos` unchanged.
+- `state.csm_state.position` unchanged.
 - `state.csm_nav.w_matrix` unchanged.
 
 ---
@@ -1138,13 +1140,10 @@ each with `los_inertial = [0.0, 1.0, 0.0]` while the predicted LOS is `[1.0, 0.0
 
 ## 11. Open Questions for Architect Review
 
-1. **`scalar_measurement_update` placement**: P22 reuses the same scalar Kalman update as
-   P20. Currently this helper is `pub(crate)` in `programs/p20.rs`. The architect should
-   decide whether to keep it there (P22 imports it via `use crate::programs::p20::scalar_measurement_update`)
-   or to promote it to a shared module (e.g. `navigation::kalman::scalar_measurement_update`)
-   accessible to both P20 and P22 without a cross-program dependency. The shared-module
-   approach is architecturally cleaner; the cross-import approach is simpler. Either works
-   for Phase 3 correctness.
+1. **`scalar_measurement_update` placement** (resolved): The shared scalar Kalman update
+   was moved to `navigation::kalman::scalar_measurement_update`, accessible to both P20
+   and P22 without a cross-program dependency. P22 calls it via
+   `crate::navigation::kalman::scalar_measurement_update`.
 
 2. **`gha_epoch_rad` placement in `AgcState`**: The spec proposes adding `gha_epoch_rad`
    to an existing `navigation` sub-struct or as a top-level field. The architect should
@@ -1152,8 +1151,8 @@ each with `los_inertial = [0.0, 1.0, 0.0]` while the predicted LOS is `[1.0, 0.0
    `NavigationParameters` or `Constants` sub-struct does not yet exist, this field and
    `R_EARTH`, `OMEGA_EARTH` may warrant one.
 
-3. **`state.csm_state` mutability contract**: P22 modifies `state.csm_state.pos` and
-   `state.csm_state.vel` directly as a result of landmark mark incorporation. The SERVICER
+3. **`state.csm_state` mutability contract**: P22 modifies `state.csm_state.position` and
+   `state.csm_state.velocity` directly as a result of landmark mark incorporation. The SERVICER
    also writes `csm_state` each Average-G cycle. The architect should confirm that these
    two writers cannot race (they should not, as the AGC was single-threaded, but the Rust
    model should make this explicit — e.g. `csm_state` is written only by the SERVICER

@@ -1,6 +1,10 @@
 # Specification: `programs/p61_p67` Module — Entry Guidance Programs
 
-**Status**: Approved for implementation (Milestone 4 Phase 5 — skeletons)
+## Change Log
+
+- **2026-06-13** — Audited under issue #159 by analyst-reengineer agent. Updated §1 and §2 to reflect the full `EntryState` struct (14 fields) and extended `EntryPhase` enum (Ballistic, Skip, Constd variants) implemented in later milestones; §6 already documented these additions but §1–§2 were stale from the original MS4 Phase 5 skeleton spec.
+
+**Status**: Approved for implementation (Milestone 4 Phase 5 — skeletons; §6 extends with closed-loop guidance, Milestone MS-E3)
 **Module path**: `agc-core/src/programs/p61_p67.rs`
 **Architecture reference**: `docs/architecture.md` §7.2 (P-programs), §10 (entry guidance)
 **AGC source files**:
@@ -17,48 +21,107 @@ Earth atmospheric entry after the Trans-Earth Coast phase. They sequence
 the vehicle through entry preparation, CM/SM separation, pre-0.05g
 monitoring, closed-loop entry guidance, and final drogue deployment.
 
-**This milestone (MS4 Phase 5) implements only skeletons.** The programs
-establish the phase state machine, major-mode/DSKY wiring, and the
-inter-program handoff contract. The real entry-guidance math — roll
-steering law, lift-to-drag modulation, skip targeting, range prediction
-— is a later milestone.
+The MS4 Phase 5 skeletons establish the phase state machine, major-mode/DSKY
+wiring, and the inter-program handoff contract. Milestone MS-E3 added the
+closed-loop guidance math (roll steering, HUNTEST range prediction, `select_phase`
+divergence to Ballistic, and the extended `EntryState` fields in §6).
 
 ### What this module provides
 
-- `EntryPhase` enum: `Idle → Preparation → Separation → PreEntry → Entry → Final`.
-- `EntryState` struct in `AgcState`: current phase + sensed acceleration
-  (g units) + stub roll command + stub target range.
+- `EntryPhase` enum: `Idle → Preparation → Separation → PreEntry → Entry → Final`,
+  plus `Ballistic` (HUNTEST divergence hold), `Skip` (UPCONTRL closed-loop),
+  and `Constd` (constant-drag guidance) added in MS-E3.
+- `EntryState` struct in `AgcState`: full entry guidance state block (see §2).
 - `P61_MAJOR_MODE … P67_MAJOR_MODE` constants.
 - `PRIORITY: JobPriority = 10` — one tier above the background monitors.
 - `init_p61 … init_p67` entry points.
 - `p63_check_threshold` — advances `PreEntry → Entry` when
-  `sensed_acceleration_g >= 0.05` (stub driver that tests call directly
-  instead of wiring into the SERVICER loop).
-- `p67_deploy_drogue` — sets a `drogue_deployed: bool` flag. Drogue
-  hardware actuation is a HAL concern out of scope here.
+  `sensed_acceleration_g >= 0.05`.
+- `p67_deploy_drogue` — sets `drogue_deployed: bool`. Drogue hardware actuation
+  is a HAL concern out of scope here.
+- `G0_MPS2: f64 = 9.806_65` — standard gravity (m/s²) for g-loading conversion.
+- `ENTRY_THRESHOLD_G: f64 = 0.05` — the 0.05g threshold constant.
 
 ### What this module does NOT provide
 
-- The closed-loop entry guidance law (roll steering, L/D modulation,
-  skip targeting, range prediction).
 - Real sensed-acceleration integration — `sensed_acceleration_g` is
-  written by the test harness, not by the SERVICER.
+  updated by `entry_servicer_exit` in `guidance::entry` each SERVICER cycle (not
+  by the skeleton entry points directly).
 - CM/SM separation pyrotechnic commands — the HAL SECS interface does
   not yet exist; P62 only updates phase state and DAP mode.
 - Drogue and main parachute HAL actuation.
-- P65 and P66 (up-skip and ballistic phases).
 
 ---
 
 ## 2. `EntryState`
 
+The full struct as implemented (all fields zero-initialised unless stated):
+
 ```rust
 pub struct EntryState {
-    pub phase: EntryPhase,              // Default: Idle
-    pub sensed_acceleration_g: f64,     // Default: 0.0 — test-harness driven
-    pub roll_command_rad: f64,          // Default: 0.0 — stub
-    pub target_range_km: f64,           // Default: 0.0 — stub
-    pub drogue_deployed: bool,          // Default: false
+    /// Current entry-guidance phase.
+    pub phase: EntryPhase,                  // Default: Idle
+
+    /// Sensed spacecraft acceleration (g units).
+    /// Updated each SERVICER cycle by `entry_servicer_exit` from
+    /// `state.servicer_last_dv_inertial`.
+    pub sensed_acceleration_g: f64,         // Default: 0.0
+
+    /// Inertial altitude rate d|r|/dt (m/s, positive = climbing).
+    /// Updated each SERVICER cycle. Equals r · v / |r|.
+    /// AGC: V16N64 R2 (HDOT).
+    pub r_dot_mps: f64,                     // Default: 0.0
+
+    /// Roll command the entry guidance law is holding (radians).
+    /// 0 = lift up, positive = right-bank.
+    /// Updated each SERVICER cycle by `guidance::entry::resolve_roll`.
+    /// AGC: `ROLLC` (REENTRY_CONTROL.agc:1308).
+    pub roll_command_rad: f64,              // Default: 0.0
+
+    /// Great-circle range from sub-satellite point to target landing site (km).
+    /// Updated each SERVICER cycle.
+    pub target_range_km: f64,              // Default: 0.0
+
+    /// Predicted total range to target (km) — output of `predict_range`.
+    /// AGC: `ASP`.
+    pub predicted_range_km: f64,           // Default: 0.0
+
+    /// Signed downrange error in km: `target_range_km - predicted_range_km`.
+    /// Drives the HUNTEST L/D update. AGC: `DIFF`.
+    pub downrange_error_km: f64,           // Default: 0.0
+
+    /// Signed cross-range distance (km). Positive = right of track.
+    /// Used by `resolve_roll` to choose bank direction.
+    /// AGC: `LATANG`.
+    pub crossrange_km: f64,               // Default: 0.0
+
+    /// Last computed vertical L/D command (dimensionless, range [-LAD, LAD]).
+    /// Output of `compute_ld_command`. AGC: `L/D`.
+    pub ld_command: f64,                  // Default: 0.0
+
+    /// HUNTEST iterated reference L/D (`LEWD` in REENTRY_CONTROL.agc).
+    /// Initialised to `entry_tables::LEWD_INIT` on first HUNTEST pass.
+    pub lewd_ref: f64,                    // Default: 0.0
+
+    /// HUNTEST iteration step (`DLEWD` in REENTRY_CONTROL.agc).
+    /// Updated each cycle by Newton step.
+    pub dlewd: f64,                       // Default: 0.0
+
+    /// Previous downrange error (km) — `DIFFOLD` in REENTRY_CONTROL.agc.
+    /// Saved at end of each HUNTEST pass for the next cycle's Newton step.
+    pub diffold_km: f64,                  // Default: 0.0
+
+    /// SKIPPER nonlinear gain — `FACTOR` in REENTRY_CONTROL.agc.
+    /// Updated each `Skip` cycle by UPCONTRL's CONTINU2 block.
+    pub factor: f64,                      // Default: 0.0
+
+    /// `false` until the first SERVICER cycle in `EntryPhase::Entry`.
+    /// On the first cycle, `lewd_ref` and `dlewd` are initialised from
+    /// `entry_tables` constants (FOREHUNT block in REENTRY_CONTROL.agc).
+    pub hunt_initialized: bool,           // Default: false
+
+    /// True after P67 has commanded drogue deployment.
+    pub drogue_deployed: bool,            // Default: false
 }
 ```
 
@@ -172,11 +235,27 @@ the P64 entry point. The closed-loop math behind it lives in
 
 ### 6.1 `EntryPhase::Ballistic`
 
-New variant — destination for a `select_phase` divergence. The DAP holds the
+New variant (MS-E3) — destination for a `select_phase` divergence. The DAP holds the
 last `EntryRoll(roll_command_rad)` command while in this state; the P66
 program proper is a separate concern (see `entry-guidance-plan.md`).
 
-### 6.2 `EntryState` fields used by closed-loop guidance
+### 6.2 `EntryPhase::Skip` and `EntryPhase::Constd`
+
+Two further variants added in MS-E3:
+
+- `Skip` — UPCONTRL / up-control phase: entered from `Entry` when HUNTEST converges.
+  The SKIPPER feedback law maintains the converged trajectory using `ΔL/D` from
+  `(RDOT − RDOTREF)` and `(V − VREF)` errors. AGC source:
+  `REENTRY_CONTROL.agc:875–1020`.
+
+- `Constd` — constant-drag closed-loop guidance: entered from `Entry` when HUNTEST
+  diverges (`|range_error| > entry_tables::RANGE_ERR_THRESHOLD_KM`). Flies a
+  constant-drag reference profile `D0 = KA3·LEQ + KA4` with K1D / K2D feedback.
+  AGC source: `REENTRY_CONTROL.agc:1023` (`DCONSTD`). Exits to `Skip` once range
+  error falls back inside `HUNTEST_CONVERGED_KM`, to `Final` at `V < VFINAL1`, or
+  to `Ballistic` if drag drops below `Q7F`.
+
+### 6.3 `EntryState` fields used by closed-loop guidance
 
 | Field | Type | Role | AGC label |
 |---|---|---|---|
@@ -192,7 +271,7 @@ program proper is a separate concern (see `entry-guidance-plan.md`).
 All `f64`, zero-initialised; the bool starts `false`. The const constructor
 `EntryState::new` adds them.
 
-### 6.3 Closed-loop call sequence in `entry_servicer_exit`
+### 6.4 Closed-loop call sequence in `entry_servicer_exit`
 
 After the sensed-g / R-dot / range-to-go / threshold-trip work, the SERVICER
 cycle runs the closed loop — only when `state.entry.phase == EntryPhase::Entry`:
@@ -211,7 +290,7 @@ V16N64 DSKY display; the actual bank command is produced one SERVICER tick
 later — matching the AGC, where the P64 entry point is also a handoff into
 the cyclic guidance task.
 
-### 6.4 Public API in `guidance::entry`
+### 6.5 Public API in `guidance::entry`
 
 | Symbol | Returns | Purpose |
 |---|---|---|
@@ -224,7 +303,7 @@ The reference-profile table in `guidance/entry_tables.rs` is transcribed from
 `REENTRY_CONTROL.agc:1369–1467`; each constant carries a doc-comment mapping
 to its AGC label and B-scaling.
 
-### 6.5 Test cases (closed-loop math)
+### 6.6 Test cases (closed-loop math)
 
 Under `agc-core/src/guidance/entry.rs::tests` and `entry_tables::tests`:
 

@@ -1,5 +1,9 @@
 # Specification: `programs/p37` — Return to Earth (Trans-Earth Injection)
 
+## Change Log
+
+- **2026-06-13** — Audited under issue #159 by analyst-reengineer agent. Updated §7 error policy from "panic!" to soft alarms 1410 (bad TOF) and 1411 (wrong frame) to match the implementation; corrected TC-P37-3 and TC-P37-5 from `#[should_panic]` to alarm-code checks.
+
 **Status**: Ready for implementation
 **Module path**: `agc-core/src/programs/p37.rs`
 **Architecture reference**: `docs/architecture.md` §7.2 "Programs for the Command Module", §7.3 "Program Trait"
@@ -232,20 +236,21 @@ These constants import or re-use values already defined elsewhere:
 /// # Returns
 ///
 /// `JobPriority` for the Executive job that will execute the TEI computation.
-/// Use priority `0x10` (decimal 16), matching the priority used by targeting
+/// Use priority 16 (decimal), matching the priority used by targeting
 /// programs P30 and P31 (non-time-critical background computation).
 ///
 /// # Behavior
 ///
-/// 1. Assert `state.csm_state.frame == Frame::MoonInertial`. P37 is only valid
+/// 1. Check `state.csm_state.frame == Frame::MoonInertial`. P37 is only valid
 ///    while the spacecraft is in the Moon's sphere of influence. If the frame is
-///    anything else, trigger program alarm (or panic in the initial implementation).
-///    See §7 for the alarm policy.
+///    anything else, raise alarm 1411 (`ALARM_P37_WRONG_FRAME`) and return
+///    without advancing the major mode.  See §7 for the alarm policy.
 /// 2. Set `state.major_mode = 37`.
 /// 3. Set `state.dsky.prog = 37` (PROG display field).
-/// 4. Compute the default TIG: `tig = state.time.0.saturating_add(DEFAULT_TEI_TIG_OFFSET_CS)`.
-/// 5. Call `p37_compute_tei(state, Met(tig), DEFAULT_TEI_TOF_S)`.
-/// 6. Return `JobPriority` = 16 (`0x10`).
+/// 4. Clear `state.pending_maneuver = None` (invalidate any prior targeting result).
+/// 5. Compute the default TIG: `tig = state.time.0.saturating_add(DEFAULT_TEI_TIG_OFFSET_CS)`.
+/// 6. Call `p37_compute_tei(state, Met(tig), DEFAULT_TEI_TOF_S)`.
+/// 7. Return priority 16.
 ///
 /// # AGC source
 ///
@@ -286,12 +291,13 @@ This thin wrapper simply calls `p37_init(state)` and returns its result.
 ///
 /// * `tof` — Time of Flight from TIG to Earth entry interface (seconds).
 ///   Must satisfy `MIN_TEI_TOF_S <= tof <= MAX_TEI_TOF_S`.
-///   Panic (or alarm) if outside this range; see §7.
+///   If outside this range alarm 1410 (`ALARM_P37_BAD_TOF`) is raised and
+///   the function returns without modifying `pending_maneuver`; see §7.
 ///
 /// # Algorithm
 ///
-/// 1. Validate `MIN_TEI_TOF_S <= tof <= MAX_TEI_TOF_S`; panic if violated.
-/// 2. Validate `state.csm_state.frame == Frame::MoonInertial`; panic if violated.
+/// 1. Validate `MIN_TEI_TOF_S <= tof <= MAX_TEI_TOF_S`; raise alarm 1410 if violated.
+/// 2. Validate `state.csm_state.frame == Frame::MoonInertial`; raise alarm 1411 if violated.
 /// 3. Construct the Earth center position in MCI using the static approximation:
 ///    ```
 ///    earth_mci: Vec3 = [-D_EARTH_MOON_M, 0.0, 0.0]
@@ -311,22 +317,18 @@ This thin wrapper simply calls `p37_init(state)` and returns its result.
 ///    ]
 ///    // = [-D_EARTH_MOON_M + r_ei, 0.0, 0.0]
 ///    ```
-///    Note: the sub-Earth point is in the +x MCI direction from the Moon's center,
-///    so `entry_target_mci[0]` = `-D_EARTH_MOON_M + r_ei` ≈ -377.9 × 10⁶ m.
-///    This is the point on the entry interface sphere closest to the Moon —
-///    a physically valid contingency aim point.
-/// 6. Propagate the CSM state from `state.csm_state.epoch` to `tig` using
-///    `math::kepler::kepler_step` with `MU_MOON`. Store the propagated state as
-///    a local `StateVector` with `epoch = tig`.
-///    If `tig.0 == state.csm_state.epoch.0`, skip propagation and use
-///    `state.csm_state` directly.
-/// 7. Call:
-///    ```rust
-///    let maneuver = guidance::targeting::return_to_earth(
-///        state_at_tig,          // propagated CSM state, epoch = tig
-///        entry_target_mci,      // target position in MCI
-///        tof,                   // TOF in seconds
-///        state.refsmmat,        // for burn_attitude computation
+/// 6. Propagate CSM state to TIG:
+///    ```
+///    state_at_tig = kepler_step(state.csm_state, dt_s, MU_MOON)
+///    // where dt_s = (tig.0 - csm_state.epoch.0) as f64 / 100.0
+///    ```
+/// 7. Call `return_to_earth`:
+///    ```
+///    maneuver = guidance::targeting::return_to_earth(
+///        state_at_tig,
+///        entry_target_mci,
+///        tof,
+///        state.refsmmat,
 ///    );
 ///    ```
 /// 8. Store: `state.pending_maneuver = Some(maneuver)`.
@@ -343,7 +345,7 @@ This thin wrapper simply calls `p37_init(state)` and returns its result.
 ///
 /// - `state.pending_maneuver` is `Some(m)` where:
 ///   - `m.tig == tig`
-///   - `m.delta_v` is a finite, non-zero `Vec3` (the TEI delta-V in MCI, m/s)
+///   - `m.delta_v.0` is a finite, non-zero `Vec3` (the TEI delta-V in MCI, m/s)
 ///   - `m.burn_attitude` is an orthonormal `Mat3x3`
 ///   - `m.mode == TargetingMode::ReturnToEarth`
 /// - `state.dsky.r[0]` contains the TIG for V06N45 display (set by
@@ -430,16 +432,17 @@ PROGRAM_TABLE[37] = p37::init
     v
 p37_init(state)
     |
-    +-- assert frame == MoonInertial
+    +-- check frame == MoonInertial → alarm 1411 if not
     +-- state.major_mode = 37
     +-- state.dsky.prog = 37
+    +-- state.pending_maneuver = None
     +-- tig = state.time.0 + DEFAULT_TEI_TIG_OFFSET_CS
     |
     v
 p37_compute_tei(state, Met(tig), DEFAULT_TEI_TOF_S)
     |
-    +-- validate tof range
-    +-- validate frame
+    +-- validate tof range → alarm 1410 if out of range
+    +-- validate frame → alarm 1411 if not MoonInertial
     +-- build entry_target_mci = [-D_EARTH_MOON_M + R_EARTH + 121920, 0, 0]
     +-- kepler_step: propagate csm_state → state_at_tig (MU_MOON)
     |
@@ -457,7 +460,7 @@ p37_display_summary(state)
     |
     +-- state.dsky.verb = 6, .noun = 45
     +-- state.dsky.r[0] = minutes to TIG
-    +-- state.dsky.r[1] = |delta_v| m/s
+    +-- state.dsky.r[1] = |delta_v.0| m/s
     +-- state.dsky.r[2] = burn_duration_s
     |
     v
@@ -473,23 +476,28 @@ p40::init(state) reads state.pending_maneuver → burn_init(maneuver) → SPS ig
 
 ## 7. Error Conditions and Alarm Policy
 
-The initial implementation uses `assert!` / `panic!` for all guard conditions,
-consistent with the pattern in `guidance::targeting` (see targeting-spec §11)
-and the architecture's "navigation errors kill people" principle.
+The implementation raises soft program alarms for all guard conditions, leaving
+`state.pending_maneuver` unchanged and returning control to the caller. No panics
+are used — the architecture's "navigation errors kill people" principle is honoured
+by the alarm display mechanism rather than by halting execution.
 
-| Condition | Guard | Handling (initial) | Future |
-|-----------|-------|--------------------|--------|
-| `state.csm_state.frame != Frame::MoonInertial` | `assert_eq!` in `p37_init` and `p37_compute_tei` | `panic!` → hardware restart | Raise alarm 520 ("wrong mission phase") |
-| `tof < MIN_TEI_TOF_S` | `assert!` in `p37_compute_tei` | `panic!` | Alarm 521 ("TEI TOF too short") |
-| `tof > MAX_TEI_TOF_S` | `assert!` in `p37_compute_tei` | `panic!` | Alarm 521 ("TEI TOF too long") |
-| `tig.0 < state.csm_state.epoch.0` | `assert!` in `p37_compute_tei` | `panic!` | Alarm 522 ("TEI TIG in the past") |
-| Lambert convergence failure | Propagated `todo!` from `guidance::targeting` | Propagates as unimplemented | `TargetingError::LambertNoConverge` |
-| `state.pending_maneuver` is `None` in display | Guard: `if None { return }` | Silent no-op | No change needed |
+| Condition | Alarm code | Handling | Notes |
+|-----------|-----------|----------|-------|
+| `state.csm_state.frame != Frame::MoonInertial` | 1411 (`ALARM_P37_WRONG_FRAME`) | `p37_init`: raise alarm, return without advancing major mode or calling `p37_compute_tei`. `p37_compute_tei`: raise alarm, return without modifying `pending_maneuver`. | P37 cannot function in an Earth-inertial frame. |
+| `tof < MIN_TEI_TOF_S` or `tof > MAX_TEI_TOF_S` | 1410 (`ALARM_P37_BAD_TOF`) | `p37_compute_tei`: raise alarm, return without modifying `pending_maneuver`. | Valid range: 24–120 hours. |
+| `tig.0 < state.csm_state.epoch.0` | No alarm raised; silently skips propagation | Kepler step with zero or negative dt: dt_s ≤ 0 results in no propagation (uses current epoch state). Not an error condition in the current implementation. | Future: add explicit check and alarm. |
+| Lambert convergence failure | Propagated from `guidance::targeting` | `return_to_earth` panics on convergence failure (see targeting-spec §11). P37 does not wrap this. | Future: map to a program alarm. |
+| `state.pending_maneuver` is `None` in display | — | `p37_display_summary`: silent no-op if `pending_maneuver` is None. | Not an error; called defensively. |
 
-The `assert!` / `panic!` approach is intentional for the embedded target: a
-navigation error must stop the software and restart into a known safe state
-rather than silently compute a wrong burn. On hardware, a Rust panic triggers
-the `HardFault` handler which calls `AgcHardware::hardware_restart`.
+The alarm constants in `p37.rs`:
+
+```rust
+/// Alarm 1410: TOF outside [MIN_TEI_TOF_S, MAX_TEI_TOF_S].
+pub const ALARM_P37_BAD_TOF: u16 = 1410;
+
+/// Alarm 1411: CSM state vector is not in Frame::MoonInertial.
+pub const ALARM_P37_WRONG_FRAME: u16 = 1411;
+```
 
 ---
 
@@ -610,7 +618,7 @@ fn tc_p37_2_compute_tei_finite_maneuver() {
     // TIG must match input
     assert_eq!(maneuver.tig, tig, "TC-P37-2: maneuver.tig must equal input tig");
 
-    // delta_v must be finite and non-zero
+    // delta_v.0 is the inner Vec3 of the DeltaV newtype
     let dv_mag = math::linalg::norm(maneuver.delta_v.0);
     assert!(dv_mag.is_finite(), "TC-P37-2: delta_v magnitude must be finite");
     assert!(dv_mag > 1.0, "TC-P37-2: delta_v magnitude must be > 1 m/s");
@@ -632,7 +640,7 @@ fn tc_p37_2_compute_tei_finite_maneuver() {
         }
     }
 
-    // First column of burn_attitude must be parallel to unit(delta_v)
+    // First column of burn_attitude must be parallel to unit(delta_v.0)
     let dv_unit = math::linalg::unit(maneuver.delta_v.0);
     let x_body = [maneuver.burn_attitude[0][0],
                   maneuver.burn_attitude[1][0],
@@ -644,13 +652,13 @@ fn tc_p37_2_compute_tei_finite_maneuver() {
 }
 ```
 
-**Expected outcome**: `pending_maneuver` is `Some`, `1 < |delta_v| < 5000` m/s,
+**Expected outcome**: `pending_maneuver` is `Some`, `1 < |delta_v.0| < 5000` m/s,
 `mode == ReturnToEarth`, `burn_attitude` is orthonormal with first column parallel
-to `unit(delta_v)`.
+to `unit(delta_v.0)`.
 
 ---
 
-### TC-P37-3: `p37_init` with EarthInertial state panics (wrong mission phase)
+### TC-P37-3: `p37_init` with EarthInertial state raises alarm 1411 (wrong mission phase)
 
 **Purpose**: Verify that P37 cannot be entered when the CSM state is not in
 `Frame::MoonInertial`. This is a safety guard — calling P37 in Earth orbit
@@ -658,8 +666,7 @@ would compute a meaningless TEI burn.
 
 ```rust
 #[test]
-#[should_panic]
-fn tc_p37_3_wrong_frame_panics() {
+fn tc_p37_3_wrong_frame_raises_alarm() {
     let mut state = AgcState::new();
 
     // Place CSM in LEO (EarthInertial frame) — this is the wrong phase for P37
@@ -673,13 +680,20 @@ fn tc_p37_3_wrong_frame_panics() {
     };
     state.time = Met(0);
 
-    // This must panic because the frame is not MoonInertial
     let _ = p37_init(&mut state);
+
+    // P37 must raise alarm 1411 and NOT advance major_mode
+    assert_eq!(state.alarm.code, ALARM_P37_WRONG_FRAME,
+               "TC-P37-3: alarm.code must be ALARM_P37_WRONG_FRAME (1411)");
+    assert!(state.alarm.lit, "TC-P37-3: alarm.lit must be true");
+    assert_ne!(state.major_mode, 37,
+               "TC-P37-3: major_mode must NOT be advanced on wrong-frame alarm");
+    assert!(state.pending_maneuver.is_none(),
+            "TC-P37-3: pending_maneuver must remain None on alarm");
 }
 ```
 
-**Expected outcome**: `#[should_panic]` — the function panics due to the frame
-assertion failure. In a future iteration, this becomes a program alarm instead.
+**Expected outcome**: Alarm 1411 raised, major mode not advanced, `pending_maneuver` is None.
 
 ---
 
@@ -747,7 +761,7 @@ overwrites the first result.
 
 ---
 
-### TC-P37-5: TOF validation — out-of-range values panic
+### TC-P37-5: TOF validation — out-of-range values raise alarm 1410
 
 **Purpose**: Verify that both the lower bound and upper bound guards on TOF are
 enforced. A TEI with TOF < 24 hours or > 120 hours is a data-entry error that
@@ -755,8 +769,7 @@ must not produce a maneuver.
 
 ```rust
 #[test]
-#[should_panic]
-fn tc_p37_5a_tof_too_short_panics() {
+fn tc_p37_5a_tof_too_short_raises_alarm() {
     let mut state = AgcState::new();
     let r_llo = navigation::gravity::R_MOON + 100_000.0;
     let v_circ = libm::sqrt(navigation::gravity::MU_MOON / r_llo);
@@ -767,13 +780,19 @@ fn tc_p37_5a_tof_too_short_panics() {
         frame: Frame::MoonInertial,
     };
     state.time = Met(0);
+
     // 6 hours — below MIN_TEI_TOF_S (24 hours)
     p37_compute_tei(&mut state, Met(DEFAULT_TEI_TIG_OFFSET_CS), 21_600.0);
+
+    assert_eq!(state.alarm.code, ALARM_P37_BAD_TOF,
+               "TC-P37-5a: alarm.code must be ALARM_P37_BAD_TOF (1410)");
+    assert!(state.alarm.lit, "TC-P37-5a: alarm.lit must be true");
+    assert!(state.pending_maneuver.is_none(),
+            "TC-P37-5a: pending_maneuver must remain None on TOF alarm");
 }
 
 #[test]
-#[should_panic]
-fn tc_p37_5b_tof_too_long_panics() {
+fn tc_p37_5b_tof_too_long_raises_alarm() {
     let mut state = AgcState::new();
     let r_llo = navigation::gravity::R_MOON + 100_000.0;
     let v_circ = libm::sqrt(navigation::gravity::MU_MOON / r_llo);
@@ -784,12 +803,20 @@ fn tc_p37_5b_tof_too_long_panics() {
         frame: Frame::MoonInertial,
     };
     state.time = Met(0);
+
     // 200 hours — above MAX_TEI_TOF_S (120 hours)
     p37_compute_tei(&mut state, Met(DEFAULT_TEI_TIG_OFFSET_CS), 720_000.0);
+
+    assert_eq!(state.alarm.code, ALARM_P37_BAD_TOF,
+               "TC-P37-5b: alarm.code must be ALARM_P37_BAD_TOF (1410)");
+    assert!(state.alarm.lit, "TC-P37-5b: alarm.lit must be true");
+    assert!(state.pending_maneuver.is_none(),
+            "TC-P37-5b: pending_maneuver must remain None on TOF alarm");
 }
 ```
 
-**Expected outcome**: Both test cases panic due to the TOF range assertion.
+**Expected outcome**: Both test cases raise alarm 1410, leave `pending_maneuver` as None,
+and return normally without panicking.
 
 ---
 
