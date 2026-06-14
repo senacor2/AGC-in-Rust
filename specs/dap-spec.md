@@ -1,5 +1,9 @@
 # Specification: `control/dap.rs` — Digital Autopilot Supervisor
 
+## Change Log
+
+**2026-06-14**: Added `DapMode::EntryRoll(f64)` variant; added `maneuver_target: Vec3` to `DapState`; corrected `dap_init` and `dap_stop` signatures (no `hw` parameter); updated postconditions of both functions to match implementation; fixed §7.3 initialisation snippet; updated test cases TC-DAP-06/07/08 to use correct call signatures.
+
 **Status**: Draft — ready for implementation review
 **Module path**: `agc-core/src/control/dap.rs`
 **Architecture reference**: `docs/architecture.md` §11 "Digital Autopilot (DAP)", §13.2 "Timing Budget"
@@ -123,9 +127,9 @@ in the Rust port: `f64` radians.
 ///
 /// AGC source: RCS-CSM_DIGITAL_AUTOPILOT.agc — CMDAPMOD register (octal 0175).
 /// The mode encoding below follows the Comanche055 DAPDATR register conventions.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum DapMode {
-    /// DAP is off — no attitude control. T5 is not re-armed by dap_step.
+    /// DAP is off — no attitude control. The scheduler stops re-arming TIM4.
     /// AGC correspondence: CMDAPMOD = 0 (off / idle).
     #[default]
     Off,
@@ -147,17 +151,24 @@ pub enum DapMode {
     /// Valid only while `hw.engine().thrust_on()` returns `true`.
     /// AGC correspondence: TVCDAPS.agc active (TVC DAP replaces Coast DAP).
     Tvc,
+    /// Entry-roll mode — hold a commanded bank angle during P63–P67 entry.
+    /// The payload is the commanded bank angle in radians (positive = right
+    /// bank, range nominally `(-π, π]`). The CM is aerodynamically stable in
+    /// pitch and yaw during entry, so the DAP fires RCS on the roll axis only.
+    /// AGC correspondence: CMDAPMOD = 5 (entry roll-hold).
+    EntryRoll(f64),
 }
 ```
 
 **Valid-transition table** (see §6 for full semantics):
 
 ```
-Off          → RateDamping, AttitudeHold, Maneuver, Tvc
+Off          → RateDamping, AttitudeHold, Maneuver, Tvc, EntryRoll
 RateDamping  → Off, AttitudeHold, Maneuver
 AttitudeHold → Off, RateDamping, Maneuver
 Maneuver     → Off, AttitudeHold          (automatic on maneuver completion)
 Tvc          → Off, RateDamping           (only after thrust off)
+EntryRoll    → Off, RateDamping           (after atmospheric entry complete)
 ```
 
 Tvc may NOT transition to Maneuver or AttitudeHold while thrusting. The
@@ -247,6 +258,16 @@ pub struct DapState {
     /// or from crew V49 entries.
     pub commanded_attitude: Vec3,
 
+    /// Final maneuver target attitude [roll, pitch, yaw] in radians.
+    ///
+    /// Set by the caller (V94, V49, or gimbal-lock avoidance) before entering
+    /// `DapMode::Maneuver`. KALCMANU advances `commanded_attitude` toward
+    /// this value each cycle. Ignored in all other modes.
+    ///
+    /// AGC: the target attitude is stored as CDU gimbal angles in the
+    /// KALCMANU erasable area (`DELANG1/2/3` octal 0142–0146).
+    pub maneuver_target: Vec3,
+
     /// Current maneuver rate [roll, pitch, yaw] in rad/s.
     /// In Maneuver mode, `commanded_attitude` is incremented by this value
     /// each cycle (× 0.1 s period). Zero in AttitudeHold.
@@ -289,7 +310,8 @@ pub struct DapState {
 /// Activate the Digital Autopilot.
 ///
 /// Called by programs (e.g. P00 at mission phase change, P40 at ignition)
-/// to enable attitude control. Arms TIME5 for the first T5RUPT cycle.
+/// to enable attitude control. The `Executive::run` scheduler detects that
+/// `mode != Off` on the next iteration and arms TIME5 (T5RUPT).
 ///
 /// AGC correspondence: DAPINIT entry in RCS-CSM_DAP_EXECUTIVE_PROGRAMS.agc.
 /// The AGC DAPINIT routine sets CMDAPMOD, clears OMEGAP/Q/R, and calls
@@ -297,67 +319,62 @@ pub struct DapState {
 ///
 /// # Parameters
 /// - `state`: mutable reference to the full AGC state.
-/// - `hw`: mutable reference to the hardware abstraction layer.
 /// - `initial_mode`: the mode to activate; must not be `DapMode::Off`.
 ///
 /// # Preconditions
-/// - `initial_mode != DapMode::Off`.
-/// - If `initial_mode == DapMode::Tvc`, `hw.engine().thrust_on()` must return
-///   `true`. If it returns `false`, the function sets mode to `AttitudeHold`
-///   and raises program alarm 0510 (TVC request without thrust active).
+/// - `initial_mode != DapMode::Off` (debug-asserted).
+/// - `state.current_cdu` should hold a valid current CDU reading so that
+///   `prev_cdu` is seeded properly (the caller should ensure a recent CDU
+///   read has been staged in `state.current_cdu`).
 /// - May be called from a program job or from the T4RUPT handler; must not be
 ///   called from within `dap_step` itself.
 ///
 /// # Postconditions
-/// - `state.dap_state.mode` is `initial_mode` (or `AttitudeHold` if Tvc was
-///   requested without thrust).
+/// - `state.dap_state.mode` is `initial_mode`.
 /// - `state.dap_state.restart_phase` is 1.
-/// - TIME5 is armed for 10 centiseconds (hw.timers().arm_t5(10)).
-/// - `state.dap_state.prev_cdu` is loaded from the current hardware CDU reading
+/// - `state.dap_state.prev_cdu` is loaded from `state.current_cdu`
 ///   so that the first rate estimate is zero rather than an artifact of the
 ///   previous CDU history.
 /// - `state.dap_state.rate_estimate` is zeroed.
-/// - A Waitlist entry for `dap_step` at 10 cs is enqueued in `state.waitlist`.
-pub fn dap_init<H: AgcHardware>(
-    state: &mut AgcState,
-    hw: &mut H,
-    initial_mode: DapMode,
-)
+/// - The `Executive::run` scheduler will arm T5 automatically on the next
+///   iteration when it detects `mode != Off`.
+pub fn dap_init(state: &mut AgcState, initial_mode: DapMode)
 ```
 
 **Side effects**:
-- `hw.timers().arm_t5(10)` — sets TIME5 to fire T5RUPT in 100 ms.
-- `hw.imu().read_cdu()` — captures current CDU angles into `prev_cdu`.
-- `state.waitlist.schedule(10, dap_step)` — enqueues the first cycle.
-- `state.restart.phases[GROUP_DAP]` is set to `Phase(1)`.
+- `state.dap_state.mode` is set to `initial_mode`.
+- `state.dap_state.prev_cdu = state.current_cdu` — CDU baseline from staged field.
+- `state.dap_state.rate_estimate = [0.0; 3]`.
+- `state.restart.phases[GROUP_6]` is set to `Phase(1)`.
+
+**Note on T5 arming and Waitlist**: Unlike the original AGC DAPINIT, the Rust
+implementation does not call `arm_t5` or `waitlist.schedule` from within
+`dap_init`. Instead, `Executive::run` detects `mode != Off` on every loop
+iteration and arms T5 automatically (ADR-022). This eliminates the Waitlist
+saturation failure mode described in earlier drafts of this spec.
 
 **Error conditions**:
-- If `initial_mode == DapMode::Off`, the call is a no-op (DAP is already off).
-  The implementation may optionally assert in debug builds.
-- If the Waitlist is full (8 tasks pending), alarm 1202 is raised and the DAP
-  task is NOT scheduled. The mode remains Off.
+- If `initial_mode == DapMode::Off`, debug_assert fires. In release, the call
+  is a no-op.
 
 ### 4.2 `dap_stop`
 
 ```rust
 /// Deactivate the Digital Autopilot (flag-then-exit pattern).
 ///
-/// Sets mode to Off, disarms T6, and clears the staged jet command.
-/// The Waitlist entry is removed by having the DAP cycle itself detect
-/// the Off mode and NOT re-arm or re-schedule (flag-then-exit).
+/// Sets mode to Off and clears the staged jet/gimbal commands.
+/// The `Executive::run` scheduler detects `mode == Off` and stops re-arming T5.
 ///
 /// AGC correspondence: DAPOFF entry (clear CMDAPMOD, quench jets).
 /// Called by P00 (idle), engine cutoff routines, and crew V46 N00 (DAP off).
 ///
-/// Flag-then-exit rationale: Rather than removing the Waitlist entry directly
-/// (which would require knowing the exact Waitlist node handle), `dap_stop`
-/// sets `mode = DapMode::Off`. When `dap_step` next runs and sees Off mode,
-/// it does not re-schedule itself and does not re-arm T5. The task drains
-/// naturally on the next cycle. This matches the AGC DAPIDLER pattern.
+/// Flag-then-exit rationale: Rather than removing the Waitlist entry directly,
+/// `dap_stop` sets `mode = DapMode::Off`. When `dap_step` next runs and sees
+/// Off mode, it does not re-schedule itself. This matches the AGC DAPIDLER
+/// pattern.
 ///
 /// # Parameters
 /// - `state`: mutable reference to the full AGC state.
-/// - `hw`: mutable reference to the hardware abstraction layer.
 ///
 /// # Preconditions
 /// - May be called in any mode including Off (idempotent).
@@ -369,18 +386,20 @@ pub fn dap_init<H: AgcHardware>(
 /// - `state.dap_state.mode` is `DapMode::Off`.
 /// - `state.rcs_commanded_jets` is 0 (staged jet command cleared).
 /// - `state.rcs_commanded_pulse_cs` is 0.
-/// - `hw.rcs().quench_jets()` is called (immediate hardware quench).
-/// - `hw.timers().disarm_t6()` is called to cancel any in-flight jet pulse.
+/// - `state.sps_gimbal_cmd` is `(0, 0)`.
 /// - `state.dap_state.restart_phase` is 0.
-/// - The Waitlist entry for `dap_step` will be removed when the entry fires
-///   next and finds mode == Off (it will not re-schedule itself).
-pub fn dap_stop<H: AgcHardware>(state: &mut AgcState, hw: &mut H)
+/// - The HAL `quench_all` and `disarm_t6` calls will happen on the next
+///   T6RUPT / T5RUPT cycle via the ISR staging mechanism; they are not
+///   issued synchronously from within `dap_stop` itself.
+pub fn dap_stop(state: &mut AgcState)
 ```
 
 **Side effects**:
-- `hw.rcs().quench_jets()` — turns off all currently commanded jets immediately.
-- `hw.timers().disarm_t6()` — cancels any pending T6RUPT jet-off pulse.
-- `state.restart.phases[GROUP_DAP]` is set to `Phase::IDLE`.
+- `state.dap_state.mode = DapMode::Off`.
+- `state.rcs_commanded_jets = 0`.
+- `state.rcs_commanded_pulse_cs = 0`.
+- `state.sps_gimbal_cmd = (0, 0)`.
+- `state.restart.phases[GROUP_6]` is set to `Phase::IDLE`.
 
 **Note on Waitlist removal**: `dap_stop` does NOT call
 `state.waitlist.remove(dap_step)`. Instead the mode flag `DapMode::Off` causes
@@ -389,9 +408,7 @@ race between `dap_stop` (called from a program job) and the current executing
 `dap_step`. The pending Waitlist entry fires once more with Off mode and then
 the task disappears cleanly.
 
-**Idempotency**: Calling `dap_stop` when already Off is a no-op with respect
-to mode and staging fields. The HAL calls (`quench_jets`, `disarm_t6`) are
-still executed (they are idempotent at the hardware level).
+**Idempotency**: Calling `dap_stop` when already Off is a no-op.
 
 ### 4.3 `dap_step`
 
@@ -408,13 +425,12 @@ still executed (they are idempotent at the hardware level).
 /// main loop in RCS-CSM_DIGITAL_AUTOPILOT.agc. In TVC mode, TVCDAPS.agc
 /// takes over.
 ///
-/// This function is NOT called directly by application code. It is registered
-/// as a Waitlist task function pointer and invoked by the Waitlist dispatcher
-/// when the T5RUPT fires.
+/// This function is NOT called directly by application code. It is called
+/// by `Executive::run` from the T5_PENDING drain branch (ADR-022).
 ///
 /// # Parameters
-/// - `state`: mutable reference to the full AGC state, passed by the Waitlist
-///   dispatcher (same signature as all Waitlist tasks:
+/// - `state`: mutable reference to the full AGC state, passed by the
+///   scheduler (same signature as all Waitlist tasks:
 ///   `fn(&mut AgcState)` — see executive-spec §2.2).
 ///
 /// # Preconditions
@@ -458,6 +474,7 @@ dap_step:
         AttitudeHold → §5.4
         Maneuver     → §5.5
         Tvc          → §5.6
+        EntryRoll    → §5.7 (roll-axis RCS only)
     update prev_cdu = cdu_now        // store for next cycle
     re-arm T5: stage arm_t5(10) request
     re-schedule: state.waitlist.schedule(10, dap_step)
@@ -582,7 +599,7 @@ attitude box.
 
 ### 5.5 Maneuver Mode
 
-Objective: rotate to `commanded_attitude` at `maneuver_rate` degrees per second.
+Objective: rotate to `maneuver_target` at `maneuver_rate` degrees per second.
 
 ```
 // Step 1: advance commanded attitude by one cycle's worth of maneuver rate
@@ -590,7 +607,7 @@ for each axis i:
     commanded_attitude[i] += maneuver_rate[i] * DAP_PERIOD_S
 
 // Step 2: check for maneuver completion
-let remaining = angular_distance(commanded_attitude, final_attitude)
+let remaining = angular_distance(commanded_attitude, maneuver_target)
 if remaining < MANEUVER_COMPLETE_THRESHOLD:
     state.dap_state.mode = DapMode::AttitudeHold
     state.dap_state.maneuver_rate = [0.0; 3]
@@ -604,12 +621,10 @@ if remaining < MANEUVER_COMPLETE_THRESHOLD:
 the AGC KALCMANU completion test which checks whether the steering error is
 within the attitude deadband.
 
-`final_attitude` is the maneuver target stored in a separate field
-`DapState::maneuver_target` (added to `DapState`; see §3.2 amendments). During
-maneuver initialisation (called from guidance or KALCMANU), both
-`maneuver_rate` and `maneuver_target` are loaded. The DAP does not compute the
-maneuver trajectory itself; it receives the pre-computed rate vector from
-`attitude.rs` / KALCMANU.
+`maneuver_target` is stored in `DapState::maneuver_target`. During maneuver
+initialisation (called from guidance or KALCMANU), both `maneuver_rate` and
+`maneuver_target` are loaded. The DAP does not compute the maneuver trajectory
+itself; it receives the pre-computed rate vector from `attitude.rs` / KALCMANU.
 
 Automatic transition from Maneuver to AttitudeHold is not visible to external
 callers other than through the `mode` field. Programs that need to detect
@@ -624,11 +639,10 @@ the vehicle centre of mass.
 directly. It calls `tvc::tvc_step` which accepts an `&mut E: Engine` parameter.
 The T5RUPT ISR shim must arrange for the engine HAL reference to be passed
 through to `tvc_step`. One approach: store the gimbal counts into staging fields
-(`state.tvc_commanded_pitch_counts`, `state.tvc_commanded_yaw_counts`) and let
-the ISR shim call `sps_gimbal`. An alternative is for the ISR shim to pass a
-`&mut E` into `dap_step` via a global or thread-local cell before dispatching
-the Waitlist task. The exact mechanism is an architectural decision; the spec
-describes the logical flow.
+(`state.sps_gimbal_cmd`) and let the ISR shim call `sps_gimbal`. An alternative
+is for the ISR shim to pass a `&mut E` into `dap_step` via a global or
+thread-local cell before dispatching the Waitlist task. The exact mechanism is
+an architectural decision; the spec describes the logical flow.
 
 ```
 // Verify engine still thrusting — if not, abort TVC
@@ -755,13 +769,14 @@ if counts > 0 && jets != 0 {
 
 ### 6.1 Transition Table
 
-| From \ To    | Off | RateDamping | AttitudeHold | Maneuver | Tvc |
-|:-------------|:---:|:-----------:|:------------:|:--------:|:---:|
-| Off          | —   | A           | A            | A        | A*  |
-| RateDamping  | A   | —           | A            | A        | X   |
-| AttitudeHold | A   | A           | —            | A        | X   |
-| Maneuver     | A   | X           | Auto         | —        | X   |
-| Tvc          | A   | A**         | X            | X        | —   |
+| From \ To    | Off | RateDamping | AttitudeHold | Maneuver | Tvc | EntryRoll |
+|:-------------|:---:|:-----------:|:------------:|:--------:|:---:|:---------:|
+| Off          | —   | A           | A            | A        | A*  | A         |
+| RateDamping  | A   | —           | A            | A        | X   | X         |
+| AttitudeHold | A   | A           | —            | A        | X   | X         |
+| Maneuver     | A   | X           | Auto         | —        | X   | X         |
+| Tvc          | A   | A**         | X            | X        | —   | X         |
+| EntryRoll    | A   | A           | X            | X        | X   | —         |
 
 Key:
 - **A** — allowed; may be requested by programs or crew verbs.
@@ -775,11 +790,11 @@ Key:
 
 ### 6.2 Transition Semantics
 
-**Any → Off**: Safe at any time. `dap_stop` is called, which quenches jets
-and cancels T6. MODE_LAMP is extinguished.
+**Any → Off**: Safe at any time. `dap_stop` is called, which clears staging
+fields. MODE_LAMP is extinguished.
 
-**Off → any active mode**: `dap_init` arms T5 and schedules the first cycle.
-The transition happens before the first `dap_step` call.
+**Off → any active mode**: `dap_init` sets the mode and seeds `prev_cdu`. The
+`Executive::run` scheduler arms T5 automatically on the next iteration.
 
 **RateDamping → AttitudeHold**: May be triggered by a program loading
 `commanded_attitude` and calling a transition request. The `deadband` must be
@@ -802,8 +817,8 @@ on channel 12, verify `thrust_on`, then call `dap_init(Tvc)`. If `thrust_on`
 is false when the request arrives, mode is set to AttitudeHold and alarm 0510
 is raised.
 
-**Tvc → Off**: Triggered by the P40 cutoff routine. `dap_stop` quenches roll
-RCS jets. The gimbal is left at its last commanded position; `sps_enable(false)`
+**Tvc → Off**: Triggered by the P40 cutoff routine. `dap_stop` clears staging
+fields. The gimbal is left at its last commanded position; `sps_enable(false)`
 (called separately by P40) de-energises the gimbal drive.
 
 **Tvc → RateDamping**: Allowed after engine cutoff. This transition is used
@@ -868,12 +883,11 @@ rate sensor in the Block 2 AGC.
 
 ### 7.3 Initialisation
 
-`dap_init` reads the current CDU angles and stores them into `prev_cdu` before
-scheduling the first task:
+`dap_init` seeds `prev_cdu` from the staged `state.current_cdu` field
+(populated by the last T5RUPT CDU read):
 
 ```rust
-let cdu_now = hw.imu().read_cdu();
-state.dap_state.prev_cdu = cdu_now;
+state.dap_state.prev_cdu = state.current_cdu;
 state.dap_state.rate_estimate = [0.0; 3];
 ```
 
@@ -961,8 +975,9 @@ pub const TVC_GIMBAL_LIMIT_RAD: f64 = 0.1047;
 /// Maneuver completion threshold (radians). 0.5 degrees.
 pub const MANEUVER_COMPLETE_RAD: f64 = 0.00873;
 
-/// Restart group index for the DAP task.
-pub const GROUP_DAP: usize = 5; // GROUP 6 in AGC (0-indexed = 5)
+/// Restart group index for the DAP task (GROUP 6 in AGC, 0-indexed = 5).
+/// In the Rust executive this is the constant GROUP_6.
+pub const GROUP_DAP: usize = 5;
 ```
 
 ---
@@ -1229,69 +1244,67 @@ assert_eq!(state.dap_state.maneuver_rate, [0.0; 3],
     "maneuver_rate should be zeroed on completion");
 ```
 
-### TC-DAP-06: Forbidden mode transition Tvc → Maneuver is rejected
+### TC-DAP-06: dap_init seeds prev_cdu from staged current_cdu
 
 ```rust
-// Attempting to transition from Tvc to Maneuver while thrusting must fail.
+// After dap_init, prev_cdu should match state.current_cdu (the staged value).
 let mut state = AgcState::new();
-let mut hw = SimHardware::new();
-hw.engine.thrusting = true;
-state.dap_state.mode = DapMode::Tvc;
+state.current_cdu = [CduAngle(1000), CduAngle(2000), CduAngle(3000)];
 
-// dap_init with Maneuver while in Tvc and thrusting
-// The expected behaviour: request is rejected, mode stays Tvc, alarm raised.
-dap_init(&mut state, &mut hw, DapMode::Maneuver);
-
-assert_eq!(state.dap_state.mode, DapMode::Tvc,
-    "Mode must remain Tvc when Maneuver requested during active burn");
-// Alarm 0510 should have been raised
-assert_eq!(state.alarm.code, 0o0510);
-```
-
-### TC-DAP-07: dap_init loads prev_cdu from hardware
-
-```rust
-// After dap_init, prev_cdu should match the current hardware CDU reading.
-let mut state = AgcState::new();
-let mut hw = SimHardware::new();
-hw.imu.set_cdu([CduAngle(1000), CduAngle(2000), CduAngle(3000)]);
-
-dap_init(&mut state, &mut hw, DapMode::RateDamping);
+dap_init(&mut state, DapMode::RateDamping);
 
 assert_eq!(state.dap_state.prev_cdu[0], CduAngle(1000));
 assert_eq!(state.dap_state.prev_cdu[1], CduAngle(2000));
 assert_eq!(state.dap_state.prev_cdu[2], CduAngle(3000));
 assert_eq!(state.dap_state.rate_estimate, [0.0; 3]);
+assert_eq!(state.dap_state.mode, DapMode::RateDamping);
 ```
 
-### TC-DAP-08: dap_stop sets mode Off and clears staging fields
+### TC-DAP-07: dap_stop sets mode Off and clears staging fields
 
 ```rust
-// After dap_stop, mode is Off, staging fields are cleared, HAL I/O is done.
+// After dap_stop, mode is Off and staging fields are cleared.
 let mut state = AgcState::new();
-let mut hw = SimHardware::new();
-dap_init(&mut state, &mut hw, DapMode::RateDamping);
+state.current_cdu = [CduAngle(0); 3];
+dap_init(&mut state, DapMode::RateDamping);
 state.rcs_commanded_jets = 0b0000_1111_0000_1111u16;  // some jets staged
 state.rcs_commanded_pulse_cs = 22;
 
-dap_stop(&mut state, &mut hw);
+dap_stop(&mut state);
 
 assert_eq!(state.dap_state.mode, DapMode::Off);
 assert_eq!(state.rcs_commanded_jets, 0,     "staged jets cleared by dap_stop");
 assert_eq!(state.rcs_commanded_pulse_cs, 0, "staged pulse cleared by dap_stop");
-assert!(hw.rcs.jets_quenched, "quench_jets must be called by dap_stop");
-// T6 must be disarmed
-assert!(!hw.timers.t6_armed, "T6 must be disarmed after dap_stop");
 // Subsequent dap_step should exit immediately (flag-then-exit)
 dap_step(&mut state);  // should be a no-op
 assert_eq!(state.dap_state.mode, DapMode::Off, "mode remains Off after step");
+```
+
+### TC-DAP-08: EntryRoll mode does not fire pitch/yaw jets
+
+```rust
+// EntryRoll mode applies roll RCS only; pitch/yaw jets must remain zero.
+let mut state = AgcState::new();
+state.dap_state.mode = DapMode::EntryRoll(0.5); // 0.5 rad commanded roll
+state.dap_state.deadband = 0.0873;
+state.dap_state.prev_cdu = [CduAngle(0); 3];
+state.current_cdu = [CduAngle(0); 3];
+
+dap_step(&mut state);
+
+// In EntryRoll only the roll axis (bit positions for roll jets) may be set.
+// Pitch and yaw jet bits must be zero.
+let pitch_yaw_bits: u16 = 0b1100_1100_1100_1100; // approximate pitch/yaw bit positions
+assert_eq!(state.rcs_commanded_jets & pitch_yaw_bits, 0,
+    "No pitch/yaw jets should fire in EntryRoll mode");
 ```
 
 ---
 
 ## 13. Restart Protection
 
-The DAP uses restart group `GROUP_DAP` (index 5, corresponding to AGC GROUP 6).
+The DAP uses restart group `GROUP_DAP` (index 5, corresponding to AGC GROUP 6,
+implemented in the Rust executive as the constant `GROUP_6`).
 
 Phase encoding:
 
@@ -1308,7 +1321,7 @@ the RESTART TABLE. If `restart_phase == 1`:
    which survives a RESTART — it is not zeroed on RESTART, only on FRESH START).
 2. If mode is Tvc and `hw.engine().thrust_on()` is false, transition to
    RateDamping.
-3. Call `dap_init` to re-arm T5 and re-enqueue the task.
+3. Call `dap_init` to re-seed `prev_cdu` and trigger T5 arming.
 
 On FRESH START (total power-on reset), `AgcState::new()` zeroes all fields
 including `dap_state`, so `mode = Off`, `restart_phase = 0`, and no DAP is

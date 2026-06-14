@@ -1,5 +1,9 @@
 # Specification: `services/average_g` Module — SERVICER (Average-G)
 
+## Change Log
+
+**2026-06-14**: `start_servicer` signature corrected to remove `hw` parameter (caller handles `arm_t3`); `servicer_task` Step 1 updated to read from `AgcState::pipa_counts` staging field (accumulated by `Executive::run`) rather than calling `hw.imu().read_pipa()` directly; §6 Hardware Access Design updated to document Strategy B (pipa_counts staging) as the implemented approach.
+
 **Status**: Approved for implementation
 **Module path**: `agc-core/src/services/average_g.rs`
 **Architecture reference**: `docs/architecture.md` §7.4 "SERVICER (Average-G)"
@@ -83,16 +87,22 @@ Each count represents a velocity increment of approximately **0.0585 m/s** on th
 real hardware (the exact value is mission-calibrated and stored in the constant
 `1/PIPADT` in the AGC erasable memory). Reading a counter cell is **destructive**:
 the hardware resets the cell to zero on readout. The SERVICER must be the only
-caller of `hw.imu().read_pipa()`.
+consumer of accumulated PIPA counts.
 
 > AGC source: `docs/AGC Symbolic Listing.md` §IID, counter cell table; counter
 > cells 0125–0127 (PIPAX/Y/Z). The HAL specification confirms: "Each count
 > represents a velocity increment of approximately 0.0585 m/s on the real
 > hardware." See `specs/hal-spec.md` §8.2.
 
+In the Rust port, `Executive::run` calls `hw.imu().read_pipa()` on every foreground
+iteration and saturating-adds the raw counts into `AgcState::pipa_counts`. The
+SERVICER reads and resets this staging field on its 2-second cycle. This
+**Strategy B** design (see §6) avoids the need for hardware access inside a
+Waitlist task.
+
 ### 2.3 PIPA Compensation
 
-The raw PIPA counts are not pure inertial velocity increments. They contain several
+The three PIPA counts accumulated between each SERVICER call contain several
 calibration errors that must be removed before the delta-V can be used in navigation:
 
 1. **Bias (zero-offset drift)**: Each PIPA has a small constant offset, expressed
@@ -311,7 +321,6 @@ schedule an Executive job, then return.
 ///
 /// # Preconditions
 /// - `state` must be a valid `AgcState`.
-/// - `hw` must be a fully initialised `AgcHardware` implementation.
 /// - The IMU must be powered and aligned (callers are responsible for this
 ///   precondition; `start_servicer` does not check IMU status).
 ///
@@ -319,13 +328,14 @@ schedule an Executive job, then return.
 /// - `is_servicer_active(state)` returns `true`.
 /// - `state.restart.phases[GROUP_2]` is `Phase(1)` (restart-protected).
 /// - The Waitlist contains a pending `servicer_task` entry with delta = 200 cs.
-/// - TIME3 is armed (via `state.waitlist.schedule` → caller calls `arm_t3`).
+/// - If `schedule` returns `OkReloadT3(delta)`, the caller is responsible
+///   for calling `hw.timers().arm_t3(delta)` to arm TIME3.
 ///
 /// # Side effects
 /// - Sets `SERVICER_ACTIVE_BIT` in `state.flagwords[0]`.
 /// - Sets restart group 2 phase to `Phase(1)`.
 /// - Inserts `servicer_task` into the Waitlist at 200 centiseconds.
-pub fn start_servicer<H: AgcHardware>(state: &mut AgcState, hw: &mut H)
+pub fn start_servicer(state: &mut AgcState)
 ```
 
 **Implementation**:
@@ -335,15 +345,19 @@ pub fn start_servicer<H: AgcHardware>(state: &mut AgcState, hw: &mut H)
 2. set_servicer_active(state, true).
 3. state.restart.set_phase(GROUP_2, Phase(1)).
 4. match state.waitlist.schedule(200, servicer_task):
-   ScheduleResult::OkReloadT3(delta) => hw.timers().arm_t3(delta),
-   ScheduleResult::Ok               => { /* T3 already armed for earlier task */ }
-   ScheduleResult::Full             => { services::alarm::raise(state, hw, 0x1211); }
+   ScheduleResult::Full => { alarm.raise(WAITLIST_OVERFLOW); revert flags }
+   _ => { /* caller handles arm_t3 if OkReloadT3 is returned */ }
 ```
 
 The GROUP_2 constant is defined in `executive/restart.rs`:
 ```rust
 pub const GROUP_2: usize = 1;  // index into RestartProtection::phases[]; 0-based
 ```
+
+**Note on arm_t3**: Unlike the earlier spec draft, `start_servicer` does NOT call
+`hw.timers().arm_t3()` directly. It returns via the normal call path; the T3RUPT
+handler or the `Executive::run` loop handles lazy T3 re-arming when the Waitlist
+front changes.
 
 ### 4.2 `stop_servicer`
 
@@ -405,12 +419,12 @@ pub fn stop_servicer(state: &mut AgcState)
 /// AGC correspondence: SERVICER entry point in
 /// `Comanche055/AVERAGE_G_INTEGRATOR.agc`.
 ///
-/// # Note on hardware parameter
-/// Waitlist tasks in this port have the signature `fn(&mut AgcState)` with no
-/// hardware parameter (see `specs/executive-spec.md` §3.4). Access to hardware
-/// for self-rescheduling is handled by storing the hardware reference in
-/// `AgcState::hw_ref` (a raw pointer, set before task dispatch by the T3RUPT
-/// handler) or by the alternative design documented in §5 below.
+/// # Hardware access
+///
+/// All HAL access for PIPA reads is performed in `Executive::run` (the
+/// foreground loop), which accumulates PIPA counts into `AgcState::pipa_counts`
+/// on every iteration. `servicer_task` reads from this staging field (Strategy B
+/// — see §6). No `AgcHardware` parameter is needed.
 fn servicer_task(state: &mut AgcState)
 ```
 
@@ -425,20 +439,25 @@ must complete before the function returns. If any step would require more than
 the T3RUPT task budget (5 ms), that step should spawn an Executive job for the
 heavy work and return quickly from the task.
 
-### Step 1 — Read PIPA Counts (destructive)
+### Step 1 — Read PIPA Counts from Staging Field
 
 ```rust
-let raw_counts: [i16; 3] = hw.imu().read_pipa();
+let raw_counts: [i16; 3] = state.pipa_counts;
+state.pipa_counts = [0; 3];   // destructive reset: start next accumulation clean
 ```
 
-This is a destructive read: the PIPA counter cells are zeroed by the hardware
-on readout. The returned values are the accumulated velocity pulses since the
-last call (nominally the previous SERVICER cycle 2 seconds ago).
+`AgcState::pipa_counts` is the staging field populated by `Executive::run` on
+every foreground iteration via saturating-add of `hw.imu().read_pipa()` results.
+The SERVICER reads the 2-second accumulated total and resets the field to zero.
+
+This Strategy B design (§6) avoids the need for direct hardware access inside a
+Waitlist task. The raw HAL `read_pipa()` call (which is destructive at the hardware
+level) is performed by `Executive::run`; the task only sees the accumulated value.
 
 **Error condition**: If `raw_counts[i].abs() == i16::MAX` for any axis, the
-PIPA counter has overflowed (the SERVICER was delayed more than ~5 minutes for
-a 0.0585 m/s/count scale factor and 32767 counts). Raise alarm and do not
-use the count for navigation. See §9.1.
+staging accumulator has overflowed (saturated). This indicates the SERVICER was
+delayed too long. Raise alarm and zero that axis to avoid state-vector corruption.
+See §9.1.
 
 ### Step 2 — Apply Bias Correction
 
@@ -577,10 +596,13 @@ compute the gimbal error angle for TVC. The hook must run to completion quickly
 ```rust
 if is_servicer_active(state) {
     match state.waitlist.schedule(200, servicer_task) {
-        ScheduleResult::OkReloadT3(delta) => hw.timers().arm_t3(delta),
-        ScheduleResult::Ok               => { /* earlier task exists; T3 already set */ }
-        ScheduleResult::Full             => {
-            services::alarm::raise(state, hw, 0x1211);
+        ScheduleResult::OkReloadT3(_delta) => {
+            // The Executive::run loop handles lazy T3 re-arming;
+            // no explicit arm_t3 call is needed here.
+        }
+        ScheduleResult::Ok => { /* earlier task exists; T3 already set */ }
+        ScheduleResult::Full => {
+            state.alarm.raise(WAITLIST_OVERFLOW);
             // Do not reschedule; SERVICER is now stopped.
             set_servicer_active(state, false);
             state.restart.set_phase(GROUP_2, Phase(0));
@@ -610,73 +632,51 @@ for the T3RUPT dispatch overhead).
 ### 6.1 Challenge: Waitlist Tasks and the Hardware Parameter
 
 `Waitlist::schedule` accepts `fn(&mut AgcState)` — a function pointer with only
-one parameter. The SERVICER needs `&mut AgcHardware` for:
-- Step 1: `hw.imu().read_pipa()`.
-- Step 9: `hw.timers().arm_t3(...)` (via `waitlist.schedule`).
+one parameter. The SERVICER needs hardware access for:
+- PIPA reads (`hw.imu().read_pipa()`) — destructive hardware register reads.
+- T3 re-arming (`hw.timers().arm_t3()`) — for self-rescheduling.
 
-This tension is a fundamental architectural constraint. Two resolution strategies
-are specified; the implementation must choose one and document the choice in the
-module's doc comment.
+This tension is a fundamental architectural constraint.
 
-### 6.2 Strategy A — Hardware Reference Stored in AgcState (Recommended)
+### 6.2 Chosen Strategy — Strategy B (PIPA Staging Field)
 
-The T3RUPT handler, which calls `Waitlist::dispatch`, has access to both `state`
-and `hw`. Before calling `dispatch`, it writes a raw pointer to `hw` into a
-designated field of `AgcState`:
-
-```rust
-// In AgcState:
-pub hw_ptr: *mut dyn AgcHardware_erased,  // set by T3RUPT handler; NULL outside interrupt
-```
-
-Because the AGC is single-threaded (only one interrupt active at a time on the
-original hardware; single-threaded cooperative on the Rust port), this raw pointer
-is safe to dereference inside `servicer_task` as long as the lifetime contract is
-honoured. The T3RUPT handler sets `hw_ptr` before calling `dispatch` and clears
-it immediately after `dispatch` returns.
-
-This is the pattern most consistent with the original AGC, where the interrupt
-handler pushed a "hardware context" onto the erasable stack before calling the
-task.
-
-**Implementation note**: Because `AgcHardware` is a generic trait (not an object-
-safe trait-object in the current design), using a raw pointer requires an erasure
-adapter. The alternative is to make `AgcHardware` object-safe or to use a
-concrete hardware type. The implementation agent must resolve this with the
-architecture team before implementation.
-
-### 6.3 Strategy B — Split Task into Two Parts
-
-The SERVICER task function itself (`servicer_task`) is only responsible for the
-navigation computation (steps 2–6) and does not call hardware directly. Steps 1
-and 9 are performed by a thin wrapper registered in the Waitlist:
+The implementation uses **Strategy B**: hardware access for PIPA reads is
+performed by `Executive::run` in the foreground loop, not inside
+`servicer_task`. The foreground loop calls `hw.imu().read_pipa()` on every
+iteration and saturating-adds the result into `AgcState::pipa_counts`:
 
 ```rust
-fn servicer_wrapper(state: &mut AgcState) {
-    // Step 1: read PIPA — requires hw access
-    // Strategy B defers this: the T3RUPT handler calls read_pipa
-    // and stores the result in a staging field of AgcState before
-    // dispatching servicer_task.
-    servicer_task(state);
-    // Step 9: reschedule — the T3RUPT handler or a post-dispatch hook calls arm_t3
+// In Executive::run (foreground loop, every iteration):
+let new_pipa = hw.imu().read_pipa();
+for (acc, &delta) in state.pipa_counts.iter_mut().zip(new_pipa.iter()) {
+    *acc = acc.saturating_add(delta);
 }
 ```
 
-A staging field in `AgcState` holds the raw PIPA counts:
+`servicer_task` then reads and resets this staging field:
 
 ```rust
-// In AgcState:
-pub pipa_staging: [i16; 3],  // written by T3RUPT before dispatching servicer_task
+// In servicer_task (Step 1):
+let raw_counts: [i16; 3] = state.pipa_counts;
+state.pipa_counts = [0; 3];
 ```
 
-This strategy avoids the raw-pointer complexity of Strategy A at the cost of
-storing intermediate state in `AgcState`.
+T3 re-arming is handled by `Executive::run`'s lazy re-arm logic: after each
+loop iteration, if the Waitlist front has changed, it calls `arm_t3`. This
+eliminates the need for `servicer_task` to have any hardware access.
 
-**Recommendation**: Strategy A (or a variant using a concrete type parameter
-rather than a trait object) is preferred because it more closely mirrors the
-AGC's interrupt handler design and avoids polluting `AgcState` with staging
-fields. The implementation agent should validate the object-safety constraint
-and choose accordingly, documenting the decision in the code.
+**Advantages of Strategy B**:
+- `servicer_task` is a pure `fn(&mut AgcState)` — no hardware coupling.
+- PIPA reads happen at high frequency (every Executive loop), collecting counts
+  without risk of hardware counter overflow.
+- Self-rescheduling via `state.waitlist.schedule` requires no HAL access.
+- Testable without any hardware mocks.
+
+**Staging field**:
+
+| Field | Type | Written by | Read by | Description |
+|-------|------|-----------|---------|-------------|
+| `AgcState::pipa_counts` | `[i16; 3]` | `Executive::run` (saturating-add) | `servicer_task` (read + reset) | Accumulated raw PIPA counts since last SERVICER cycle |
 
 ---
 
@@ -686,7 +686,7 @@ and choose accordingly, documenting the decision in the code.
 
 | Source | Field/Method | Units | Description |
 |--------|-------------|-------|-------------|
-| `hw.imu().read_pipa()` | `[i16; 3]` | counts | Raw PIPA delta-V counts (destructive read) |
+| `state.pipa_counts` | `[i16; 3]` | counts | Raw PIPA delta-V counts (accumulated by foreground loop) |
 | `state.pipa_cal.bias` | `[i16; 3]` | counts/interval | PIPA bias (NBDX/NBDY/NBDZ) |
 | `state.pipa_cal.scale` | `f64` | m/s/count | PIPA scale factor (1/PIPADT) |
 | `state.pipa_cal.misalignment` | `[[f64;3];3]` | dimensionless | PIPA axis misalignment matrix |
@@ -723,9 +723,9 @@ The SERVICER does not modify:
 
 | AGC symbol | Octal address | Rust access | Description |
 |------------|---------------|-------------|-------------|
-| `PIPAX`    | 0125          | `hw.imu().read_pipa()[0]` | PIPA X axis counter (destructive read) |
-| `PIPAY`    | 0126          | `hw.imu().read_pipa()[1]` | PIPA Y axis counter (destructive read) |
-| `PIPAZ`    | 0127          | `hw.imu().read_pipa()[2]` | PIPA Z axis counter (destructive read) |
+| `PIPAX`    | 0125          | `hw.imu().read_pipa()[0]` → `state.pipa_counts[0]` | PIPA X axis counter (foreground loop accumulation) |
+| `PIPAY`    | 0126          | `hw.imu().read_pipa()[1]` → `state.pipa_counts[1]` | PIPA Y axis counter |
+| `PIPAZ`    | 0127          | `hw.imu().read_pipa()[2]` → `state.pipa_counts[2]` | PIPA Z axis counter |
 
 Scale: 1 count ≈ 0.0585 m/s (mission-calibrated). Hardware type: `i16`.
 
@@ -761,19 +761,17 @@ Scale: 1 count ≈ 0.0585 m/s (mission-calibrated). Hardware type: `i16`.
 
 ### 9.1 PIPA Overflow
 
-**Trigger**: `|raw_counts[i]| == i16::MAX` (32767) for any axis.
+**Trigger**: `|state.pipa_counts[i]| == i16::MAX` (32767) for any axis after
+the foreground accumulation (saturating-add clips at `i16::MAX`).
 
-**Cause**: The PIPA counter overflowed because the SERVICER was delayed more
-than ~32767 × 0.0585 m/s ≈ 1917 m/s worth of acceleration accumulated in the
-counter (roughly 5 minutes at 1g). This is physically impossible in normal
-powered flight (SPS burns are limited to ~10 minutes at most), but could occur
-if the SERVICER was not scheduled (e.g., after a long coast with the SERVICER
-inadvertently active).
+**Cause**: The SERVICER was delayed or the foreground loop ran too fast relative
+to the acceleration environment. The saturating-add prevents actual overflow but
+indicates the count is unreliable.
 
 **Required action**:
 1. Raise program alarm (implementation-defined code, suggest 0x0105 for PIPA
    overflow, or use the nearest Comanche055 ISS-warning equivalent).
-2. Set `hw.dsky().set_lamp(Lamp::NoAtt, true)` to warn crew.
+2. Set `hw.dsky().set_lamp(Lamp::NoAtt, true)` to warn crew (from T4RUPT shim).
 3. Do **not** use the overflowed count in navigation. Replace with zero for
    the current cycle to avoid state-vector corruption.
 4. Continue SERVICER scheduling (the overflow was a single-cycle event).
@@ -784,7 +782,7 @@ If `state.waitlist.schedule(200, servicer_task)` returns `ScheduleResult::Full`,
 the SERVICER cannot reschedule itself. This stops the navigation cycle.
 
 **Required action**:
-1. Raise alarm 1211 via `services::alarm::raise`.
+1. Raise alarm `WAITLIST_OVERFLOW` via `state.alarm.raise(WAITLIST_OVERFLOW)`.
 2. Clear the `SERVICER_ACTIVE_BIT`.
 3. Clear the restart phase to `Phase(0)`.
 4. The navigation state will no longer be updated; crew must be notified via
@@ -823,8 +821,8 @@ data corruption.
 | `navigation::planetary::moon_position` | Called before Step 6 for third-body data |
 | `navigation::gravity` | Called indirectly by `average_g_step` |
 | `math::linalg::mxv` | Called in Steps 4 and 5 for matrix-vector multiply |
-| `hal::Imu::read_pipa` | Called in Step 1; destructive PIPA read |
-| `hal::Timers::arm_t3` | Called in Step 9 (via waitlist reschedule) |
+| `hal::Imu::read_pipa` | Called by `Executive::run` foreground loop (NOT by servicer_task directly) |
+| `hal::Timers::arm_t3` | Called lazily by `Executive::run` when Waitlist front changes |
 | `executive::Waitlist::schedule` | Called in Step 9; self-reschedule |
 | `executive::RestartProtection::set_phase` | Called before/after Step 6 write-back |
 | `services::display::request_update` | Called in Step 7; triggers T4RUPT display refresh |
@@ -842,7 +840,7 @@ Estimated cycle time for the Rust port on a Cortex-M7 at 216 MHz:
 
 | Step | Operation | Estimated cost |
 |------|-----------|----------------|
-| 1 | `read_pipa` (SPI read) | 50–200 µs (hardware-dependent) |
+| 1 | Read `pipa_counts` staging field | < 0.01 ms (memory read) |
 | 2–4 | Bias, scale, misalignment | < 10 µs |
 | 5 | REFSMMAT multiply (`mxv`) | < 5 µs |
 | 6a | `moon_position` (lookup/interpolation) | 10–100 µs (until ephemeris implemented) |
@@ -852,11 +850,8 @@ Estimated cycle time for the Rust port on a Cortex-M7 at 216 MHz:
 | 9 | Waitlist reschedule | < 5 µs |
 | **Total** | | **< 1.5 ms typical; < 3 ms worst case** |
 
-If SPI communication in Step 1 or the gravity computation in Step 6b causes the
-total to exceed 3 ms, the heavy computation should be moved to an Executive job
-(Strategy described in §5.2 of `specs/executive-spec.md`): the task reads PIPA,
-schedules itself, and creates a job for the integration; the job writes back the
-result when it completes.
+Note: eliminating the SPI hardware read from the task (Strategy B) reduces the
+typical cost compared to a direct `read_pipa()` call (~50–200 µs for SPI).
 
 ---
 
@@ -883,27 +878,24 @@ state.refsmmat = [[1.0, 0.0, 0.0],   // identity REFSMMAT (platform = inertial)
                   [0.0, 1.0, 0.0],
                   [0.0, 0.0, 1.0]];
 
-// Inject known PIPA counts
-hw.imu.pipa = [10, -5, 3];
+// Inject known PIPA counts via staging field (simulating foreground accumulation)
+state.pipa_counts = [10, -5, 3];
 
 // Place the spacecraft at a position where gravity is approximately zero
-// (or use a stub moon_position that returns zero gravity contribution)
 state.csm_state.position = [0.0, 0.0, 7_000_000.0]; // 7000 km
 state.csm_state.velocity = [7500.0, 0.0, 0.0];
 state.csm_state.epoch    = Met(0);
 state.csm_state.frame    = Frame::EarthInertial;
 
 let v_before = state.csm_state.velocity;
-start_servicer(&mut state, &mut hw);
+start_servicer(&mut state);
 // Advance Waitlist by 200 cs to trigger servicer_task (test harness simulates T3RUPT)
-simulate_t3rupt(&mut state, &mut hw, 200);
+simulate_t3rupt(&mut state, 200);
 
 // Verify: velocity changed by approximately [10, -5, 3] m/s (plus gravity term)
 // With scale=1.0, bias=[0,0,0], identity matrices: delta_v_inertial = [10, -5, 3]
 let v_after = state.csm_state.velocity;
 let dv = [v_after[0]-v_before[0], v_after[1]-v_before[1], v_after[2]-v_before[2]];
-// The gravity term also contributes ~2*9.6 = 19.2 m/s downward; check only the
-// PIPA contribution by examining the component perpendicular to gravity.
 assert!((dv[0] - 10.0).abs() < 0.1, "X delta-V mismatch: {}", dv[0]);
 assert!((dv[1] - (-5.0)).abs() < 0.1, "Y delta-V mismatch: {}", dv[1]);
 ```
@@ -927,7 +919,8 @@ state.refsmmat = [[1.0, 0.0, 0.0],
                   [0.0, 1.0, 0.0],
                   [0.0, 0.0, 1.0]];
 
-hw.imu.pipa = [5, -3, 2];  // Raw counts equal to bias
+// Inject PIPA counts equal to bias via staging field
+state.pipa_counts = [5, -3, 2];   // raw counts equal to bias
 
 // delta_v should be [5-5, -3-(-3), 2-2] * 1.0 = [0, 0, 0] m/s
 // Only gravity should change velocity.
@@ -935,14 +928,11 @@ hw.imu.pipa = [5, -3, 2];  // Raw counts equal to bias
 state.csm_state = circular_leo_state();  // helper: 7000 km circular orbit
 let v_before = state.csm_state.velocity;
 
-start_servicer(&mut state, &mut hw);
-simulate_t3rupt(&mut state, &mut hw, 200);
+start_servicer(&mut state);
+simulate_t3rupt(&mut state, 200);
 
 // The velocity change should be entirely gravitational, not from PIPA counts
 let v_after = state.csm_state.velocity;
-let accel_magnitude = norm(vsub(v_after, v_before)) / 2.0; // over 2 seconds
-// Earth gravity at 7000 km ≈ 8.15 m/s², integrated over 2 s ≈ 16.3 m/s magnitude
-// But direction is radially inward; for circular orbit the net change should be small
 // Check that there is no additional velocity in the tangential direction:
 let tangential_dv = v_after[0] - v_before[0];  // simplified for circular orbit
 assert!(tangential_dv.abs() < 0.01,
@@ -975,7 +965,8 @@ state.pipa_cal = PipaCalibration {
                    [0.0, 0.0, 1.0]],
 };
 
-hw.imu.pipa = [10, 0, 0];  // 10 counts on platform X axis
+// Inject 10 counts on platform X axis via staging field
+state.pipa_counts = [10, 0, 0];
 
 // Expected: delta_v_inertial = REFSMMAT * [10, 0, 0] = [0, 10, 0]
 // i.e., 10 m/s in the inertial Y direction
@@ -983,8 +974,8 @@ hw.imu.pipa = [10, 0, 0];  // 10 counts on platform X axis
 state.csm_state = circular_leo_state();
 let vy_before = state.csm_state.velocity[1];
 
-start_servicer(&mut state, &mut hw);
-simulate_t3rupt(&mut state, &mut hw, 200);
+start_servicer(&mut state);
+simulate_t3rupt(&mut state, 200);
 
 let vy_after = state.csm_state.velocity[1];
 // Inertial Y velocity should increase by approximately 10 m/s (plus Y gravity term)
@@ -1002,10 +993,10 @@ gravity alone (consistency check for the Average-G integrator called by SERVICER
 let mut state = AgcState::new();
 let mut hw = SimHardware::new();
 
-// Identity calibration, zero PIPA counts
+// Identity calibration, zero PIPA counts (staging field left at 0)
 state.pipa_cal = PipaCalibration::NOMINAL;
 state.refsmmat = IDENTITY_MATRIX;
-hw.imu.pipa = [0, 0, 0];
+// state.pipa_counts is [0; 3] by default
 
 // Circular orbit at 400 km altitude (ISS-like)
 const R_LEO: f64 = 6_378_137.0 + 400_000.0; // metres
@@ -1019,8 +1010,8 @@ state.csm_state = StateVector {
 
 let r_before = norm(state.csm_state.position);
 
-start_servicer(&mut state, &mut hw);
-simulate_t3rupt(&mut state, &mut hw, 200);  // one cycle
+start_servicer(&mut state);
+simulate_t3rupt(&mut state, 200);  // one cycle
 
 let r_after = norm(state.csm_state.position);
 let epoch_after = state.csm_state.epoch;
@@ -1049,7 +1040,8 @@ let mut hw = SimHardware::new();
 state.pipa_cal = PipaCalibration::NOMINAL;  // scale = 0.0585 m/s/count
 state.refsmmat = IDENTITY_MATRIX;
 
-hw.imu.pipa = [100, 0, 0];  // 100 counts on X axis
+// Inject 100 counts on X axis via staging field
+state.pipa_counts = [100, 0, 0];
 
 // Expected: delta_v_x = (100 - 0 bias) * 0.0585 m/s/count = 5.85 m/s
 // After identity REFSMMAT: delta_v_inertial_x = 5.85 m/s
@@ -1057,8 +1049,8 @@ hw.imu.pipa = [100, 0, 0];  // 100 counts on X axis
 state.csm_state = circular_leo_state();
 let vx_before = state.csm_state.velocity[0];
 
-start_servicer(&mut state, &mut hw);
-simulate_t3rupt(&mut state, &mut hw, 200);
+start_servicer(&mut state);
+simulate_t3rupt(&mut state, 200);
 
 let vx_after = state.csm_state.velocity[0];
 let vx_pipa_contribution = vx_after - vx_before - gravity_x_over_2s();
@@ -1077,18 +1069,18 @@ let mut hw = SimHardware::new();
 
 state.pipa_cal = PipaCalibration::NOMINAL;
 state.refsmmat = IDENTITY_MATRIX;
-hw.imu.pipa = [0, 0, 0];
+// pipa_counts = [0; 3] by default
 state.csm_state = circular_leo_state();
 
-start_servicer(&mut state, &mut hw);
-assert_eq!(state.waitlist.count, 1, "SERVICER not scheduled after start");
+start_servicer(&mut state);
+assert_eq!(state.waitlist.len(), 1, "SERVICER not scheduled after start");
 
 // Trigger one cycle
-simulate_t3rupt(&mut state, &mut hw, 200);
+simulate_t3rupt(&mut state, 200);
 
 // After one cycle: SERVICER should have rescheduled itself
-assert_eq!(state.waitlist.count, 1, "SERVICER did not reschedule");
-let entry = state.waitlist.entries[0].unwrap();
+assert_eq!(state.waitlist.len(), 1, "SERVICER did not reschedule");
+let entry = state.waitlist.peek(0).unwrap();
 assert_eq!(entry.delta_time, 200, "Next SERVICER not at 200 cs");
 assert!(core::ptr::eq(entry.task as *const _, servicer_task as *const _),
     "Waitlist task is not servicer_task");
@@ -1105,20 +1097,19 @@ let mut hw = SimHardware::new();
 
 state.pipa_cal = PipaCalibration::NOMINAL;
 state.refsmmat = IDENTITY_MATRIX;
-hw.imu.pipa = [0, 0, 0];
 state.csm_state = circular_leo_state();
 
-start_servicer(&mut state, &mut hw);
+start_servicer(&mut state);
 assert!(is_servicer_active(&state));
 
 stop_servicer(&mut state);
 assert!(!is_servicer_active(&state), "SERVICER still active after stop");
 
 // The already-queued task in the Waitlist will fire once and not reschedule
-simulate_t3rupt(&mut state, &mut hw, 200);
+simulate_t3rupt(&mut state, 200);
 
 // Waitlist should be empty (no reschedule happened)
-assert_eq!(state.waitlist.count, 0, "SERVICER rescheduled after stop");
+assert_eq!(state.waitlist.len(), 0, "SERVICER rescheduled after stop");
 
 // Restart phase should be cleared
 assert_eq!(state.restart.phases[GROUP_2], Phase(0), "Restart phase not cleared");
@@ -1151,22 +1142,19 @@ Per `specs/README.md`:
 
 ### ADR-SVC-001: Hardware Parameter in Waitlist Tasks
 
-**Decision**: Use Strategy A (raw pointer in `AgcState`) with a concrete
-type-erased adapter, pending confirmation from the architecture team on whether
-`AgcHardware` can be made object-safe without performance regression.
+**Decision**: Use Strategy B (pipa_counts staging field in `AgcState`).
 
-**Rationale**: The Waitlist task signature `fn(&mut AgcState)` is a fundamental
-architectural constraint shared with the original AGC (the AGC also had a single
-"state" argument for all Waitlist tasks — the erasable memory pointer). Changing
-this signature would require modifying `executive/waitlist.rs` and all other
-Waitlist tasks simultaneously. The raw-pointer approach is safe in this
-single-threaded execution model and preserves the invariant.
+**Rationale**: `Executive::run` already has access to `hw` and runs frequently
+enough to accumulate PIPA counts without loss. The saturating-add in the foreground
+loop handles the destructive-read semantics of the hardware: counts are never lost
+regardless of when the SERVICER fires relative to the foreground loop. This design
+keeps `servicer_task` as a pure `fn(&mut AgcState)` that requires no hardware
+coupling, making it trivially testable. The `pipa_counts` staging field acts as
+an analog to the AGC's PIPAX/Y/Z counter cells, which the SERVICER read on each
+cycle.
 
-**Alternative considered**: Adding `hw: &mut impl AgcHardware` to the Waitlist
-task signature. Rejected because: (a) it requires `AgcHardware` to appear in
-`WaitlistEntry`, making the type concrete and losing the generic abstraction;
-(b) it requires every Waitlist task to declare a hardware parameter even if it
-does not use hardware.
+**Alternative considered**: Strategy A (raw pointer to `hw` in `AgcState`). Rejected
+because of complexity and unsafe code required for trait-object erasure.
 
 ### ADR-SVC-002: SERVICER Stop via Flag, Not Waitlist Cancellation
 

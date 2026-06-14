@@ -1,5 +1,9 @@
 # Specification: Milestone 4 Phase 6 — Book-keeping Programs (P01/P02/P06/P15/P47)
 
+## Change Log
+
+- **2026-06-14**: Updated P02 description to reflect the actual Waitlist-loop gyrocompass implementation (convergence loop driven by `p02_gyrocompass_step` every `GYROCOMPASS_PERIOD_CS`), replacing the earlier placeholder that described an instantaneous state transition.
+
 **Status**: Approved for implementation (Milestone 4 Phase 6)
 **Module paths**:
 - `agc-core/src/programs/p01_p02.rs`
@@ -51,24 +55,58 @@ None.
 
 ## 3. `P02` — Gyrocompassing
 
-### Actions
+### Overview
+
+P02 runs the gyrocompass alignment loop as a Waitlist task. The entry
+point `init_p02` validates the alignment precondition, sets up the DSKY
+display, and schedules the first iteration of `p02_gyrocompass_step`.
+The loop fires every `GYROCOMPASS_PERIOD_CS` centiseconds (500 cs = 5 s
+in simulation, reflecting a scaled-up drive rate for test speed).
+
+Each iteration drives the three CDU gimbal axes toward zero by
+`GYROCOMPASS_DRIVE_COUNTS` (scaled by launch-latitude cosine/sine
+components), modelling the AGC's SLEEPIE/ALWAYSG Earth-rate torquing
+loop. When all CDU axes are within `COARSE_ALIGN_THRESHOLD`, the loop
+declares convergence and sets `imu_alignment_state = CoarseAligned`
+without rescheduling. The loop also stops if `major_mode` is changed by
+the crew (program switch detection).
+
+### Constants
+
+| Symbol | Value | Description |
+|--------|-------|-------------|
+| `GYROCOMPASS_PERIOD_CS` | 500 | Waitlist period (centiseconds) |
+| `GYROCOMPASS_DRIVE_COUNTS` | 330 | CDU counts driven per axis per period (scaled ×100 vs real AGC) |
+| `COARSE_ALIGN_THRESHOLD` | (from `imu_control`) | Maximum CDU residual for declaring coarse alignment |
+| `ALARM_GYROCOMPASS_WRONG_STATE` | 235 | Alarm if P02 starts from non-Caged state |
+
+### Actions of `init_p02`
 
 1. **Preconditions**: `imu_alignment_state == Caged`. Otherwise raise
-   alarm 235 (gyrocompass from wrong state) and still advance the
-   major mode.
-2. Simulate successful gyrocompass: `imu_alignment_state = CoarseAligned`.
-3. `major_mode = 2`, `dsky.prog = 2`.
-4. `dsky.verb = 6`, `dsky.noun = 68`.
-5. Return `PRIORITY = 3`.
+   alarm 235 (gyrocompass from wrong state) and continue to start the
+   loop so the crew can observe the major-mode transition.
+2. `major_mode = 2`, `dsky.prog = 2`.
+3. `dsky.verb = 6`, `dsky.noun = 68`.
+4. `dsky.flashing = false`.
+5. Schedule first `p02_gyrocompass_step` on the Waitlist with delay
+   `GYROCOMPASS_PERIOD_CS`.
+6. Return `PRIORITY = 3`.
 
-Note: the real AGC P02 runs the gyrocompass loop continuously (the
-stable member aligns to local horizontal + earth-rotation vector over
-several minutes). We model it as an instantaneous transition because
-there is no HAL earth-rate source yet; the state-machine transition is
-the contract that later milestones will build on.
+### Actions of `p02_gyrocompass_step` (Waitlist callback)
+
+Each invocation:
+1. Exit immediately (do not reschedule) if `major_mode != 2`.
+2. Compute per-axis CDU drive amounts from `launch_lat_rad`:
+   - `drive_x = GYROCOMPASS_DRIVE_COUNTS × cos(lat) × 0.5` (roll)
+   - `drive_y = GYROCOMPASS_DRIVE_COUNTS × cos(lat)` (pitch / horizontal)
+   - `drive_z = GYROCOMPASS_DRIVE_COUNTS × sin(lat)` (yaw / vertical)
+3. Drive each CDU axis toward zero by the respective drive amount.
+4. Test convergence: all three `|cdu[i]| ≤ COARSE_ALIGN_THRESHOLD`.
+   - If converged: `imu_alignment_state = CoarseAligned`; do not reschedule.
+   - Otherwise: reschedule `p02_gyrocompass_step` after `GYROCOMPASS_PERIOD_CS`.
 
 ### Alarms
-- **235**: P02 invoked from a non-Caged alignment state.
+- **235**: `init_p02` invoked from a non-Caged alignment state.
 
 ---
 
@@ -148,10 +186,17 @@ None.
   prior alignment state.
 
 ### P02
-- **TC-P02-1**: `init_p02` from Caged transitions to CoarseAligned,
-  major_mode = 2, no alarm.
+- **TC-P02-1**: `init_p02` from Caged schedules the first gyrocompass
+  Waitlist task, sets major_mode = 2, no alarm, alignment still Caged
+  until the loop fires.
 - **TC-P02-2**: `init_p02` from FineAligned raises alarm 235 but still
-  advances major_mode.
+  advances major_mode and schedules the loop.
+- **TC-P02-3**: A 30° CDU misalignment converges to `CoarseAligned`
+  within 200 Waitlist steps.
+- **TC-P02-4**: Zero-CDU platform (already aligned) converges in a
+  single Waitlist step.
+- **TC-P02-5**: Switching major_mode away from 2 before the loop fires
+  causes `p02_gyrocompass_step` to exit without rescheduling.
 
 ### P06
 - **TC-P06-1**: `init` clears servicer_exit, sets dap_state.mode = Off,

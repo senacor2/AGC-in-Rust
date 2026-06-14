@@ -1,5 +1,9 @@
 # Specification: `control/tvc` Module — Thrust Vector Control
 
+## Change Log
+
+- **2026-06-14**: Updated constants (`GIMBAL_LIMIT_RAD = 0.0960`, `K_TRIM = 0.0167`, renamed `TVC_CDU_RAD_PER_COUNT` to `SPS_GIMBAL_SCALE` with inverted meaning), removed `engine` parameter from `tvc_step` signature (Strategy D — returns `(i16, i16)` only), updated test cases accordingly.
+
 **Status**: Approved for implementation
 **Module path**: `agc-core/src/control/tvc.rs`
 **Architecture reference**: `docs/architecture.md` §11.1 "Thrust DAP (TVC)"
@@ -33,15 +37,15 @@ The module is driven by T5RUPT at a nominal 100 ms period. On each interrupt, if
 `DapMode::Tvc` is active, the DAP supervisor calls `tvc_step`. `tvc_step` reads the
 current attitude error from `DapState::attitude_error`, passes it through a
 digital lead-lag compensator, adds trim, saturates the result to the gimbal
-mechanical travel limit, and writes the final command to the engine HAL via
-`engine.sps_gimbal(pitch, yaw)`.
+mechanical travel limit, and returns `(pitch_counts, yaw_counts)` which the DAP
+supervisor stages into `AgcState::sps_gimbal_cmd` for the ISR shim.
 
 ### What this module provides
 
 - `TvcState` — persistent state: commanded gimbal angles and trim biases.
 - `TvcFilter` — digital lead-lag compensator state (coefficients + filter memory).
 - `tvc_init` — initialization called once by P40 before ignition.
-- `tvc_step` — the per-T5RUPT control computation.
+- `tvc_step` — the per-T5RUPT control computation (Strategy D: pure, no HAL calls).
 - `update_trim` — slow trim integrator called at the end of each `tvc_step` cycle.
 - Gimbal saturation helper (used internally by `tvc_step`).
 
@@ -59,6 +63,9 @@ mechanical travel limit, and writes the final command to the engine HAL via
   performed by the SERVICER / TVCMASSPROP logic in P40. `tvc_step` consumes the
   resulting trim values; it does not compute them from first principles.
 - **T5RUPT scheduling**: Timer management belongs to the HAL `Timers` sub-trait.
+- **HAL gimbal calls**: `tvc_step` does not call `engine.sps_gimbal`. It returns
+  `(pitch_counts, yaw_counts)` which the DAP supervisor writes to
+  `AgcState::sps_gimbal_cmd` for the ISR shim to act on (Strategy D).
 
 ---
 
@@ -90,7 +97,7 @@ variables `TVCPITCH` and `TVCYAW` therefore ran from −1 (−180°) to +1 (+ 18
 in ones-complement form.
 
 In the Rust port all internal angles are `f64` radians (SI units). Conversion to
-CDU counts occurs only at the HAL boundary in `sps_gimbal`.
+CDU counts occurs only at the HAL boundary staging step.
 
 ### 2.2 Lead-Lag Compensator
 
@@ -153,10 +160,10 @@ The trim is a slowly integrating feedback of the current gimbal command:
 trim[n+1] = trim[n] + K_trim · gimbal_cmd[n] · dt
 ```
 
-The integration rate `K_trim` is set low (approximately 0.005 rad/s per radian
-of gimbal command) so that the trim does not destabilise the control loop. The
-trim is added to the filter output to form the final gimbal command before
-saturation:
+The integration rate `K_TRIM` is set low (approximately 0.0167 s⁻¹) so that
+the trim does not destabilise the control loop. The time constant is approximately
+60 s (1 / K_TRIM). The trim is added to the filter output to form the final
+gimbal command before saturation:
 
 ```
 gimbal_cmd = filter_output + trim
@@ -188,9 +195,9 @@ fields of `TvcState` and `TvcFilter` rather than raw memory addresses.
 
 The SPS gimbal has mechanical hard stops at approximately **±6°** in pitch and
 **±6°** in yaw relative to the engine null position. The flight software
-enforces a software limit at **±5.5° (0.09599 rad)** to keep away from the hard
+enforces a software limit at **±5.5° (≈ 0.0960 rad)** to keep away from the hard
 stops under dynamic conditions. Commands exceeding this limit must be clamped
-before being sent to `sps_gimbal`.
+before being sent to the HAL staging field.
 
 > The mechanical limits vary slightly by mission and are sometimes quoted as
 > ±9° total travel (±4.5° from null). The Comanche055 source applies the more
@@ -235,7 +242,7 @@ pub struct TvcState {
     /// Slowly integrating CG compensation term, accumulated by `update_trim`.
     /// AGC equivalent: TRIMGIMB1 (erasable), scale B-1 rev.
     /// Stored as `f64` radians internally; converted to `i16` CDU counts only
-    /// at the HAL boundary.
+    /// at the HAL staging boundary.
     pub trim_pitch: f64,
 
     /// Yaw trim bias (radians).
@@ -245,14 +252,10 @@ pub struct TvcState {
 }
 ```
 
-**Note on `trim_pitch` / `trim_yaw` types**: The existing stub in
-`agc-core/src/control/tvc.rs` declares `trim_pitch: i16` and `trim_yaw: i16`
-as hardware counts. The spec upgrades these to `f64` radians so that the trim
-integrator can accumulate sub-count increments between T5RUPT cycles without
-quantisation loss. The final conversion to `i16` CDU counts occurs inside
-`tvc_step` before the call to `engine.sps_gimbal`. This is a breaking change to
-the existing struct; the developer must update `AgcState` accordingly and update
-any initialisation sites.
+**Note on `trim_pitch` / `trim_yaw` types**: Both fields are `f64` radians so
+that the trim integrator can accumulate sub-count increments between T5RUPT cycles
+without quantisation loss. The final conversion to `i16` CDU counts occurs in the
+DAP supervisor staging step, not inside `tvc_step`.
 
 ### 3.2 `TvcFilter`
 
@@ -315,7 +318,7 @@ pub const TVC_B1: f64 = -0.4470;   // subtracted: y[n] = a0·x + a1·x_prev − 
 impl TvcFilterAxis {
     /// Construct a filter axis with nominal Comanche055 coefficients
     /// and zeroed state (filter memory cleared, suitable for start of burn).
-    pub fn new_nominal() -> Self {
+    pub const fn new_nominal() -> Self {
         TvcFilterAxis {
             a0: TVC_A0,
             a1: TVC_A1,
@@ -327,7 +330,7 @@ impl TvcFilterAxis {
 }
 
 impl TvcFilter {
-    pub fn new_nominal() -> Self {
+    pub const fn new_nominal() -> Self {
         TvcFilter {
             pitch: TvcFilterAxis::new_nominal(),
             yaw:   TvcFilterAxis::new_nominal(),
@@ -347,32 +350,35 @@ impl Default for TvcFilter {
 ///
 /// The SPS gimbal hard stops are approximately ±6° per axis.
 /// Comanche055 applies a software limit of ±5.5° to maintain margin.
-/// 5.5° = 5.5 × π/180 ≈ 0.09599 rad.
-pub const GIMBAL_LIMIT_RAD: f64 = 0.09599;
+/// 5.5° = 5.5 × π/180 ≈ 0.0960 rad.
+pub const GIMBAL_LIMIT_RAD: f64 = 0.0960;
 
-/// CDU count scale for `sps_gimbal` (radians per count).
+/// Scale factor: radians to SPS gimbal CDU counts.
 ///
-/// One CDU error-counter count moves the SPS gimbal by this angle.
+/// 1 radian × SPS_GIMBAL_SCALE = CDU counts.
 /// The SPS gimbal CDU has 3200 counts per full revolution (360°), giving:
-///   2π / 3200 ≈ 0.001963 rad/count  (≈ 0.1125°/count)
+///   3200 / (2π) ≈ 509.30 counts/radian
+///
+/// To convert radians to counts: `counts = (radians * SPS_GIMBAL_SCALE) as i16`
+/// To convert counts to radians: `radians = counts as f64 / SPS_GIMBAL_SCALE`
 ///
 /// Architectural decision AD-5 (milestone-3-architect-review.md §8).
 ///
 /// DEVELOPER NOTE: Verify the exact CDU resolution from the SPS gimbal
 /// servo documentation and CDUTCMD/CDUSCMD cell descriptions in
 /// Comanche055/ERASABLE_ASSIGNMENTS.agc.
-pub const TVC_CDU_RAD_PER_COUNT: f64 = core::f64::consts::TAU / 3200.0;  // ≈ 1.963e-3 rad/count
+pub const SPS_GIMBAL_SCALE: f64 = 3200.0 / core::f64::consts::TAU;  // ≈ 509.30 counts/rad
 
-/// Trim integrator gain (dimensionless, per T5RUPT cycle).
+/// Trim integrator gain (s⁻¹).
 ///
 /// Each T5RUPT cycle (dt = 0.1 s) the trim advances by
 ///   K_TRIM × gimbal_cmd × dt
-/// where gimbal_cmd is in radians. K_TRIM = 0.05 rad/s·rad gives a
-/// trim response time constant of approximately 20 s — slow enough
+/// where gimbal_cmd is in radians. K_TRIM ≈ 0.0167 s⁻¹ gives a
+/// trim response time constant of approximately 60 s — slow enough
 /// not to affect the control loop dynamics.
 ///
 /// DEVELOPER NOTE: Verify this gain against TVCMASSPROP.agc.
-pub const K_TRIM: f64 = 0.05;
+pub const K_TRIM: f64 = 0.0167;
 ```
 
 ---
@@ -445,17 +451,21 @@ the crew may have entered a marginal trim value via the DSKY.
 /// Called by the DAP supervisor from the T5RUPT handler whenever
 /// `DapState::mode == DapMode::Tvc` and `engine.thrust_on()` is true.
 ///
+/// **Strategy D**: this function does NOT call any HAL method. The returned
+/// `(pitch_counts, yaw_counts)` must be written to `AgcState::sps_gimbal_cmd`
+/// by the DAP supervisor, which the ISR shim then passes to `engine.sps_gimbal`.
+///
 /// # Processing sequence
 ///
 /// 1. Extract pitch and yaw attitude errors from `attitude_error` (indices 1
 ///    and 2 of the Vec3; index 0 is roll and is ignored here).
 /// 2. Apply the lead-lag filter to each axis independently (see §4.2.1).
 /// 3. Add the current trim bias to the filter output.
-/// 4. Saturate each axis to ±GIMBAL_LIMIT_RAD.
-/// 5. Store the saturated angle back into `state.gimbal_pitch` /
+/// 4. Call `update_trim(state, raw_cmd, dt)` with the PRE-saturation command.
+/// 5. Saturate each axis to ±GIMBAL_LIMIT_RAD.
+/// 6. Store the saturated angle back into `state.gimbal_pitch` /
 ///    `state.gimbal_yaw`.
-/// 6. Convert radians to CDU counts and call `engine.sps_gimbal(pitch, yaw)`.
-/// 7. Call `update_trim(state, raw_cmd, dt)` with the PRE-saturation command.
+/// 7. Convert radians to CDU counts using `SPS_GIMBAL_SCALE`.
 /// 8. Return the CDU count command as `(pitch_counts, yaw_counts)`.
 ///
 /// AGC source: Comanche055/TVCEXECUTIVE.agc (dispatch), TVCDAPS.agc (inner
@@ -470,14 +480,12 @@ the crew may have entered a marginal trim value via the DSKY.
 ///                      Index 0 (roll) is ignored; indices 1 and 2 are used.
 /// * `dt`             — elapsed time since last call in seconds; nominally
 ///                      0.1 s (T5RUPT). Must be > 0.
-/// * `engine`         — mutable HAL engine reference; receives the final
-///                      `sps_gimbal` call.
 ///
 /// # Returns
 ///
-/// `(pitch_counts, yaw_counts)`: the signed i16 CDU counts written to the
-/// gimbal hardware. These are also latched in `state.gimbal_pitch` and
-/// `state.gimbal_yaw` (converted back to radians).
+/// `(pitch_counts, yaw_counts)`: the signed i16 CDU counts to be staged in
+/// `AgcState::sps_gimbal_cmd`. Also latched in `state.gimbal_pitch` and
+/// `state.gimbal_yaw` (as radians).
 ///
 /// # Preconditions
 ///
@@ -493,13 +501,11 @@ the crew may have entered a marginal trim value via the DSKY.
 /// * `filter.pitch.prev_input` holds the pitch attitude error used in this cycle.
 /// * `filter.pitch.prev_output` holds the unsaturated filter output of this cycle.
 /// * `state.trim_pitch` and `state.trim_yaw` have been updated by `update_trim`.
-/// * `engine.sps_gimbal` has been called exactly once.
-pub fn tvc_step<E: crate::hal::engine::Engine>(
+pub fn tvc_step(
     state:          &mut TvcState,
     filter:         &mut TvcFilter,
     attitude_error: crate::types::Vec3,
     dt:             f64,
-    engine:         &mut E,
 ) -> (i16, i16);
 ```
 
@@ -536,17 +542,15 @@ If the saturated value were used, the trim would stall at the limit.
 #### 4.2.3 Radians to CDU Counts Conversion
 
 ```
-pitch_counts = (gimbal_pitch_rad / TVC_CDU_RAD_PER_COUNT) as i16
-yaw_counts   = (gimbal_yaw_rad   / TVC_CDU_RAD_PER_COUNT) as i16
+pitch_counts = (gimbal_pitch_rad * SPS_GIMBAL_SCALE) as i16
+yaw_counts   = (gimbal_yaw_rad   * SPS_GIMBAL_SCALE) as i16
 ```
 
-With `TVC_CDU_RAD_PER_COUNT = 2π/3200 ≈ 0.001963 rad/count`, the full software
-travel limit of ±5.5° (±0.09599 rad) corresponds to approximately ±49 CDU counts.
+With `SPS_GIMBAL_SCALE = 3200 / (2π) ≈ 509.30 counts/radian`, the full software
+travel limit of ±5.5° (±0.0960 rad) corresponds to approximately ±48.9 CDU counts.
 
-The cast must be a saturating cast: if the float value after saturation still
-produces an integer outside `i16::MIN..=i16::MAX` (which should not happen if
-`GIMBAL_LIMIT_RAD` and `TVC_CDU_RAD_PER_COUNT` are set correctly), clamp to
-`i16::MAX` / `i16::MIN` rather than wrapping.
+The cast to `i16` is safe because `GIMBAL_LIMIT_RAD × SPS_GIMBAL_SCALE ≈ 48.9`,
+which is well within `i16` range. No saturating cast is required.
 
 ---
 
@@ -627,8 +631,11 @@ sequence each T5RUPT cycle when `DapMode::Tvc` is active:
 1. Read attitude error into DapState::attitude_error from control::attitude.
 2. Check engine.thrust_on():
       if false: do not call tvc_step (engine cutoff or pre-ignition).
-3. Call tvc_step(tvc_state, tvc_filter, dap_state.attitude_error, dt, engine).
-4. For the roll axis (attitude_error[0]): forward to RCS jet select logic
+3. Call tvc_step(tvc_state, tvc_filter, dap_state.attitude_error, dt)
+      → returns (pitch_counts, yaw_counts).
+4. Stage: state.sps_gimbal_cmd = (pitch_counts, yaw_counts)
+      [ISR shim reads this and calls engine.sps_gimbal]
+5. For the roll axis (attitude_error[0]): forward to RCS jet select logic
       (control::rcs_logic), not to TVC.
 ```
 
@@ -690,15 +697,14 @@ control throughout the burn. The split is enforced at the DAP supervisor level;
 Conversion factor at the HAL boundary (AD-5 scale: 3200 counts/revolution):
 
 ```
-counts = radians / TVC_CDU_RAD_PER_COUNT
-       = radians / (2π / 3200)
-       = radians × (3200 / 2π)
+counts = radians * SPS_GIMBAL_SCALE
+       = radians * (3200 / 2π)
        ≈ radians × 509.30
 ```
 
-At the software limit of ±5.5° (±0.09599 rad):
+At the software limit of ±5.5° (±0.0960 rad):
 ```
-±0.09599 / (2π / 3200) ≈ ±48.9 counts  (rounds to ±49)
+±0.0960 × (3200 / 2π) ≈ ±48.9 counts  (rounds to ±49)
 ```
 
 This fine resolution (≈ 0.1125° per count) ensures smooth gimbal control during
@@ -738,7 +744,7 @@ The following conditions must hold at all times while `DapMode::Tvc` is active:
 | I-4 | `|state.trim_yaw|     ≤ GIMBAL_LIMIT_RAD` |
 | I-5 | `filter.pitch.prev_output` equals the last unsaturated filter output (not the clamped gimbal command) |
 | I-6 | `tvc_step` is called from T5RUPT only; no other caller. |
-| I-7 | `engine.sps_gimbal` is called at most once per T5RUPT cycle. |
+| I-7 | `AgcState::sps_gimbal_cmd` is written once per T5RUPT cycle by the DAP supervisor after `tvc_step` returns. |
 | I-8 | `TvcState` does not contain `attitude_error`; that belongs to `DapState`. |
 
 ---
@@ -751,7 +757,6 @@ The following conditions must hold at all times while `DapMode::Tvc` is active:
 | `attitude_error` component is `NaN` or `Inf` | Treat error as 0.0 for that axis; prevent NaN propagation into filter state. |
 | Trim accumulator would exceed `±GIMBAL_LIMIT_RAD` | Clamp silently. No alarm. CG shift is a normal operational condition. |
 | Gimbal command exceeds `±GIMBAL_LIMIT_RAD` before saturation | Clamp to limit. This is normal during large attitude corrections at burn start. |
-| `engine.sps_gimbal` is called while `thrust_on()` is false | The DAP supervisor prevents this; `tvc_step` does not re-check. |
 
 ---
 
@@ -765,24 +770,23 @@ output should be zero and the gimbal command should equal the initial trim.
 ```rust
 let mut state  = TvcState::default();
 let mut filter = TvcFilter::new_nominal();
-let mut engine = SimEngine::new();
 
 let initial_trim = (0.02_f64, -0.01_f64);  // 0.02 rad pitch, -0.01 rad yaw
 tvc_init(&mut state, &mut filter, initial_trim);
 
 let error: Vec3 = [0.0, 0.0, 0.0];
-let (p, y) = tvc_step(&mut state, &mut filter, error, 0.1, &mut engine);
+let (p, y) = tvc_step(&mut state, &mut filter, error, 0.1);
 
 // Filter output is zero (zero input, zero initial conditions).
 // Gimbal cmd = filter_out + trim = 0 + initial_trim.
 assert!((state.gimbal_pitch - initial_trim.0).abs() < 1e-9);
 assert!((state.gimbal_yaw   - initial_trim.1).abs() < 1e-9);
 
-// CDU counts: radians / (2π/3200) = radians × 3200/2π.
-// 0.02 rad × 3200/2π ≈ 10.186 → rounds to 10 counts.
-// -0.01 rad × 3200/2π ≈ -5.093 → rounds to -5 counts.
-let expected_p = (initial_trim.0 / TVC_CDU_RAD_PER_COUNT) as i16;  // ≈ 10
-let expected_y = (initial_trim.1 / TVC_CDU_RAD_PER_COUNT) as i16;  // ≈ -5
+// CDU counts: radians * SPS_GIMBAL_SCALE = radians * (3200/2π).
+// 0.02 rad × 509.30 ≈ 10.186 → casts to 10 counts.
+// -0.01 rad × 509.30 ≈ -5.093 → casts to -5 counts.
+let expected_p = (initial_trim.0 * SPS_GIMBAL_SCALE) as i16;  // ≈ 10
+let expected_y = (initial_trim.1 * SPS_GIMBAL_SCALE) as i16;  // ≈ -5
 assert_eq!(p, expected_p);
 assert_eq!(y, expected_y);
 ```
@@ -796,13 +800,12 @@ output that is larger than the proportional response due to the lead term
 ```rust
 let mut state  = TvcState::default();
 let mut filter = TvcFilter::new_nominal();
-let mut engine = SimEngine::new();
 
 tvc_init(&mut state, &mut filter, (0.0, 0.0));
 
 // Apply a 0.05 rad pitch step error (≈ 2.9°), zero yaw.
 let error: Vec3 = [0.0, 0.05, 0.0];
-let (_p1, _y1) = tvc_step(&mut state, &mut filter, error, 0.1, &mut engine);
+let (_p1, _y1) = tvc_step(&mut state, &mut filter, error, 0.1);
 
 // After one step from zero initial conditions:
 // y[1] = a0 * 0.05 + a1 * 0.0 - b1 * 0.0
@@ -827,7 +830,6 @@ zero (the integrating trim provides the steady-state correction).
 ```rust
 let mut state  = TvcState::default();
 let mut filter = TvcFilter::new_nominal();
-let mut engine = SimEngine::new();
 
 tvc_init(&mut state, &mut filter, (0.0, 0.0));
 
@@ -835,7 +837,7 @@ let error: Vec3 = [0.0, 0.01, 0.0];  // constant 0.01 rad pitch error
 
 // Run 500 cycles ≈ 50 seconds of simulated burn time.
 for _ in 0..500 {
-    tvc_step(&mut state, &mut filter, error, 0.1, &mut engine);
+    tvc_step(&mut state, &mut filter, error, 0.1);
 }
 
 // After many cycles the trim should have grown substantially from zero.
@@ -884,13 +886,12 @@ the linear range) must not command a gimbal angle beyond the software limit.
 ```rust
 let mut state  = TvcState::default();
 let mut filter = TvcFilter::new_nominal();
-let mut engine = SimEngine::new();
 
 tvc_init(&mut state, &mut filter, (0.0, 0.0));
 
 // Absurdly large error — well beyond any realistic manoeuvre.
 let error: Vec3 = [0.0, 1.0, -1.0];
-let (p, y) = tvc_step(&mut state, &mut filter, error, 0.1, &mut engine);
+let (p, y) = tvc_step(&mut state, &mut filter, error, 0.1);
 
 // Gimbal must be within software limits.
 assert!(state.gimbal_pitch.abs() <= GIMBAL_LIMIT_RAD + 1e-12,
@@ -900,9 +901,8 @@ assert!(state.gimbal_yaw.abs() <= GIMBAL_LIMIT_RAD + 1e-12,
     "yaw saturated at ±{:.5} rad, got {:.5}",
     GIMBAL_LIMIT_RAD, state.gimbal_yaw);
 
-// CDU counts: GIMBAL_LIMIT_RAD / TVC_CDU_RAD_PER_COUNT ≈ 48.9 → max ≈ 49 counts.
-// (previously this was ≈5.5 counts with the wrong 360-count scale)
-let max_counts = (GIMBAL_LIMIT_RAD / TVC_CDU_RAD_PER_COUNT) as i16;  // ≈ 48
+// CDU counts: GIMBAL_LIMIT_RAD * SPS_GIMBAL_SCALE ≈ 48.9 → max ≈ 48 counts (truncated).
+let max_counts = (GIMBAL_LIMIT_RAD * SPS_GIMBAL_SCALE) as i16;  // ≈ 48
 assert!(p.abs() <= max_counts + 1);
 assert!(y.abs() <= max_counts + 1);
 ```
@@ -949,10 +949,12 @@ assert_eq!(filter.yaw.prev_output, 0.0);
 - [x] Rust API signature designed (§3, §4)
 - [x] Invariants explicitly stated (§8)
 - [x] Consistency with `docs/architecture.md` checked (§11.1 Thrust DAP, §13.2 T5RUPT budget)
-- [x] S-10 (AD-5) applied: `TVC_CDU_RAD_PER_COUNT = TAU/3200` (≈ 1.963e-3 rad/count); §2.1
-      narrative, §6 conversion formula, and TC-TVC-01/TC-TVC-05 expected counts updated.
+- [x] AD-5 applied: `SPS_GIMBAL_SCALE = 3200/TAU` (≈ 509.30 counts/rad); §2.1 narrative,
+      §6 conversion formula, and TC-TVC-01/TC-TVC-05 expected counts updated.
 - [x] CI-3 confirmed: `TvcState` has no `attitude_error` field; `tvc_step` receives it
       as a `Vec3` parameter from `DapState::attitude_error`.
+- [x] Strategy D applied: `tvc_step` has no `engine` parameter; returns `(i16, i16)` only;
+      DAP supervisor stages into `AgcState::sps_gimbal_cmd`.
 
 ---
 

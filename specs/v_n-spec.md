@@ -1,5 +1,9 @@
 # Specification: `services/v_n` — Verb/Noun Processor (Consolidated)
 
+## Change Log
+
+**2026-06-14**: Added `EnteringMajorMode { digits: u8, buf: u8 }` variant to `VnPhase` enum; added corresponding transition rows to §3.3; this variant implements the V37 program-select flow where the digits between the two ENTRs populate the program number rather than a noun.
+
 **Status**: Implemented through Phase 2; Phase 3+ items listed below  
 **Module path**: `agc-core/src/services/v_n.rs`  
 **Architecture reference**: `docs/architecture.md` §11 (DSKY and Crew Interface)  
@@ -80,6 +84,12 @@ pub enum VnPhase {
     EnteringVerb { digits: u8, buf: u8 },
     /// NOUN pressed after verb complete, accumulating up to two digits.
     EnteringNoun { verb: u8, digits: u8, buf: u8 },
+    /// V37 ENTR pressed — the AGC's major-mode-request flow. Unlike a
+    /// verb-noun verb, V37 expects `V 3 7 ENTR <mm digits> ENTR`: the
+    /// digits between the two ENTRs populate the program number (not
+    /// a noun), and the second ENTR dispatches into the program.
+    /// AGC source: `Comanche055/FRESH_START_AND_RESTART.agc` `V37`.
+    EnteringMajorMode { digits: u8, buf: u8 },
     /// Data entry in progress for a V21/V22/V23/V25 load.
     EnteringData {
         verb: u8,
@@ -120,10 +130,14 @@ pub struct VnState {
 | EnteringVerb       | digit        | accumulate; OprErr if digits already 2         |
 | EnteringVerb (2d)  | NOUN         | `EnteringNoun { verb:buf, digits:0, buf:0 }`   |
 | EnteringVerb (<2d) | NOUN         | OprErr                                         |
-| EnteringVerb (2d)  | ENTR         | dispatch (noun-less verbs only); else OprErr   |
+| EnteringVerb (V37) | ENTR         | `EnteringMajorMode { digits:0, buf:0 }`        |
+| EnteringVerb (2d, other) | ENTR   | dispatch (noun-less verbs only); else OprErr   |
 | EnteringNoun       | digit        | accumulate; OprErr if digits already 2         |
 | EnteringNoun (2d)  | ENTR         | dispatch                                       |
 | EnteringNoun       | other        | OprErr                                         |
+| EnteringMajorMode  | digit        | accumulate; OprErr if digits already 2         |
+| EnteringMajorMode (2d) | ENTR     | dispatch to `PROGRAM_TABLE[buf]`; Idle         |
+| EnteringMajorMode  | other        | OprErr                                         |
 | EnteringData       | digit        | accumulate into `buf`; OprErr if digits >= 5   |
 | EnteringData       | `+`          | set sign=+1 (only when digits==0); else OprErr |
 | EnteringData       | `−`          | set sign=-1 (only when digits==0); else OprErr |
@@ -153,6 +167,11 @@ fn dispatch_verb_noun(state: &mut AgcState, verb: u8, noun: u8) {
     }
 }
 ```
+
+Note: V37 uses the `EnteringMajorMode` flow (not `dispatch_verb_noun` with a
+noun). When V37 ENTR is pressed in `EnteringVerb`, the state transitions to
+`EnteringMajorMode` rather than `EnteringNoun`. The second ENTR dispatches
+directly to the program table using the accumulated digits as the program number.
 
 ### 3.5 V50 crew acknowledgement
 
@@ -203,7 +222,7 @@ Legend for "Status" column:
 | V34  | Terminate program (return to P00)                | **Impl** | Control verb; no noun                            |
 | V35  | Lamp test (all lamps on)                         | **Impl** | Control verb; no noun                            |
 | V36  | Fresh start                                      | Excluded | Hardware restart sequence; equivalent to power-on; not a normal flight operation |
-| V37  | Change major mode (program select)               | **Impl** | Dispatches via `PROGRAM_TABLE[noun]`             |
+| V37  | Change major mode (program select)               | **Impl** | Uses `EnteringMajorMode` flow; dispatches via `PROGRAM_TABLE[mm]` |
 
 ### 4.2 Extended Verbs (V40–V99, from EXTENDED_VERBS.agc)
 
