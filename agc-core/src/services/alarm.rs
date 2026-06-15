@@ -10,25 +10,52 @@
 //! AGC source: `Comanche055/ALARM_AND_ABORT.agc`
 
 /// Current alarm state.
+///
+/// Holds a 3-deep FIFO of recent alarm codes (oldest → middle → newest) plus
+/// the call-site tag and a counter that increments on every alarm raise or
+/// RESTART.  These are surfaced via the diagnostic display nouns V05N08
+/// (call-site info) and V05N09 (alarm-code history).
+///
+/// AGC erasable correspondence (`ERASABLE_ASSIGNMENTS.agc`):
+///   FAILREG/+1/+2 — the 3-deep alarm-code FIFO (here: `fifo[0..3]`).
+///   ERCOUNT       — alarm/restart counter.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AlarmState {
-    /// The most recent alarm code (0 = none).
-    pub code: u16,
-    /// Secondary alarm code (stores the previous alarm when a new one fires).
-    pub code2: u16,
+    /// 3-deep alarm-code FIFO: `fifo[0]` = oldest, `fifo[2]` = newest.
+    /// Displayed in V05N09 as (R1, R2, R3).
+    pub fifo: [u16; 3],
+    /// Call-site / module tag captured at raise time. Displayed in V05N08 R1.
+    /// Values come from `tables::alarm_codes` (`SITE_*` constants).
+    pub adres: u16,
+    /// Alarm/restart counter. Incremented by every `raise` and every
+    /// `services::fresh_start::restart`. Displayed in V05N08 R3.
+    pub ercount: u16,
     /// True when the PROG alarm lamp is lit.
     pub lit: bool,
 }
 
 impl AlarmState {
-    /// Raise an alarm. Saves the current code to `code2` and lights the lamp.
-    pub fn raise(&mut self, code: u16) {
-        self.code2 = self.code;
-        self.code = code;
+    /// Most recent alarm code (newest in the FIFO).  Convenience accessor.
+    #[inline]
+    pub fn code(&self) -> u16 {
+        self.fifo[2]
+    }
+
+    /// Raise an alarm with an associated call-site tag.
+    ///
+    /// Shifts the FIFO: `fifo[0] ← fifo[1] ← fifo[2] ← code`, sets `adres`,
+    /// increments `ercount`, and lights the PROG alarm lamp.
+    pub fn raise(&mut self, code: u16, adres: u16) {
+        self.fifo[0] = self.fifo[1];
+        self.fifo[1] = self.fifo[2];
+        self.fifo[2] = code;
+        self.adres = adres;
+        self.ercount = self.ercount.saturating_add(1);
         self.lit = true;
     }
 
-    /// Clear the alarm lamp (crew pressed RSET).
+    /// Clear the alarm lamp (crew pressed RSET). FIFO and counters are
+    /// preserved so the crew can still pull up V05N08/N09 to inspect them.
     pub fn reset(&mut self) {
         self.lit = false;
     }
@@ -55,8 +82,9 @@ impl AlarmState {
 /// AGC source: `ALARM_AND_ABORT.agc` — `POODOO` label and `GOTOPOOH` branch.
 /// Alarm codes: table in `ASSEMBLY_AND_OPERATION_INFORMATION.agc` §8.
 pub fn poodoo(state: &mut crate::AgcState, alarm_code: u16) {
+    use crate::tables::alarm_codes::SITE_POODOO;
     // Step 1: raise the alarm.
-    state.alarm.raise(alarm_code);
+    state.alarm.raise(alarm_code, SITE_POODOO);
 
     // Step 2: abort — return to P00 without a full FRESH START.
     // Preserve navigation state; discard scheduler and guidance state.
@@ -142,26 +170,60 @@ mod tests {
     /// TC-ALARM-1: AlarmState::raise stacks codes and lights the lamp.
     #[test]
     fn tc_alarm_1_raise_stacks_and_lights() {
+        use crate::tables::alarm_codes::SITE_EXECUTIVE;
         let mut a = AlarmState::default();
-        a.raise(0o1202);
-        assert_eq!(a.code, 0o1202);
-        assert_eq!(a.code2, 0);
+        a.raise(0o1202, SITE_EXECUTIVE);
+        assert_eq!(a.code(), 0o1202);
+        assert_eq!(a.fifo[1], 0);
+        assert_eq!(a.fifo[0], 0);
+        assert_eq!(a.adres, SITE_EXECUTIVE);
+        assert_eq!(a.ercount, 1);
         assert!(a.lit);
 
-        a.raise(0o1211);
-        assert_eq!(a.code, 0o1211);
-        assert_eq!(a.code2, 0o1202);
+        a.raise(0o1211, SITE_EXECUTIVE);
+        assert_eq!(a.code(), 0o1211);
+        assert_eq!(a.fifo[1], 0o1202);
+        assert_eq!(a.fifo[0], 0);
+        assert_eq!(a.ercount, 2);
         assert!(a.lit);
     }
 
-    /// TC-ALARM-2: AlarmState::reset clears the lamp without erasing the code.
+    /// TC-ALARM-2: AlarmState::reset clears the lamp without erasing the FIFO.
     #[test]
     fn tc_alarm_2_reset_clears_lamp_not_code() {
         let mut a = AlarmState::default();
-        a.raise(0o1410);
+        a.raise(0o1410, 0o11);
         a.reset();
         assert!(!a.lit);
-        assert_eq!(a.code, 0o1410);
+        assert_eq!(a.code(), 0o1410);
+        assert_eq!(a.adres, 0o11);
+        assert_eq!(a.ercount, 1);
+    }
+
+    /// TC-ALARM-1b: 3-deep FIFO — four raises drop the oldest entry.
+    ///
+    /// Per #141 acceptance criterion: three successive raises leave
+    /// (code1, code2, code) = (oldest, middle, newest) and ercount == 3.
+    /// A fourth raise drops the original code1 out of the window.
+    #[test]
+    fn tc_alarm_1b_three_deep_fifo() {
+        let mut a = AlarmState::default();
+        a.raise(0o1100, 0o01);
+        a.raise(0o1200, 0o02);
+        a.raise(0o1300, 0o03);
+
+        assert_eq!(a.fifo[0], 0o1100, "oldest in code1");
+        assert_eq!(a.fifo[1], 0o1200, "middle in code2");
+        assert_eq!(a.code(), 0o1300, "newest in code");
+        assert_eq!(a.ercount, 3, "ercount must equal raise count");
+        assert_eq!(a.adres, 0o03, "adres reflects most recent raise");
+
+        // Fourth raise: 1100 falls off.
+        a.raise(0o1400, 0o04);
+        assert_eq!(a.fifo[0], 0o1200, "after 4th raise: 1200 is oldest");
+        assert_eq!(a.fifo[1], 0o1300, "middle = 1300");
+        assert_eq!(a.code(), 0o1400, "newest = 1400");
+        assert_eq!(a.ercount, 4);
     }
 
     /// TC-ALARM-3: poodoo ends in P00 with restart group consistent with spec.
@@ -184,7 +246,7 @@ mod tests {
 
         assert_eq!(state.major_mode, 0, "poodoo must return to P00");
         assert_eq!(state.dsky.prog, 0, "dsky.prog must reflect P00");
-        assert_eq!(state.alarm.code, 0o1410, "alarm.code must be set");
+        assert_eq!(state.alarm.code(), 0o1410, "alarm.code must be set");
         assert!(state.alarm.lit, "alarm.lit must be true");
         assert!(!state.dsky.flashing, "dsky.flashing must be cleared");
         assert!(state.pending_maneuver.is_none(), "pending_maneuver must be cleared");
@@ -203,11 +265,11 @@ mod tests {
         state.csm_state = leo_state();
         state.time = Met(36_000_000);
 
-        let alarm_before = state.alarm.code;
+        let alarm_before = state.alarm.code();
         gotopooh(&mut state);
 
         assert_eq!(state.major_mode, 0, "gotopooh must return to P00");
-        assert_eq!(state.alarm.code, alarm_before, "gotopooh must not raise a new alarm");
+        assert_eq!(state.alarm.code(), alarm_before, "gotopooh must not raise a new alarm");
         assert!(!state.alarm.lit, "alarm.lit must not be set by gotopooh");
 
         // Navigation state must survive.
@@ -228,6 +290,6 @@ mod tests {
 
         assert_eq!(state.major_mode, 0, "poodoo in P40 must return to P00");
         assert!(!state.engine_thrusting, "engine must be stopped");
-        assert_eq!(state.alarm.code, 0o1411, "alarm code must be set");
+        assert_eq!(state.alarm.code(), 0o1411, "alarm code must be set");
     }
 }

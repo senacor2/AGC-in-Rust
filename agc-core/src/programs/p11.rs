@@ -44,8 +44,7 @@ const ALARM_WRONG_FRAME: u16 = 230;
 /// executive needs a priority to slot the program).
 pub fn init(state: &mut crate::AgcState) -> JobPriority {
     if state.csm_state.frame != Frame::EarthInertial {
-        state.alarm.code = ALARM_WRONG_FRAME;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_WRONG_FRAME, crate::tables::alarm_codes::SITE_P11);
         return PRIORITY;
     }
 
@@ -71,8 +70,7 @@ pub fn p11_update(state: &mut crate::AgcState) {
     let elements = sv_to_elements(state.csm_state);
 
     if elements.is_hyperbolic() {
-        state.alarm.code = ALARM_HYPERBOLIC_ORBIT;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_HYPERBOLIC_ORBIT, crate::tables::alarm_codes::SITE_P11);
         return;
     }
 
@@ -128,7 +126,7 @@ mod tests {
         assert_eq!(state.dsky.noun, NOUN_APO_PERI_TFF);
         assert!(!state.dsky.flashing);
         assert!(state.servicer_exit.is_some());
-        assert_eq!(state.alarm.code, 0);
+        assert_eq!(state.alarm.code(), 0);
     }
 
     /// TC-P11-2: `init` on MoonInertial frame raises alarm 230.
@@ -144,7 +142,7 @@ mod tests {
 
         init(&mut state);
 
-        assert_eq!(state.alarm.code, ALARM_WRONG_FRAME);
+        assert_eq!(state.alarm.code(), ALARM_WRONG_FRAME);
         assert!(state.alarm.lit);
         assert_ne!(
             state.major_mode, P11_MAJOR_MODE,
@@ -227,7 +225,7 @@ mod tests {
 
         p11_update(&mut state);
 
-        assert_eq!(state.alarm.code, ALARM_HYPERBOLIC_ORBIT);
+        assert_eq!(state.alarm.code(), ALARM_HYPERBOLIC_ORBIT);
         assert!(state.alarm.lit);
         // Display must be preserved.
         assert_eq!(state.dsky.r, [999.0, 888.0, 777.0]);

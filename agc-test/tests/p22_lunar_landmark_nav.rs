@@ -71,7 +71,7 @@ const MOUNT_MARILYN_INDEX: u8 = 5;
 /// After the `LandmarkSighting` event:
 /// - `state.csm_nav.mark_count == 1`   (mark accepted)
 /// - `state.csm_nav.reject_count == 0` (not rejected)
-/// - `state.alarm.code == 0`            (no alarm)
+/// - `state.alarm.code() == 0`            (no alarm)
 /// - At least one W-matrix position-diagonal entry has decreased
 ///   (Kalman downdate reduces uncertainty on the observed axis)
 ///
@@ -131,9 +131,9 @@ fn tc_ms_t3_p22_lunar_landmark_kalman_update_moves_toward_truth() {
     p22_init(&mut state);
 
     assert_eq!(
-        state.alarm.code, 0,
+        state.alarm.code(), 0,
         "p22_init must not raise an alarm; alarm code = {:#06x}",
-        state.alarm.code
+        state.alarm.code()
     );
     assert!(
         state.csm_nav.tracking_active,
@@ -159,10 +159,10 @@ fn tc_ms_t3_p22_lunar_landmark_kalman_update_moves_toward_truth() {
 
     // 1. Mark accepted — no alarm, mark_count = 1, reject_count = 0.
     assert_eq!(
-        state.alarm.code, 0,
+        state.alarm.code(), 0,
         "P22 must not raise an alarm after a valid lunar landmark sighting; \
          alarm code = {:#06x}",
-        state.alarm.code
+        state.alarm.code()
     );
     assert_eq!(
         state.csm_nav.mark_count, 1,

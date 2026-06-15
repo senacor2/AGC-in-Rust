@@ -99,8 +99,7 @@ pub fn p51_mark_align(
             state.dsky.r[0] = 1.0;
         }
         None => {
-            state.alarm.code = ALARM_COLLINEAR_STARS;
-            state.alarm.lit = true;
+            state.alarm.raise(ALARM_COLLINEAR_STARS, crate::tables::alarm_codes::SITE_P51_P52);
         }
     }
 }
@@ -114,8 +113,7 @@ pub fn p51_mark_align(
 /// 221 and does not change the major mode.
 pub fn p52_init(state: &mut crate::AgcState) -> JobPriority {
     if state.imu_alignment_state == ImuAlignmentState::Caged {
-        state.alarm.code = ALARM_PLATFORM_CAGED;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_PLATFORM_CAGED, crate::tables::alarm_codes::SITE_P51_P52);
         return PRIORITY;
     }
 
@@ -148,8 +146,7 @@ pub fn p52_mark_align(
             state.dsky.r[0] = 1.0;
         }
         None => {
-            state.alarm.code = ALARM_COLLINEAR_STARS;
-            state.alarm.lit = true;
+            state.alarm.raise(ALARM_COLLINEAR_STARS, crate::tables::alarm_codes::SITE_P51_P52);
         }
     }
 }
@@ -204,7 +201,7 @@ mod tests {
             "flashing must clear after successful mark"
         );
         assert_eq!(state.dsky.noun, NOUN_REFSMMAT_OK);
-        assert_eq!(state.alarm.code, 0, "no alarm on success");
+        assert_eq!(state.alarm.code(), 0, "no alarm on success");
     }
 
     /// TC-P51-3: `p51_mark_align` with collinear stars raises alarm 220 and
@@ -217,7 +214,7 @@ mod tests {
 
         p51_mark_align(&mut state, E1, E1, E1, E1);
 
-        assert_eq!(state.alarm.code, ALARM_COLLINEAR_STARS);
+        assert_eq!(state.alarm.code(), ALARM_COLLINEAR_STARS);
         assert!(state.alarm.lit);
         assert_eq!(
             state.imu_alignment_state,
@@ -270,7 +267,7 @@ mod tests {
         assert_eq!(prio, PRIORITY);
         assert_eq!(state.major_mode, 52);
         assert_eq!(state.dsky.prog, 52);
-        assert_eq!(state.alarm.code, 0, "no alarm from a valid init_p52");
+        assert_eq!(state.alarm.code(), 0, "no alarm from a valid init_p52");
     }
 
     /// TC-P52-2: `init_p52` from Caged raises alarm 221 and does not advance
@@ -283,7 +280,7 @@ mod tests {
 
         init_p52(&mut state);
 
-        assert_eq!(state.alarm.code, ALARM_PLATFORM_CAGED);
+        assert_eq!(state.alarm.code(), ALARM_PLATFORM_CAGED);
         assert!(state.alarm.lit);
         assert_ne!(
             state.major_mode, 52,
@@ -300,7 +297,7 @@ mod tests {
         p52_mark_align(&mut state, E1, E2, E1, E2);
 
         assert_eq!(state.imu_alignment_state, ImuAlignmentState::FineAligned);
-        assert_eq!(state.alarm.code, 0);
+        assert_eq!(state.alarm.code(), 0);
     }
 
     /// TC-P52-4: `p52_mark_align` with collinear stars preserves prior REFSMMAT
@@ -315,7 +312,7 @@ mod tests {
 
         p52_mark_align(&mut state, E1, E1, E1, E1);
 
-        assert_eq!(state.alarm.code, ALARM_COLLINEAR_STARS);
+        assert_eq!(state.alarm.code(), ALARM_COLLINEAR_STARS);
         assert_eq!(
             state.refsmmat, prior,
             "refsmmat must survive collinear error"

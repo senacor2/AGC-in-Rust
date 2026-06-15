@@ -103,8 +103,7 @@ pub fn p32_init(state: &mut AgcState) -> JobPriority {
 
     // Guard: target state must exist.
     if norm(state.rendezvous_nav.target_pos) < 1.0 {
-        state.alarm.code = ALARM_P32_NO_TARGET;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_P32_NO_TARGET, crate::tables::alarm_codes::SITE_P32);
         return P32_PRIORITY;
     }
 
@@ -134,8 +133,7 @@ pub fn p32_init(state: &mut AgcState) -> JobPriority {
 
     match compute_cdh_delta_v(r_c_cdh, v_c_cdh, r_t_cdh, v_t_cdh, delta_h, MU_EARTH) {
         Err(_) => {
-            state.alarm.code = ALARM_P32_DEGENERATE;
-            state.alarm.lit = true;
+            state.alarm.raise(ALARM_P32_DEGENERATE, crate::tables::alarm_codes::SITE_P32);
         }
         Ok(cdh) => {
             // Convert LVLH delta-V to inertial. lvlh_to_inertial uses RSW convention

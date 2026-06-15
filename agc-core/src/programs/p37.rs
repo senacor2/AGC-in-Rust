@@ -55,7 +55,7 @@ pub const NOMINAL_CSM_MASS_KG: f64 = 20_000.0;
 /// 1411 (`ALARM_P37_WRONG_FRAME`) and returns without entering P37.
 pub fn p37_init(state: &mut crate::AgcState) -> JobPriority {
     if state.csm_state.frame != Frame::MoonInertial {
-        state.alarm.raise(ALARM_P37_WRONG_FRAME);
+        state.alarm.raise(ALARM_P37_WRONG_FRAME, crate::tables::alarm_codes::SITE_P37);
         return PRIORITY;
     }
 
@@ -86,11 +86,11 @@ pub fn init(state: &mut crate::AgcState) -> JobPriority {
 /// - `state.csm_state.frame != Frame::MoonInertial` → alarm 1411 (`ALARM_P37_WRONG_FRAME`).
 pub fn p37_compute_tei(state: &mut crate::AgcState, tig: Met, tof: f64) {
     if !(MIN_TEI_TOF_S..=MAX_TEI_TOF_S).contains(&tof) {
-        state.alarm.raise(ALARM_P37_BAD_TOF);
+        state.alarm.raise(ALARM_P37_BAD_TOF, crate::tables::alarm_codes::SITE_P37);
         return;
     }
     if state.csm_state.frame != Frame::MoonInertial {
-        state.alarm.raise(ALARM_P37_WRONG_FRAME);
+        state.alarm.raise(ALARM_P37_WRONG_FRAME, crate::tables::alarm_codes::SITE_P37);
         return;
     }
 
@@ -292,7 +292,7 @@ mod tests {
         let _ = p37_init(&mut state);
 
         assert_eq!(
-            state.alarm.code, ALARM_P37_WRONG_FRAME,
+            state.alarm.code(), ALARM_P37_WRONG_FRAME,
             "wrong frame must raise alarm 1411"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");
@@ -365,7 +365,7 @@ mod tests {
         p37_compute_tei(&mut state, Met(DEFAULT_TEI_TIG_OFFSET_CS), 21_600.0);
 
         assert_eq!(
-            state.alarm.code, ALARM_P37_BAD_TOF,
+            state.alarm.code(), ALARM_P37_BAD_TOF,
             "TOF below MIN must raise alarm 1410"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");
@@ -387,7 +387,7 @@ mod tests {
         p37_compute_tei(&mut state, Met(DEFAULT_TEI_TIG_OFFSET_CS), 720_000.0);
 
         assert_eq!(
-            state.alarm.code, ALARM_P37_BAD_TOF,
+            state.alarm.code(), ALARM_P37_BAD_TOF,
             "TOF above MAX must raise alarm 1410"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");

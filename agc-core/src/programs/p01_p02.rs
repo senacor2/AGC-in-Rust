@@ -88,7 +88,7 @@ pub fn init_p01(state: &mut crate::AgcState) -> JobPriority {
 /// convergence, then transitions `imu_alignment_state` to `CoarseAligned`.
 pub fn init_p02(state: &mut crate::AgcState) -> JobPriority {
     if state.imu_alignment_state != ImuAlignmentState::Caged {
-        state.alarm.raise(ALARM_GYROCOMPASS_WRONG_STATE);
+        state.alarm.raise(ALARM_GYROCOMPASS_WRONG_STATE, crate::tables::alarm_codes::SITE_P01_P02);
         // soft alarm — continue so the crew can observe the transition
     }
 
@@ -230,7 +230,7 @@ mod tests {
         assert_eq!(state.major_mode, P01_MAJOR_MODE);
         assert_eq!(state.dsky.prog, P01_MAJOR_MODE);
         assert_eq!(state.imu_alignment_state, ImuAlignmentState::Caged);
-        assert_eq!(state.alarm.code, 0);
+        assert_eq!(state.alarm.code(), 0);
     }
 
     /// TC-P01-2: P01 forces Caged even from CoarseAligned.
@@ -257,7 +257,7 @@ mod tests {
         assert_eq!(state.major_mode, P02_MAJOR_MODE);
         // Still Caged until the first Waitlist step fires.
         assert_eq!(state.imu_alignment_state, ImuAlignmentState::Caged);
-        assert_eq!(state.alarm.code, 0);
+        assert_eq!(state.alarm.code(), 0);
         assert!(
             state.waitlist.front_delta().is_some(),
             "Waitlist must have a pending gyrocompass step"
@@ -272,7 +272,7 @@ mod tests {
 
         init_p02(&mut state);
 
-        assert_eq!(state.alarm.code, ALARM_GYROCOMPASS_WRONG_STATE);
+        assert_eq!(state.alarm.code(), ALARM_GYROCOMPASS_WRONG_STATE);
         assert!(state.alarm.lit);
         assert_eq!(state.major_mode, P02_MAJOR_MODE);
     }

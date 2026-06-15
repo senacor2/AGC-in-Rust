@@ -74,8 +74,7 @@ enum Validation {
 
 /// Raise an alarm and return `Validation::Rejected`.
 fn raise(state: &mut crate::AgcState, code: u16) -> Validation {
-    state.alarm.code = code;
-    state.alarm.lit = true;
+    state.alarm.raise(code, crate::tables::alarm_codes::SITE_P40_P41);
     Validation::Rejected
 }
 
@@ -136,8 +135,7 @@ pub fn p40_init(state: &mut crate::AgcState) -> JobPriority {
     };
 
     if dv_mag < SPS_MIN_DV {
-        state.alarm.code = ALARM_P40_WRONG_REGIME;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_P40_WRONG_REGIME, crate::tables::alarm_codes::SITE_P40_P41);
         return PRIORITY;
     }
 
@@ -196,8 +194,7 @@ pub fn p41_init(state: &mut crate::AgcState) -> JobPriority {
     };
 
     if dv_mag >= SPS_MIN_DV {
-        state.alarm.code = ALARM_P41_WRONG_REGIME;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_P41_WRONG_REGIME, crate::tables::alarm_codes::SITE_P40_P41);
         return PRIORITY;
     }
 
@@ -241,7 +238,7 @@ mod tests {
 
         init_p40(&mut state);
 
-        assert_eq!(state.alarm.code, ALARM_NO_PENDING_MANEUVER);
+        assert_eq!(state.alarm.code(), ALARM_NO_PENDING_MANEUVER);
         assert!(state.alarm.lit);
         assert!(!state.burn.burn_active, "burn must not engage on alarm");
         assert!(state.servicer_exit.is_none());
@@ -256,7 +253,7 @@ mod tests {
 
         init_p40(&mut state);
 
-        assert_eq!(state.alarm.code, ALARM_TIG_IN_PAST);
+        assert_eq!(state.alarm.code(), ALARM_TIG_IN_PAST);
         assert!(
             state.pending_maneuver.is_some(),
             "rejected maneuver must persist"
@@ -272,7 +269,7 @@ mod tests {
 
         init_p40(&mut state);
 
-        assert_eq!(state.alarm.code, ALARM_DV_TOO_SMALL);
+        assert_eq!(state.alarm.code(), ALARM_DV_TOO_SMALL);
     }
 
     /// TC-P40-4: sub-SPS delta-V (0.2 m/s) raises alarm 227.
@@ -284,7 +281,7 @@ mod tests {
 
         init_p40(&mut state);
 
-        assert_eq!(state.alarm.code, ALARM_P40_WRONG_REGIME);
+        assert_eq!(state.alarm.code(), ALARM_P40_WRONG_REGIME);
         assert!(!state.burn.burn_active);
     }
 
@@ -299,7 +296,7 @@ mod tests {
         let prio = init_p40(&mut state);
 
         assert_eq!(prio, PRIORITY);
-        assert_eq!(state.alarm.code, 0, "no alarm on happy path");
+        assert_eq!(state.alarm.code(), 0, "no alarm on happy path");
         assert_eq!(state.major_mode, P40_MAJOR_MODE);
         assert_eq!(state.dsky.prog, P40_MAJOR_MODE);
 
@@ -400,7 +397,7 @@ mod tests {
 
         init_p41(&mut state);
 
-        assert_eq!(state.alarm.code, ALARM_NO_PENDING_MANEUVER);
+        assert_eq!(state.alarm.code(), ALARM_NO_PENDING_MANEUVER);
     }
 
     /// TC-P41-2: delta-V above RCS regime (5 m/s) raises alarm 228.
@@ -412,7 +409,7 @@ mod tests {
 
         init_p41(&mut state);
 
-        assert_eq!(state.alarm.code, ALARM_P41_WRONG_REGIME);
+        assert_eq!(state.alarm.code(), ALARM_P41_WRONG_REGIME);
         assert!(!state.burn.burn_active);
     }
 
@@ -427,7 +424,7 @@ mod tests {
         let prio = init_p41(&mut state);
 
         assert_eq!(prio, PRIORITY);
-        assert_eq!(state.alarm.code, 0);
+        assert_eq!(state.alarm.code(), 0);
         assert_eq!(state.major_mode, P41_MAJOR_MODE);
         assert!(state.burn.burn_active);
         assert_eq!(state.burn.tig, tig);

@@ -88,16 +88,14 @@ pub(crate) const ALARM_P34_TOO_CLOSE: u16 = 0o01445;
 pub fn p34_init(state: &mut AgcState) -> JobPriority {
     // Step 0 — Guard checks.
     if norm(state.rendezvous_nav.target_pos) < 1.0 {
-        state.alarm.code = ALARM_P33_NO_TARGET;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_P33_NO_TARGET, crate::tables::alarm_codes::SITE_P34);
         return P34_PRIORITY;
     }
 
     let arrival_epoch_s = match state.tpi_arrival_epoch {
         Some(t) => t,
         None => {
-            state.alarm.code = ALARM_P33_NO_TIG;
-            state.alarm.lit = true;
+            state.alarm.raise(ALARM_P33_NO_TIG, crate::tables::alarm_codes::SITE_P34);
             return P34_PRIORITY;
         }
     };
@@ -105,8 +103,7 @@ pub fn p34_init(state: &mut AgcState) -> JobPriority {
     let tig_cs = match state.vn.pending_tig.take() {
         Some(t) => t,
         None => {
-            state.alarm.code = ALARM_P33_NO_TIG;
-            state.alarm.lit = true;
+            state.alarm.raise(ALARM_P33_NO_TIG, crate::tables::alarm_codes::SITE_P34);
             return P34_PRIORITY;
         }
     };
@@ -115,8 +112,7 @@ pub fn p34_init(state: &mut AgcState) -> JobPriority {
     let target_epoch_cs = (state.rendezvous_nav.target_epoch * 100.0) as u64;
     let tig_cs_u64 = tig_cs.0 as u64;
     if tig_cs_u64 > target_epoch_cs && (tig_cs_u64 - target_epoch_cs) > TPI_STALE_TARGET_CS {
-        state.alarm.code = ALARM_P33_STALE_TARGET;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_P33_STALE_TARGET, crate::tables::alarm_codes::SITE_P34);
         // Non-fatal: proceed with computation.
     }
 
@@ -131,8 +127,7 @@ pub fn p34_init(state: &mut AgcState) -> JobPriority {
     let tig_s = tig_cs.to_seconds();
     let dt_midcourse = arrival_epoch_s - tig_s;
     if dt_midcourse < TPI_MIN_TOF_S {
-        state.alarm.code = ALARM_P33_DEGENERATE;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_P33_DEGENERATE, crate::tables::alarm_codes::SITE_P34);
         return P34_PRIORITY;
     }
 
@@ -140,8 +135,7 @@ pub fn p34_init(state: &mut AgcState) -> JobPriority {
     let range_vec: Vec3 = vsub(state.rendezvous_nav.target_pos, state.csm_state.position);
     let range_m = norm(range_vec);
     if range_m < TPM_MIN_RANGE_M {
-        state.alarm.code = ALARM_P34_TOO_CLOSE;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_P34_TOO_CLOSE, crate::tables::alarm_codes::SITE_P34);
         return P34_PRIORITY;
     }
 
@@ -149,8 +143,7 @@ pub fn p34_init(state: &mut AgcState) -> JobPriority {
     let chaser_epoch_s = state.csm_state.epoch.to_seconds();
     let dt_chaser = tig_s - chaser_epoch_s;
     if dt_chaser < 0.0 {
-        state.alarm.code = ALARM_P33_DEGENERATE;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_P33_DEGENERATE, crate::tables::alarm_codes::SITE_P34);
         return P34_PRIORITY;
     }
     let (r_c_tig, v_c_tig) = kepler_step(
@@ -172,18 +165,15 @@ pub fn p34_init(state: &mut AgcState) -> JobPriority {
     // Step 7 — Compute Lambert intercept.
     match compute_lambert_intercept(r_c_tig, v_c_tig, r_t_arrive, dt_midcourse, MU_EARTH) {
         Err(InterceptError::DegenerateState) => {
-            state.alarm.code = ALARM_P33_NO_TARGET;
-            state.alarm.lit = true;
+            state.alarm.raise(ALARM_P33_NO_TARGET, crate::tables::alarm_codes::SITE_P34);
             return P34_PRIORITY;
         }
         Err(InterceptError::InvalidTimeInterval) | Err(InterceptError::DegenerateGeometry) => {
-            state.alarm.code = ALARM_P33_DEGENERATE;
-            state.alarm.lit = true;
+            state.alarm.raise(ALARM_P33_DEGENERATE, crate::tables::alarm_codes::SITE_P34);
             return P34_PRIORITY;
         }
         Err(InterceptError::AntiParallelVectors) | Err(InterceptError::LambertNotConverged) => {
-            state.alarm.code = ALARM_P33_LAMBERT;
-            state.alarm.lit = true;
+            state.alarm.raise(ALARM_P33_LAMBERT, crate::tables::alarm_codes::SITE_P34);
             return P34_PRIORITY;
         }
         Ok(res) => {
@@ -354,7 +344,7 @@ mod tests {
 
         assert!(state.alarm.lit, "TC-P34-3: alarm must be lit");
         assert_eq!(
-            state.alarm.code, ALARM_P33_NO_TIG,
+            state.alarm.code(), ALARM_P33_NO_TIG,
             "TC-P34-3: alarm code should be ALARM_P33_NO_TIG (0o01441)"
         );
         assert!(
@@ -389,7 +379,7 @@ mod tests {
 
         assert!(state.alarm.lit, "TC-P34-4: alarm must be lit");
         assert_eq!(
-            state.alarm.code, ALARM_P33_DEGENERATE,
+            state.alarm.code(), ALARM_P33_DEGENERATE,
             "TC-P34-4: alarm code should be ALARM_P33_DEGENERATE (0o01443)"
         );
         assert!(
@@ -422,7 +412,7 @@ mod tests {
 
         assert!(state.alarm.lit, "TC-P34-5: alarm must be lit");
         assert_eq!(
-            state.alarm.code, ALARM_P34_TOO_CLOSE,
+            state.alarm.code(), ALARM_P34_TOO_CLOSE,
             "TC-P34-5: alarm code should be ALARM_P34_TOO_CLOSE (0o01445)"
         );
         assert!(

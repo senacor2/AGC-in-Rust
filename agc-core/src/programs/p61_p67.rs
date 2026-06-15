@@ -238,8 +238,7 @@ impl EntryState {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn raise(state: &mut crate::AgcState, code: u16) {
-    state.alarm.code = code;
-    state.alarm.lit = true;
+    state.alarm.raise(code, crate::tables::alarm_codes::SITE_P61_P67);
 }
 
 fn set_display(state: &mut crate::AgcState, prog: u8, verb: u8, noun: u8) {
@@ -568,7 +567,7 @@ mod tests {
         assert_eq!(state.entry.phase, EntryPhase::Preparation);
         assert_eq!(state.major_mode, P61_MAJOR_MODE);
         assert_eq!(state.dsky.prog, P61_MAJOR_MODE);
-        assert_eq!(state.alarm.code, 0);
+        assert_eq!(state.alarm.code(), 0);
     }
 
     // ── P62 ───────────────────────────────────────────────────────────────────
@@ -598,7 +597,7 @@ mod tests {
 
         assert_eq!(state.entry.phase, EntryPhase::Separation);
         assert_eq!(state.major_mode, P62_MAJOR_MODE);
-        assert_eq!(state.alarm.code, 0);
+        assert_eq!(state.alarm.code(), 0);
         assert!(state.pending_maneuver.is_none(), "stale ΔV must be cleared");
         assert_eq!(state.dap_state.mode, DapMode::AttitudeHold);
         assert!(
@@ -614,7 +613,7 @@ mod tests {
         // phase is Idle (default)
         init_p62(&mut state);
 
-        assert_eq!(state.alarm.code, ALARM_P62_WRONG_PHASE);
+        assert_eq!(state.alarm.code(), ALARM_P62_WRONG_PHASE);
         assert!(state.alarm.lit);
         assert_eq!(
             state.entry.phase,
@@ -636,7 +635,7 @@ mod tests {
         assert_eq!(state.entry.phase, EntryPhase::PreEntry);
         assert_eq!(state.major_mode, P63_MAJOR_MODE);
         assert_eq!(state.dsky.verb, VERB_MONITOR);
-        assert_eq!(state.alarm.code, 0);
+        assert_eq!(state.alarm.code(), 0);
     }
 
     /// TC-P63-2: `p63_check_threshold` with g = 0.04 stays in PreEntry.
@@ -678,7 +677,7 @@ mod tests {
 
         assert_eq!(state.entry.phase, EntryPhase::Entry);
         assert_eq!(state.major_mode, P64_MAJOR_MODE);
-        assert_eq!(state.alarm.code, 0);
+        assert_eq!(state.alarm.code(), 0);
     }
 
     /// TC-P64-2: `init_p64` with g = 0.02 raises alarm 233.
@@ -690,7 +689,7 @@ mod tests {
 
         init_p64(&mut state);
 
-        assert_eq!(state.alarm.code, ALARM_P64_EARLY);
+        assert_eq!(state.alarm.code(), ALARM_P64_EARLY);
         assert!(state.alarm.lit);
         // Phase still advances — soft alarm
         assert_eq!(state.entry.phase, EntryPhase::Entry);
@@ -716,7 +715,7 @@ mod tests {
             !state.entry.drogue_deployed,
             "drogue must not deploy in init_p67 — wait for V < VQUIT in the SERVICER cycle"
         );
-        assert_eq!(state.alarm.code, 0);
+        assert_eq!(state.alarm.code(), 0);
     }
 
     /// TC-P67-2: `init_p67` from Preparation raises alarm 234 but still advances.
@@ -727,7 +726,7 @@ mod tests {
 
         init_p67(&mut state);
 
-        assert_eq!(state.alarm.code, ALARM_P67_WRONG_PHASE);
+        assert_eq!(state.alarm.code(), ALARM_P67_WRONG_PHASE);
         assert_eq!(state.entry.phase, EntryPhase::Final);
         // Drogue does NOT deploy on the wrong-phase soft alarm either — same
         // SERVICER trigger as the nominal path.
@@ -1032,7 +1031,7 @@ mod tests {
 
         // P64 can be called cleanly at this point.
         init_p64(&mut state);
-        assert_eq!(state.alarm.code, 0);
+        assert_eq!(state.alarm.code(), 0);
 
         init_p67(&mut state);
         assert_eq!(state.entry.phase, EntryPhase::Final);

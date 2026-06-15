@@ -276,8 +276,7 @@ pub fn p23_init(state: &mut AgcState) -> JobPriority {
     match state.csm_state.frame {
         Frame::EarthInertial | Frame::MoonInertial => {}
         Frame::StableMember => {
-            state.alarm.code = ALARM_FRAME_MISMATCH;
-            state.alarm.lit = true;
+            state.alarm.raise(ALARM_FRAME_MISMATCH, crate::tables::alarm_codes::SITE_P23);
             state.csm_nav.tracking_active = false;
             return P23_PRIORITY;
         }
@@ -285,8 +284,7 @@ pub fn p23_init(state: &mut AgcState) -> JobPriority {
 
     // Precondition: non-zero CSM epoch (sanity check for initialised state vector).
     if state.csm_state.epoch.to_seconds() == 0.0 {
-        state.alarm.code = ALARM_NO_CSM_SV;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_NO_CSM_SV, crate::tables::alarm_codes::SITE_P23);
         state.csm_nav.tracking_active = false;
         return P23_PRIORITY;
     }
@@ -318,8 +316,7 @@ pub fn p23_init(state: &mut AgcState) -> JobPriority {
 
     // Install the periodic nav-cycle hook via the Waitlist.
     if state.waitlist.schedule(P23_CYCLE_CS_U16, p23_cycle_task) == ScheduleResult::Full {
-        state.alarm.code = ALARM_WAITLIST_FULL;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_WAITLIST_FULL, crate::tables::alarm_codes::SITE_P23);
     }
 
     P23_PRIORITY
@@ -353,8 +350,7 @@ pub fn p23_cycle_task(state: &mut AgcState) {
     match state.csm_state.frame {
         Frame::EarthInertial | Frame::MoonInertial => {}
         Frame::StableMember => {
-            state.alarm.code = ALARM_FRAME_MISMATCH;
-            state.alarm.lit = true;
+            state.alarm.raise(ALARM_FRAME_MISMATCH, crate::tables::alarm_codes::SITE_P23);
             state.csm_nav.tracking_active = false;
             // Still reschedule — display continues even when tracking is suspended.
             reschedule(state);
@@ -415,15 +411,13 @@ pub fn p23_incorporate_star_horizon_mark(state: &mut AgcState, mark: StarHorizon
     // EC-2: star direction must be a unit vector.
     let star_mag = norm(mark.star_direction);
     if !(0.999..=1.001).contains(&star_mag) {
-        state.alarm.code = ALARM_NO_STAR_LOCK;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_NO_STAR_LOCK, crate::tables::alarm_codes::SITE_P23);
         return;
     }
 
     // EC-3: observed angle must be in [0, π].
     if !(0.0..=core::f64::consts::PI).contains(&mark.angle_observed_rad) {
-        state.alarm.code = ALARM_BAD_ANGLE;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_BAD_ANGLE, crate::tables::alarm_codes::SITE_P23);
         return;
     }
 
@@ -437,15 +431,13 @@ pub fn p23_incorporate_star_horizon_mark(state: &mut AgcState, mark: StarHorizon
         Ok(v) => v,
         Err(HorizonPredError::TooCloseToBody) => {
             // EC-4: CSM inside R_body + R_MIN_HORIZON_M.
-            state.alarm.code = ALARM_P23_TOO_CLOSE_TO_BODY;
-            state.alarm.lit = true;
+            state.alarm.raise(ALARM_P23_TOO_CLOSE_TO_BODY, crate::tables::alarm_codes::SITE_P23);
             return;
         }
         Err(HorizonPredError::DegenerateGeometry) => {
             // EC-5: star co-linear with body direction — unobservable.
             // Spec §9 EC-5: raise ALARM_BAD_ANGLE (01427) for degenerate geometry.
-            state.alarm.code = ALARM_BAD_ANGLE;
-            state.alarm.lit = true;
+            state.alarm.raise(ALARM_BAD_ANGLE, crate::tables::alarm_codes::SITE_P23);
             return;
         }
     };
@@ -492,15 +484,13 @@ pub fn p23_incorporate_star_landmark_mark(state: &mut AgcState, mark: StarLandma
     // EC-2: star direction must be a unit vector.
     let star_mag = norm(mark.star_direction);
     if !(0.999..=1.001).contains(&star_mag) {
-        state.alarm.code = ALARM_NO_STAR_LOCK;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_NO_STAR_LOCK, crate::tables::alarm_codes::SITE_P23);
         return;
     }
 
     // EC-3: observed angle must be in [0, π].
     if !(0.0..=core::f64::consts::PI).contains(&mark.angle_observed_rad) {
-        state.alarm.code = ALARM_BAD_ANGLE;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_BAD_ANGLE, crate::tables::alarm_codes::SITE_P23);
         return;
     }
 
@@ -513,15 +503,13 @@ pub fn p23_incorporate_star_landmark_mark(state: &mut AgcState, mark: StarLandma
         Ok(v) => v,
         Err(LandmarkPredError::RangeTooSmall) => {
             // EC-6 range guard: CSM too close to landmark.
-            state.alarm.code = ALARM_P23_LANDMARK_RANGE_ZERO;
-            state.alarm.lit = true;
+            state.alarm.raise(ALARM_P23_LANDMARK_RANGE_ZERO, crate::tables::alarm_codes::SITE_P23);
             return;
         }
         Err(LandmarkPredError::DegenerateGeometry) => {
             // EC-6: star co-linear with landmark direction — unobservable.
             // Spec §9 EC-6: raise ALARM_BAD_ANGLE (01427) for degenerate geometry.
-            state.alarm.code = ALARM_BAD_ANGLE;
-            state.alarm.lit = true;
+            state.alarm.raise(ALARM_BAD_ANGLE, crate::tables::alarm_codes::SITE_P23);
             return;
         }
     };
@@ -815,8 +803,7 @@ fn p23_scalar_update(
     }
 
     if outcome == UpdateOutcome::AcceptedWOverflow {
-        state.alarm.code = ALARM_W_OVERFLOW;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_W_OVERFLOW, crate::tables::alarm_codes::SITE_P23);
         p23_rectify_w_matrix(state);
         return UpdateOutcome::Accepted;
     }
@@ -832,8 +819,7 @@ fn p23_scalar_update(
 /// Spec: p23-spec.md §4.3, §8
 fn check_consecutive_rejects(state: &mut AgcState) {
     if state.csm_nav.consecutive_reject_count >= 5 {
-        state.alarm.code = ALARM_P23_REJECT_OVERRIDE;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_P23_REJECT_OVERRIDE, crate::tables::alarm_codes::SITE_P23);
         state.csm_nav.tracking_active = false;
     }
 }
@@ -843,8 +829,7 @@ fn check_consecutive_rejects(state: &mut AgcState) {
 /// Separated from `p23_cycle_task` to keep the cycle function readable.
 fn reschedule(state: &mut AgcState) {
     if state.waitlist.schedule(P23_CYCLE_CS_U16, p23_cycle_task) == ScheduleResult::Full {
-        state.alarm.code = ALARM_WAITLIST_FULL;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_WAITLIST_FULL, crate::tables::alarm_codes::SITE_P23);
     }
 }
 
@@ -898,7 +883,7 @@ mod tests {
             state.csm_nav.w_matrix[0][1], 0.0,
             "w_matrix[0][1] must be 0 (off-diagonal)"
         );
-        assert_eq!(state.alarm.code, 0, "alarm.code must be 0 on happy path");
+        assert_eq!(state.alarm.code(), 0, "alarm.code must be 0 on happy path");
         assert!(
             !state.waitlist.is_empty(),
             "waitlist must have at least one entry after p23_init"
@@ -917,7 +902,7 @@ mod tests {
         p23_init(&mut state);
 
         assert_eq!(
-            state.alarm.code, 0o01420,
+            state.alarm.code(), 0o01420,
             "alarm.code must be 0o01420 (NO_CSM_SV)"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");
@@ -965,7 +950,7 @@ mod tests {
 
         assert_eq!(state.csm_nav.mark_count, 1, "mark_count must be 1");
         assert_eq!(state.csm_nav.reject_count, 0, "reject_count must be 0");
-        assert_eq!(state.alarm.code, 0, "alarm.code must be 0");
+        assert_eq!(state.alarm.code(), 0, "alarm.code must be 0");
 
         // Y-component W must be reduced (dominant sensitivity b[1] ≈ -3.33e-9).
         assert!(
@@ -1055,7 +1040,7 @@ mod tests {
             "consecutive_reject_count must be 1"
         );
         assert_eq!(
-            state.alarm.code, 0,
+            state.alarm.code(), 0,
             "single rejection must not raise an alarm"
         );
 
@@ -1119,7 +1104,7 @@ mod tests {
             "tracking_active must be false after 5 rejects"
         );
         assert_eq!(
-            state.alarm.code, 0o01431,
+            state.alarm.code(), 0o01431,
             "alarm.code must be 0o01431 (REJECT_OVERRIDE)"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");
@@ -1139,14 +1124,14 @@ mod tests {
             body: Body::Earth,
             angle_observed_rad: theta_pred,
         };
-        let alarm_code_before_6th = state.alarm.code;
+        let alarm_code_before_6th = state.alarm.code();
         p23_incorporate_star_horizon_mark(&mut state, mark6);
         assert_eq!(
             state.csm_nav.mark_count, 0,
             "6th mark must be discarded (mark_count stays 0)"
         );
         assert_eq!(
-            state.alarm.code, alarm_code_before_6th,
+            state.alarm.code(), alarm_code_before_6th,
             "alarm code must be unchanged after silently discarded 6th mark"
         );
     }
@@ -1192,7 +1177,7 @@ mod tests {
         p23_incorporate_star_horizon_mark(&mut state, mark);
 
         assert_eq!(
-            state.alarm.code, 0o01430,
+            state.alarm.code(), 0o01430,
             "alarm.code must be 0o01430 (TOO_CLOSE_TO_BODY)"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");
@@ -1247,7 +1232,7 @@ mod tests {
 
         assert_eq!(state.csm_nav.mark_count, 1, "mark_count must be 1");
         assert_eq!(state.csm_nav.reject_count, 0, "reject_count must be 0");
-        assert_eq!(state.alarm.code, 0, "alarm.code must be 0");
+        assert_eq!(state.alarm.code(), 0, "alarm.code must be 0");
 
         // X-component W must be reduced (b[0] ≈ 1.018e-8 — dominant).
         assert!(

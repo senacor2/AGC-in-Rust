@@ -98,8 +98,7 @@ pub fn p30_init(state: &mut crate::AgcState) -> JobPriority {
 pub fn p30_load_dv_lvlh(state: &mut crate::AgcState, tig: Met, dv_crew: Vec3) {
     // Guard: TIG must not be in the past.
     if tig < state.time {
-        state.alarm.code = ALARM_TIG_IN_PAST;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_TIG_IN_PAST, crate::tables::alarm_codes::SITE_P30);
         return;
     }
 

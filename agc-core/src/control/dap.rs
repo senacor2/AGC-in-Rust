@@ -923,7 +923,7 @@ mod tests {
             "dap_init must succeed regardless of Waitlist occupancy"
         );
         assert_eq!(
-            state.alarm.code, 0,
+            state.alarm.code(), 0,
             "dap_init must not raise alarms on a full Waitlist"
         );
     }

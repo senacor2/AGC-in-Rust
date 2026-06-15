@@ -932,6 +932,7 @@ fn verb_takes_no_noun(verb: u8) -> bool {
 /// (`Comanche055/FRESH_START_AND_RESTART.agc:1059`).
 fn dispatch_verb_noun(state: &mut crate::AgcState, verb: u8, noun: u8) {
     match verb {
+        5 => v05_display_octal(state, noun),
         6 => v06_display_decimal(state, noun),
         16 => v16_monitor(state, noun),
         21..=23 => start_load(state, verb, noun, 1, verb - 21),
@@ -1007,6 +1008,29 @@ fn noun_display(state: &crate::AgcState, noun: u8) -> Option<(f32, f32, f32)> {
     use crate::math::linalg::norm;
 
     match noun {
+        // N08 — Alarm-site diagnostic. All registers are raw octal.
+        //   R1 = ADRES   (call-site tag captured at last alarm raise)
+        //   R2 = BBANK   (always 0 in this port — Rust has no bank addressing;
+        //                 reserved slot kept for AGC display fidelity)
+        //   R3 = ERCOUNT (alarm + restart counter)
+        // AGC source: Comanche055/PINBALL_NOUN_TABLES.agc, N08.
+        8 => Some((
+            state.alarm.adres as f32,
+            0.0, // BBANK — N/A in this port
+            state.alarm.ercount as f32,
+        )),
+
+        // N09 — Alarm-code FIFO. All registers are raw octal.
+        //   R1 = oldest (fifo[0])
+        //   R2 = middle (fifo[1])
+        //   R3 = newest (fifo[2])
+        // AGC source: Comanche055/PINBALL_NOUN_TABLES.agc, N09.
+        9 => Some((
+            state.alarm.fifo[0] as f32,
+            state.alarm.fifo[1] as f32,
+            state.alarm.fifo[2] as f32,
+        )),
+
         // N33 — TIG (Time of Ignition). R1 = hours, R2 = minutes, R3 = seconds×100.
         33 => {
             let cs = match state.vn.pending_tig {
@@ -1256,6 +1280,23 @@ fn noun_display(state: &crate::AgcState, noun: u8) -> Option<(f32, f32, f32)> {
 }
 
 /// V06 — Display decimal.
+/// V05 — Display octal R1/R2/R3.
+///
+/// Primary use is alarm diagnostics: V05N09 shows the alarm-code FIFO,
+/// V05N08 shows the call-site / counter info. The register values come
+/// from the same `noun_display` table; the DSKY rendering layer interprets
+/// `dsky.verb == 5` as "render in octal".
+fn v05_display_octal(state: &mut crate::AgcState, noun: u8) {
+    state.dsky.verb = 5;
+    state.dsky.noun = noun;
+    state.dsky.flashing = false;
+    if let Some((r1, r2, r3)) = noun_display(state, noun) {
+        state.dsky.r[0] = r1;
+        state.dsky.r[1] = r2;
+        state.dsky.r[2] = r3;
+    }
+}
+
 fn v06_display_decimal(state: &mut crate::AgcState, noun: u8) {
     state.dsky.verb = 6;
     state.dsky.noun = noun;
@@ -1868,8 +1909,7 @@ fn noun_89_commit_p29_target(state: &mut crate::AgcState, values: [f64; 3]) {
 fn noun_81_commit_dv_lvlh(state: &mut crate::AgcState, values: [f64; 3]) {
     let Some(tig) = state.vn.pending_tig.take() else {
         // No TIG staged — alarm and return without doing anything.
-        state.alarm.code = ALARM_DV_LOAD_WITHOUT_TIG;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_DV_LOAD_WITHOUT_TIG, crate::tables::alarm_codes::SITE_VN);
         return;
     };
     let dv: Vec3 = [values[0], values[1], values[2]];
@@ -2037,7 +2077,7 @@ mod tests {
             let mut s = AgcState::new();
             s.major_mode = 40;
             s.dsky.lamp_test_active = true;
-            s.alarm.raise(crate::tables::alarm_codes::EXEC_OVERFLOW);
+            s.alarm.raise(crate::tables::alarm_codes::EXEC_OVERFLOW, crate::tables::alarm_codes::SITE_EXECUTIVE);
             s.engine_thrusting = true;
             s.liftoff_time = crate::types::Met(123_456);
             s.gha_epoch_rad = 1.234_567;
@@ -2072,7 +2112,7 @@ mod tests {
             "TC-VN-MA3-V36: engine_thrusting must be cleared"
         );
         assert_eq!(
-            via_verb.alarm.code, 0,
+            via_verb.alarm.code(), 0,
             "TC-VN-MA3-V36: alarm code must be cleared"
         );
         assert_eq!(via_verb.vn.phase, VnPhase::Idle);
@@ -2201,6 +2241,76 @@ mod tests {
             "TC-VN-MA3-V96: must drop to P00 like V34"
         );
         assert_eq!(state.vn.phase, VnPhase::Idle);
+    }
+
+    // ── TC-VN-MB6: V05N08 / V05N09 — alarm diagnostic nouns ────────────────
+
+    /// TC-VN-MB6-N09-1: Induce EXEC_OVERFLOW (1202), key V05N09 →
+    /// R1/R2/R3 show (00000, 00000, 01202).
+    #[test]
+    fn tc_vn_mb6_v05n09_single_alarm() {
+        use crate::tables::alarm_codes::{EXEC_OVERFLOW, SITE_EXECUTIVE};
+
+        let mut state = AgcState::new();
+        state.alarm.raise(EXEC_OVERFLOW, SITE_EXECUTIVE);
+
+        feed(&mut state, &[Key::Verb, d(0), d(5), Key::Noun, d(0), d(9), Key::Entr]);
+
+        assert_eq!(state.dsky.verb, 5, "TC-VN-MB6: verb must be 5 (octal display)");
+        assert_eq!(state.dsky.noun, 9);
+        assert_eq!(state.dsky.r[0], 0.0, "R1 (oldest) must be 0");
+        assert_eq!(state.dsky.r[1], 0.0, "R2 (middle) must be 0");
+        assert_eq!(
+            state.dsky.r[2] as u16, EXEC_OVERFLOW,
+            "R3 (newest) must equal EXEC_OVERFLOW"
+        );
+    }
+
+    /// TC-VN-MB6-N09-2: A second alarm shifts the FIFO so R3 shows the new
+    /// code, R2 shows the previous (1202), R1 stays 0.
+    #[test]
+    fn tc_vn_mb6_v05n09_two_alarms_shift_fifo() {
+        use crate::tables::alarm_codes::{EXEC_OVERFLOW, SITE_EXECUTIVE, WAITLIST_OVERFLOW, SITE_AVG_G};
+
+        let mut state = AgcState::new();
+        state.alarm.raise(EXEC_OVERFLOW, SITE_EXECUTIVE);
+        state.alarm.raise(WAITLIST_OVERFLOW, SITE_AVG_G);
+
+        feed(&mut state, &[Key::Verb, d(0), d(5), Key::Noun, d(0), d(9), Key::Entr]);
+
+        assert_eq!(state.dsky.r[0], 0.0, "R1 still empty after 2 alarms");
+        assert_eq!(
+            state.dsky.r[1] as u16, EXEC_OVERFLOW,
+            "R2 must hold the previous code (1202)"
+        );
+        assert_eq!(
+            state.dsky.r[2] as u16, WAITLIST_OVERFLOW,
+            "R3 must hold the newest code (1211)"
+        );
+    }
+
+    /// TC-VN-MB6-N08: Induce a P22 alarm, key V05N08 → adres shows P22
+    /// site tag (octal) and ercount matches the raise count.
+    #[test]
+    fn tc_vn_mb6_v05n08_site_and_counter() {
+        use crate::tables::alarm_codes::{NO_CSM_SV, SITE_P22};
+
+        let mut state = AgcState::new();
+        state.alarm.raise(NO_CSM_SV, SITE_P22);
+
+        feed(&mut state, &[Key::Verb, d(0), d(5), Key::Noun, d(0), d(8), Key::Entr]);
+
+        assert_eq!(state.dsky.verb, 5);
+        assert_eq!(state.dsky.noun, 8);
+        assert_eq!(
+            state.dsky.r[0] as u16, SITE_P22,
+            "R1 (ADRES) must equal SITE_P22"
+        );
+        assert_eq!(state.dsky.r[1], 0.0, "R2 (BBANK) must be 0 in this port");
+        assert_eq!(
+            state.dsky.r[2] as u16, 1,
+            "R3 (ERCOUNT) must equal 1 after one raise"
+        );
     }
 
     // ── TC-VN-MB3: V32/V33/V94 — M-B.3 and M-B.2 verbs ──────────────────────
@@ -2806,7 +2916,7 @@ mod tests {
         feed_number(&mut state, 0);
         feed_key(&mut state, Key::Entr);
 
-        assert_eq!(state.alarm.code, ALARM_DV_LOAD_WITHOUT_TIG);
+        assert_eq!(state.alarm.code(), ALARM_DV_LOAD_WITHOUT_TIG);
         assert!(state.pending_maneuver.is_none());
     }
 

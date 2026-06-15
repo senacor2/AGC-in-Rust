@@ -323,5 +323,5 @@ pub fn run_entry_phase_scenario(
         agc_core::programs::p61_p67::EntryPhase::Final,
         "entry must end in Final phase"
     );
-    assert_eq!(state.alarm.code, 0, "no AGC alarms during entry");
+    assert_eq!(state.alarm.code(), 0, "no AGC alarms during entry");
 }

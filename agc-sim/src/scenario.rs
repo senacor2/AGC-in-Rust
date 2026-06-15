@@ -264,7 +264,7 @@ pub enum Event {
         vel_tol_m_s: f64,
     },
 
-    /// Assert `state.alarm.code == code`.
+    /// Assert `state.alarm.code() == code`.
     ExpectAlarm(u16),
 
     /// Seed the simulator truth REFSMMAT used by sensor simulation.
@@ -695,7 +695,7 @@ impl ScenarioBuilder {
         self
     }
 
-    /// Assert `state.alarm.code == code`.
+    /// Assert `state.alarm.code() == code`.
     pub fn expect_alarm(mut self, code: u16) -> Self {
         self.events.push(Event::ExpectAlarm(code));
         self
@@ -1481,7 +1481,7 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
 
             // ── ExpectAlarm ───────────────────────────────────────────────────
             Event::ExpectAlarm(code) => {
-                let got = state.alarm.code;
+                let got = state.alarm.code();
                 if got != code {
                     panic!(
                         "{}\n  alarm code mismatch; expected {code:#06x}, got {got:#06x}",
@@ -2134,7 +2134,7 @@ mod tests {
             .build();
         let mut state = AgcState::new();
         let mut hw = SimHardware::new();
-        state.alarm.raise(0x0102);
+        state.alarm.raise(0x0102, agc_core::tables::alarm_codes::SITE_NONE);
         run_scenario(&scenario, &mut state, &mut hw);
     }
 

@@ -138,8 +138,7 @@ pub fn p31_init(state: &mut AgcState) -> JobPriority {
 
     // Guard: target state must exist.
     if norm(state.rendezvous_nav.target_pos) < 1.0 {
-        state.alarm.code = ALARM_P31_NO_TARGET;
-        state.alarm.lit = true;
+        state.alarm.raise(ALARM_P31_NO_TARGET, crate::tables::alarm_codes::SITE_P31);
         return P31_PRIORITY;
     }
 
@@ -174,12 +173,10 @@ pub fn p31_init(state: &mut AgcState) -> JobPriority {
 
     match compute_csi_delta_v(r_c, v_c, r_t_cdh, v_t_cdh, dt_csi_to_cdh, delta_h, MU_EARTH) {
         Err(CsiError::NotConverged) => {
-            state.alarm.code = ALARM_P31_NOT_CONVERGED;
-            state.alarm.lit = true;
+            state.alarm.raise(ALARM_P31_NOT_CONVERGED, crate::tables::alarm_codes::SITE_P31);
         }
         Err(_) => {
-            state.alarm.code = ALARM_P31_NO_TARGET;
-            state.alarm.lit = true;
+            state.alarm.raise(ALARM_P31_NO_TARGET, crate::tables::alarm_codes::SITE_P31);
         }
         Ok(csi) => {
             // Convert LVLH delta-V to inertial. lvlh_to_inertial uses RSW convention
@@ -547,10 +544,10 @@ mod tests {
         // Access via `super::` path — child modules can see parent private items.
         // Value: 0o01434 (octal) = 796 (decimal), verified from p31.rs source.
         assert_eq!(
-            state.alarm.code,
+            state.alarm.code(),
             super::ALARM_P31_NO_TARGET,
             "alarm.code must be ALARM_P31_NO_TARGET (0o01434 = 796), got {}",
-            state.alarm.code
+            state.alarm.code()
         );
         assert!(state.alarm.lit, "alarm.lit must be true");
     }

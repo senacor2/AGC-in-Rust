@@ -191,7 +191,7 @@ fn tc_handoff_p40_to_p00_to_p30() {
         state.pending_maneuver.is_none(),
         "pending_maneuver must remain consumed"
     );
-    assert_eq!(state.alarm.code, 0, "no alarm at boundary #1");
+    assert_eq!(state.alarm.code(), 0, "no alarm at boundary #1");
     let achieved = norm(state.burn.accumulated_dv_inertial);
     assert!(
         (achieved - TARGET_DV_MS as f64).abs() < 5.0,
@@ -232,7 +232,7 @@ fn tc_handoff_p40_to_p00_to_p30() {
             "csm_state.velocity[{i}] drift across P00 = {dv} m/s"
         );
     }
-    assert_eq!(state.alarm.code, 0, "no alarm at boundary #2");
+    assert_eq!(state.alarm.code(), 0, "no alarm at boundary #2");
 
     // ── Boundary #3: V37 E30 E selects P30 again — clean handoff again ───────
     let phase_p30_again = ScenarioBuilder::new("handoff_p40_p00/reselect_p30")
@@ -251,7 +251,7 @@ fn tc_handoff_p40_to_p00_to_p30() {
 
     assert_eq!(state.major_mode, 30, "P30 must own major_mode on reselect");
     assert_eq!(state.dsky.prog, 30, "DSKY PROG must read 30");
-    assert_eq!(state.alarm.code, 0, "no alarm at boundary #3");
+    assert_eq!(state.alarm.code(), 0, "no alarm at boundary #3");
     assert!(
         state.servicer_exit.is_none(),
         "no stale SERVICER hook after re-selecting P30"
@@ -352,7 +352,7 @@ fn tc_handoff_p23_marks_to_p30_targeting() {
 
     assert_eq!(state.csm_nav.mark_count, 5, "five marks accepted");
     assert_eq!(state.csm_nav.reject_count, 0, "no marks rejected");
-    assert_eq!(state.alarm.code, 0, "no P23 alarms");
+    assert_eq!(state.alarm.code(), 0, "no P23 alarms");
 
     // P23 must have moved the state at least slightly toward the synthetic
     // truth. Without a measurable change there is nothing to test — fail
@@ -817,5 +817,5 @@ fn tc_handoff_p52_alignment_to_burn() {
 
     // REFSMMAT must not have been written back by the SERVICER itself.
     assert_eq!(state.refsmmat, refsmmat_after_p52, "SERVICER must not mutate REFSMMAT");
-    assert_eq!(state.alarm.code, 0, "no alarms during the P52 → burn handoff");
+    assert_eq!(state.alarm.code(), 0, "no alarms during the P52 → burn handoff");
 }
