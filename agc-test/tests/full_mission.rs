@@ -356,7 +356,7 @@ fn tc_full_mission_apollo_8_end_to_end() {
     let rdot_v_1 = dot(r1_hat, v1);
     assert!(rdot_v_1 > 0.0, "phase 1 boundary: must be outbound");
     assert_eq!(state.csm_state.frame, Frame::EarthInertial);
-    assert_eq!(state.alarm.code, 0, "phase 1 boundary: no AGC alarms");
+    assert_eq!(state.alarm.code(), 0, "phase 1 boundary: no AGC alarms");
 
     // ─────────────────────────────────────────────────────────────────────────
     // Phase 2 — Trans-lunar coast (six sub-checkpoints)
@@ -379,7 +379,7 @@ fn tc_full_mission_apollo_8_end_to_end() {
         .expect_major_mode(0)
         .build();
     run_scenario(&phase2_p00, &mut state, &mut hw);
-    state.alarm.code = 0; // Clear residual P15 alarms before the trans-lunar coast checkpoints.
+    state.alarm.fifo[2] = 0; // Clear residual P15 alarms before the trans-lunar coast checkpoints.
 
     let post_tli_oracle = derive_post_tli_sv();
 
@@ -535,7 +535,7 @@ fn tc_full_mission_apollo_8_end_to_end() {
     let r2_hat = unit(state.csm_state.position);
     let v2_hat = unit(state.csm_state.velocity);
     assert!(dot(r2_hat, v2_hat) < 0.0, "phase 2 boundary: must be inbound");
-    assert_eq!(state.alarm.code, 0, "phase 2 boundary: no AGC alarms");
+    assert_eq!(state.alarm.code(), 0, "phase 2 boundary: no AGC alarms");
 
     // ─────────────────────────────────────────────────────────────────────────
     // Phase 3 — LOI burn (P40, MCI, retrograde, ~300 s)
@@ -652,7 +652,7 @@ fn tc_full_mission_apollo_8_end_to_end() {
         (7_440.0..=8_040.0).contains(&period),
         "phase 3 boundary: period {period:.1} s outside [7440, 8040]"
     );
-    assert_eq!(state.alarm.code, 0, "phase 3 boundary: no AGC alarms");
+    assert_eq!(state.alarm.code(), 0, "phase 3 boundary: no AGC alarms");
 
     // ─────────────────────────────────────────────────────────────────────────
     // Phase 4 — Lunar orbit (8 revolutions, two P22 landmark marks)
@@ -670,7 +670,7 @@ fn tc_full_mission_apollo_8_end_to_end() {
     state.time = Met(LOI2_END_MET_CS);
     state.refsmmat = IDENTITY_REFSMMAT;
     p22_init(&mut state);
-    assert_eq!(state.alarm.code, 0, "phase 4 sub 1: p22_init alarm");
+    assert_eq!(state.alarm.code(), 0, "phase 4 sub 1: p22_init alarm");
 
     let phase4_1 = ScenarioBuilder::new("full_mission/phase4_1_rev1_baseline")
         .seed_state()
@@ -786,7 +786,7 @@ fn tc_full_mission_apollo_8_end_to_end() {
         total_marks >= 2,
         "phase 4 boundary: expected ≥2 P22 marks (got mark_count={total_marks}, reject_count={total_rejects})"
     );
-    assert_eq!(state.alarm.code, 0, "phase 4 boundary: no AGC alarms");
+    assert_eq!(state.alarm.code(), 0, "phase 4 boundary: no AGC alarms");
 
     // ─────────────────────────────────────────────────────────────────────────
     // Phase 5 — TEI burn (P40, MCI, prograde, ~353 s + 600 s post coast)
@@ -907,7 +907,7 @@ fn tc_full_mission_apollo_8_end_to_end() {
         r_after_coast > r_cutoff,
         "phase 5 boundary: spacecraft must be receding from Moon"
     );
-    assert_eq!(state.alarm.code, 0, "phase 5 boundary: no AGC alarms");
+    assert_eq!(state.alarm.code(), 0, "phase 5 boundary: no AGC alarms");
 
     // ─────────────────────────────────────────────────────────────────────────
     // Phase 6 — Trans-earth coast (five checkpoints)
@@ -1030,7 +1030,7 @@ fn tc_full_mission_apollo_8_end_to_end() {
         (fpa_deg_6 - EI_FPA_DEG).abs() < 5.0,
         "phase 6 boundary: FPA {fpa_deg_6:.2}° outside Apollo 8 EI ± 5°"
     );
-    assert_eq!(state.alarm.code, 0, "phase 6 boundary: no AGC alarms");
+    assert_eq!(state.alarm.code(), 0, "phase 6 boundary: no AGC alarms");
 
     // ─────────────────────────────────────────────────────────────────────────
     // Phase 7 — Entry (atmospheric P61 → P67)
@@ -1075,5 +1075,5 @@ fn tc_full_mission_apollo_8_end_to_end() {
         "MS-T7 gate: miss = {miss_km:.0} km exceeds {MISS_DISTANCE_GATE_KM:.0} km \
          (full Apollo 8 walkthrough landed too far from target)"
     );
-    assert_eq!(state.alarm.code, 0, "MS-T7 gate: no AGC alarms over full mission");
+    assert_eq!(state.alarm.code(), 0, "MS-T7 gate: no AGC alarms over full mission");
 }

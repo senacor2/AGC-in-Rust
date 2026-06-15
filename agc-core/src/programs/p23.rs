@@ -883,7 +883,7 @@ mod tests {
             state.csm_nav.w_matrix[0][1], 0.0,
             "w_matrix[0][1] must be 0 (off-diagonal)"
         );
-        assert_eq!(state.alarm.code, 0, "alarm.code must be 0 on happy path");
+        assert_eq!(state.alarm.code(), 0, "alarm.code must be 0 on happy path");
         assert!(
             !state.waitlist.is_empty(),
             "waitlist must have at least one entry after p23_init"
@@ -902,7 +902,7 @@ mod tests {
         p23_init(&mut state);
 
         assert_eq!(
-            state.alarm.code, 0o01420,
+            state.alarm.code(), 0o01420,
             "alarm.code must be 0o01420 (NO_CSM_SV)"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");
@@ -950,7 +950,7 @@ mod tests {
 
         assert_eq!(state.csm_nav.mark_count, 1, "mark_count must be 1");
         assert_eq!(state.csm_nav.reject_count, 0, "reject_count must be 0");
-        assert_eq!(state.alarm.code, 0, "alarm.code must be 0");
+        assert_eq!(state.alarm.code(), 0, "alarm.code must be 0");
 
         // Y-component W must be reduced (dominant sensitivity b[1] ≈ -3.33e-9).
         assert!(
@@ -1040,7 +1040,7 @@ mod tests {
             "consecutive_reject_count must be 1"
         );
         assert_eq!(
-            state.alarm.code, 0,
+            state.alarm.code(), 0,
             "single rejection must not raise an alarm"
         );
 
@@ -1104,7 +1104,7 @@ mod tests {
             "tracking_active must be false after 5 rejects"
         );
         assert_eq!(
-            state.alarm.code, 0o01431,
+            state.alarm.code(), 0o01431,
             "alarm.code must be 0o01431 (REJECT_OVERRIDE)"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");
@@ -1124,14 +1124,14 @@ mod tests {
             body: Body::Earth,
             angle_observed_rad: theta_pred,
         };
-        let alarm_code_before_6th = state.alarm.code;
+        let alarm_code_before_6th = state.alarm.code();
         p23_incorporate_star_horizon_mark(&mut state, mark6);
         assert_eq!(
             state.csm_nav.mark_count, 0,
             "6th mark must be discarded (mark_count stays 0)"
         );
         assert_eq!(
-            state.alarm.code, alarm_code_before_6th,
+            state.alarm.code(), alarm_code_before_6th,
             "alarm code must be unchanged after silently discarded 6th mark"
         );
     }
@@ -1177,7 +1177,7 @@ mod tests {
         p23_incorporate_star_horizon_mark(&mut state, mark);
 
         assert_eq!(
-            state.alarm.code, 0o01430,
+            state.alarm.code(), 0o01430,
             "alarm.code must be 0o01430 (TOO_CLOSE_TO_BODY)"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");
@@ -1232,7 +1232,7 @@ mod tests {
 
         assert_eq!(state.csm_nav.mark_count, 1, "mark_count must be 1");
         assert_eq!(state.csm_nav.reject_count, 0, "reject_count must be 0");
-        assert_eq!(state.alarm.code, 0, "alarm.code must be 0");
+        assert_eq!(state.alarm.code(), 0, "alarm.code must be 0");
 
         // X-component W must be reduced (b[0] ≈ 1.018e-8 — dominant).
         assert!(

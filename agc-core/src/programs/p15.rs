@@ -123,7 +123,7 @@ mod tests {
 
         init(&mut state);
 
-        assert_eq!(state.alarm.code, ALARM_WRONG_FRAME);
+        assert_eq!(state.alarm.code(), ALARM_WRONG_FRAME);
         assert_ne!(state.major_mode, P15_MAJOR_MODE);
     }
 
@@ -146,7 +146,7 @@ mod tests {
         // init sets the prog/noun then calls p15_update which flags the alarm.
         init(&mut state);
 
-        assert_eq!(state.alarm.code, ALARM_HYPERBOLIC);
+        assert_eq!(state.alarm.code(), ALARM_HYPERBOLIC);
         // Display must survive the alarm — p15_update returns early.
         assert_eq!(state.dsky.r, [111.0, 222.0, 333.0]);
     }

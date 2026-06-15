@@ -790,7 +790,7 @@ mod tests {
             state.rendezvous_nav.tracking_active,
             "tracking_active must be true"
         );
-        assert_eq!(state.alarm.code, 0, "no alarm on happy path");
+        assert_eq!(state.alarm.code(), 0, "no alarm on happy path");
 
         // Target position initialised from uplinked SV
         assert!(
@@ -852,7 +852,7 @@ mod tests {
             !state.rendezvous_nav.tracking_active,
             "tracking_active must be false"
         );
-        assert_eq!(state.alarm.code, ALARM_NO_RADAR, "alarm must be 00404");
+        assert_eq!(state.alarm.code(), ALARM_NO_RADAR, "alarm must be 00404");
         assert!(state.alarm.lit, "alarm.lit must be true");
         assert_eq!(
             state.major_mode, 20,
@@ -913,7 +913,7 @@ mod tests {
             state.rendezvous_nav.reject_count, 0,
             "reject_count must be 0"
         );
-        assert_eq!(state.alarm.code, 0, "no alarm after clean marks");
+        assert_eq!(state.alarm.code(), 0, "no alarm after clean marks");
 
         // Rough convergence: position estimate should be within 100 m of truth
         assert!(
@@ -1038,7 +1038,7 @@ mod tests {
             "reject_count must be 5"
         );
         assert_eq!(
-            state.alarm.code, ALARM_REJECT_OVERRIDE,
+            state.alarm.code(), ALARM_REJECT_OVERRIDE,
             "alarm code must be 00405 (ALARM_REJECT_OVERRIDE)"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");
@@ -1148,7 +1148,7 @@ mod tests {
             state.rendezvous_nav.tracking_active,
             "precondition: tracking active after init"
         );
-        assert_eq!(state.alarm.code, 0, "precondition: no alarm after init");
+        assert_eq!(state.alarm.code(), 0, "precondition: no alarm after init");
 
         // Record LVLH state before the mismatch cycle
         let lvlh_before = state.rendezvous_nav.lvlh_state.rho;
@@ -1163,7 +1163,7 @@ mod tests {
         p20_rendezvous_nav_cycle(&mut state);
 
         assert_eq!(
-            state.alarm.code, ALARM_FRAME_MISMATCH,
+            state.alarm.code(), ALARM_FRAME_MISMATCH,
             "alarm must be 00400 (ALARM_FRAME_MISMATCH)"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");

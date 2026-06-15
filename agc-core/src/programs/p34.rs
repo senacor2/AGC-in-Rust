@@ -344,7 +344,7 @@ mod tests {
 
         assert!(state.alarm.lit, "TC-P34-3: alarm must be lit");
         assert_eq!(
-            state.alarm.code, ALARM_P33_NO_TIG,
+            state.alarm.code(), ALARM_P33_NO_TIG,
             "TC-P34-3: alarm code should be ALARM_P33_NO_TIG (0o01441)"
         );
         assert!(
@@ -379,7 +379,7 @@ mod tests {
 
         assert!(state.alarm.lit, "TC-P34-4: alarm must be lit");
         assert_eq!(
-            state.alarm.code, ALARM_P33_DEGENERATE,
+            state.alarm.code(), ALARM_P33_DEGENERATE,
             "TC-P34-4: alarm code should be ALARM_P33_DEGENERATE (0o01443)"
         );
         assert!(
@@ -412,7 +412,7 @@ mod tests {
 
         assert!(state.alarm.lit, "TC-P34-5: alarm must be lit");
         assert_eq!(
-            state.alarm.code, ALARM_P34_TOO_CLOSE,
+            state.alarm.code(), ALARM_P34_TOO_CLOSE,
             "TC-P34-5: alarm code should be ALARM_P34_TOO_CLOSE (0o01445)"
         );
         assert!(

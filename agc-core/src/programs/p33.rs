@@ -605,7 +605,7 @@ mod tests {
             "TC-P33-6: alarm must be lit for zero target"
         );
         assert_eq!(
-            state.alarm.code, ALARM_P33_NO_TARGET,
+            state.alarm.code(), ALARM_P33_NO_TARGET,
             "TC-P33-6: alarm code should be ALARM_P33_NO_TARGET (0o01440)"
         );
         assert!(

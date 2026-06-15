@@ -184,9 +184,9 @@ fn tc_phase_lunar_orbit_apollo_8_tracks_8_revolutions() {
     state.refsmmat = IDENTITY_REFSMMAT;
     p22_init(&mut state);
     assert_eq!(
-        state.alarm.code, 0,
+        state.alarm.code(), 0,
         "Phase 1: p22_init must not raise an alarm; code = {:#06x}",
-        state.alarm.code
+        state.alarm.code()
     );
 
     let phase1 = ScenarioBuilder::new("phase_lunar_orbit/phase1_rev1_baseline")
@@ -228,9 +228,9 @@ fn tc_phase_lunar_orbit_apollo_8_tracks_8_revolutions() {
     state.refsmmat = IDENTITY_REFSMMAT;
     p22_init(&mut state);
     assert_eq!(
-        state.alarm.code, 0,
+        state.alarm.code(), 0,
         "Phase 2: p22_init must not raise an alarm; code = {:#06x}",
-        state.alarm.code
+        state.alarm.code()
     );
 
     let phase2 = ScenarioBuilder::new("phase_lunar_orbit/phase2_rev3_mount_marilyn")
@@ -311,9 +311,9 @@ fn tc_phase_lunar_orbit_apollo_8_tracks_8_revolutions() {
     state.refsmmat = IDENTITY_REFSMMAT;
     p22_init(&mut state);
     assert_eq!(
-        state.alarm.code, 0,
+        state.alarm.code(), 0,
         "Phase 4: p22_init must not raise an alarm; code = {:#06x}",
-        state.alarm.code
+        state.alarm.code()
     );
 
     let phase4 = ScenarioBuilder::new("phase_lunar_orbit/phase4_rev7_boot_hill")

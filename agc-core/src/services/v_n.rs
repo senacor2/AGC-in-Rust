@@ -1010,24 +1010,25 @@ fn noun_display(state: &crate::AgcState, noun: u8) -> Option<(f32, f32, f32)> {
     match noun {
         // N08 — Alarm-site diagnostic. All registers are raw octal.
         //   R1 = ADRES   (call-site tag captured at last alarm raise)
-        //   R2 = BBANK   (reserved; always 0 in this port)
+        //   R2 = BBANK   (always 0 in this port — Rust has no bank addressing;
+        //                 reserved slot kept for AGC display fidelity)
         //   R3 = ERCOUNT (alarm + restart counter)
         // AGC source: Comanche055/PINBALL_NOUN_TABLES.agc, N08.
         8 => Some((
             state.alarm.adres as f32,
-            state.alarm.bbank as f32,
+            0.0, // BBANK — N/A in this port
             state.alarm.ercount as f32,
         )),
 
         // N09 — Alarm-code FIFO. All registers are raw octal.
-        //   R1 = oldest (code1)
-        //   R2 = middle (code2)
-        //   R3 = newest (code)
+        //   R1 = oldest (fifo[0])
+        //   R2 = middle (fifo[1])
+        //   R3 = newest (fifo[2])
         // AGC source: Comanche055/PINBALL_NOUN_TABLES.agc, N09.
         9 => Some((
-            state.alarm.code1 as f32,
-            state.alarm.code2 as f32,
-            state.alarm.code as f32,
+            state.alarm.fifo[0] as f32,
+            state.alarm.fifo[1] as f32,
+            state.alarm.fifo[2] as f32,
         )),
 
         // N33 — TIG (Time of Ignition). R1 = hours, R2 = minutes, R3 = seconds×100.
@@ -2111,7 +2112,7 @@ mod tests {
             "TC-VN-MA3-V36: engine_thrusting must be cleared"
         );
         assert_eq!(
-            via_verb.alarm.code, 0,
+            via_verb.alarm.code(), 0,
             "TC-VN-MA3-V36: alarm code must be cleared"
         );
         assert_eq!(via_verb.vn.phase, VnPhase::Idle);
@@ -2915,7 +2916,7 @@ mod tests {
         feed_number(&mut state, 0);
         feed_key(&mut state, Key::Entr);
 
-        assert_eq!(state.alarm.code, ALARM_DV_LOAD_WITHOUT_TIG);
+        assert_eq!(state.alarm.code(), ALARM_DV_LOAD_WITHOUT_TIG);
         assert!(state.pending_maneuver.is_none());
     }
 

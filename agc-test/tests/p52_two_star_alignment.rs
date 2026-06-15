@@ -166,10 +166,10 @@ fn tc_ms_t3_p52_two_star_alignment_recovers_refsmmat() {
 
     // P52 must have succeeded: no alarm, platform is now FineAligned.
     assert_eq!(
-        state.alarm.code, 0,
+        state.alarm.code(), 0,
         "P52 must not raise an alarm on a valid two-star sighting; \
          alarm code = {:#06x}",
-        state.alarm.code
+        state.alarm.code()
     );
     assert_eq!(
         state.imu_alignment_state,

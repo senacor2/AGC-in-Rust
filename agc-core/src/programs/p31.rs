@@ -544,10 +544,10 @@ mod tests {
         // Access via `super::` path — child modules can see parent private items.
         // Value: 0o01434 (octal) = 796 (decimal), verified from p31.rs source.
         assert_eq!(
-            state.alarm.code,
+            state.alarm.code(),
             super::ALARM_P31_NO_TARGET,
             "alarm.code must be ALARM_P31_NO_TARGET (0o01434 = 796), got {}",
-            state.alarm.code
+            state.alarm.code()
         );
         assert!(state.alarm.lit, "alarm.lit must be true");
     }

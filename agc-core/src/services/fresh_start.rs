@@ -223,7 +223,7 @@ mod tests {
 
         fresh_start(&mut state);
 
-        assert_eq!(state.alarm.code, 0);
+        assert_eq!(state.alarm.code(), 0);
         assert!(!state.alarm.lit);
     }
 
@@ -410,13 +410,13 @@ mod tests {
         let mut state = AgcState::new();
         state.alarm.raise(0o1202, crate::tables::alarm_codes::SITE_EXECUTIVE);
         let er_before = state.alarm.ercount;
-        let code_before = state.alarm.code;
+        let code_before = state.alarm.code();
         let adres_before = state.alarm.adres;
 
         restart(&mut state);
 
         assert_eq!(state.alarm.ercount, er_before + 1, "ercount must increment on restart");
-        assert_eq!(state.alarm.code, code_before, "alarm code must be preserved");
+        assert_eq!(state.alarm.code(), code_before, "alarm code must be preserved");
         assert_eq!(state.alarm.adres, adres_before, "adres must be preserved");
     }
 

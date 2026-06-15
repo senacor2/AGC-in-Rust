@@ -551,7 +551,7 @@ mod tests {
             "saturated start must clear GROUP_2 to IDLE"
         );
         assert_eq!(
-            state.alarm.code, WAITLIST_OVERFLOW,
+            state.alarm.code(), WAITLIST_OVERFLOW,
             "alarm code must be 1211 (WAITLIST_OVERFLOW)"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");
@@ -593,7 +593,7 @@ mod tests {
             "saturated reschedule must clear GROUP_2 to IDLE"
         );
         assert_eq!(
-            state.alarm.code, WAITLIST_OVERFLOW,
+            state.alarm.code(), WAITLIST_OVERFLOW,
             "alarm code must be 1211 (WAITLIST_OVERFLOW)"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");

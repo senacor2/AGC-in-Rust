@@ -390,7 +390,7 @@ fn compute_pair(driver: &mut DownlinkDriver, state: &AgcState, k: usize) -> (u16
             let ez = state.dap_state.attitude_error[2] / core::f64::consts::PI;
             (encode_agc15(ez), 0)
         }
-        86 => (state.alarm.code & 0x7FFF, 0), // IMODES30/33 → alarm code
+        86 => (state.alarm.code() & 0x7FFF, 0), // IMODES30/33 → newest alarm code
         80..=93 => (0, 0),
 
         // ── Pairs 94–99: DSPTAB (display tables) ─────────────────────────────

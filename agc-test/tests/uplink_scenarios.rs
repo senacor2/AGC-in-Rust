@@ -173,7 +173,7 @@ fn tc_ups_6_alarm_01106_on_overrun() {
     let script = "V 0 6 N 1 7 E";
     run_script(&mut state, &mut hw, script);
 
-    assert_eq!(state.alarm.code, UPLINK_TOO_FAST);
+    assert_eq!(state.alarm.code(), UPLINK_TOO_FAST);
     assert!(state.alarm.lit, "01106 must light the PROG ALARM lamp");
     assert_eq!(
         state.vn.phase,

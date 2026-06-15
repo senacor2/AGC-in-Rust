@@ -380,11 +380,8 @@ impl AgcState {
                 lamp_test_active: false,
             },
             alarm: AlarmState {
-                code: 0,
-                code2: 0,
-                code1: 0,
+                fifo: [0; 3],
                 adres: 0,
-                bbank: 0,
                 ercount: 0,
                 lit: false,
             },

@@ -126,7 +126,7 @@ mod tests {
         assert_eq!(state.dsky.noun, NOUN_APO_PERI_TFF);
         assert!(!state.dsky.flashing);
         assert!(state.servicer_exit.is_some());
-        assert_eq!(state.alarm.code, 0);
+        assert_eq!(state.alarm.code(), 0);
     }
 
     /// TC-P11-2: `init` on MoonInertial frame raises alarm 230.
@@ -142,7 +142,7 @@ mod tests {
 
         init(&mut state);
 
-        assert_eq!(state.alarm.code, ALARM_WRONG_FRAME);
+        assert_eq!(state.alarm.code(), ALARM_WRONG_FRAME);
         assert!(state.alarm.lit);
         assert_ne!(
             state.major_mode, P11_MAJOR_MODE,
@@ -225,7 +225,7 @@ mod tests {
 
         p11_update(&mut state);
 
-        assert_eq!(state.alarm.code, ALARM_HYPERBOLIC_ORBIT);
+        assert_eq!(state.alarm.code(), ALARM_HYPERBOLIC_ORBIT);
         assert!(state.alarm.lit);
         // Display must be preserved.
         assert_eq!(state.dsky.r, [999.0, 888.0, 777.0]);

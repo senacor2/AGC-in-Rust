@@ -812,7 +812,7 @@ mod tests {
             state.csm_nav.tracking_active,
             "tracking_active must be true"
         );
-        assert_eq!(state.alarm.code, 0, "no alarm on happy path");
+        assert_eq!(state.alarm.code(), 0, "no alarm on happy path");
 
         // Counters zeroed
         assert_eq!(state.csm_nav.mark_count, 0, "mark_count must be 0");
@@ -937,7 +937,7 @@ mod tests {
 
         assert_eq!(state.csm_nav.mark_count, 1, "mark_count must be 1");
         assert_eq!(state.csm_nav.reject_count, 0, "reject_count must be 0");
-        assert_eq!(state.alarm.code, 0, "no alarm");
+        assert_eq!(state.alarm.code(), 0, "no alarm");
     }
 
     // ── TC-P22-4: Non-zero residual updates state ─────────────────────────────
@@ -985,7 +985,7 @@ mod tests {
         );
         assert_eq!(state.csm_nav.mark_count, 1, "mark_count must be 1");
         assert_eq!(state.csm_nav.reject_count, 0, "reject_count must be 0");
-        assert_eq!(state.alarm.code, 0, "no alarm");
+        assert_eq!(state.alarm.code(), 0, "no alarm");
     }
 
     // ── TC-P22-5: Outlier mark rejected ──────────────────────────────────────
@@ -1080,7 +1080,7 @@ mod tests {
         );
         assert_eq!(state.csm_nav.reject_count, 5, "reject_count must be 5");
         assert_eq!(
-            state.alarm.code, LANDMARK_REJECT,
+            state.alarm.code(), LANDMARK_REJECT,
             "alarm code must be 01422"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");

@@ -205,7 +205,7 @@ mod tests {
         // Ground sends VERB instead of RSET → uplink-too-fast.
         let mut uplink = uplink_of(&[17]); // VERB
         poll_uplink(&mut state, &mut uplink);
-        assert_eq!(state.alarm.code, UPLINK_TOO_FAST);
+        assert_eq!(state.alarm.code(), UPLINK_TOO_FAST);
         assert!(state.alarm.lit);
         assert_eq!(
             state.vn.phase,
@@ -215,10 +215,10 @@ mod tests {
 
         // Now RSET — should clear OprErr without raising 01106 again.
         state.alarm.lit = false;
-        state.alarm.code = 0;
+        state.alarm.fifo[2] = 0;
         let mut uplink = uplink_of(&[18]); // RSET
         poll_uplink(&mut state, &mut uplink);
-        assert_eq!(state.alarm.code, 0);
+        assert_eq!(state.alarm.code(), 0);
         assert!(!state.alarm.lit);
         assert_eq!(state.vn.phase, VnPhase::Idle);
     }

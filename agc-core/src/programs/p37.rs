@@ -292,7 +292,7 @@ mod tests {
         let _ = p37_init(&mut state);
 
         assert_eq!(
-            state.alarm.code, ALARM_P37_WRONG_FRAME,
+            state.alarm.code(), ALARM_P37_WRONG_FRAME,
             "wrong frame must raise alarm 1411"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");
@@ -365,7 +365,7 @@ mod tests {
         p37_compute_tei(&mut state, Met(DEFAULT_TEI_TIG_OFFSET_CS), 21_600.0);
 
         assert_eq!(
-            state.alarm.code, ALARM_P37_BAD_TOF,
+            state.alarm.code(), ALARM_P37_BAD_TOF,
             "TOF below MIN must raise alarm 1410"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");
@@ -387,7 +387,7 @@ mod tests {
         p37_compute_tei(&mut state, Met(DEFAULT_TEI_TIG_OFFSET_CS), 720_000.0);
 
         assert_eq!(
-            state.alarm.code, ALARM_P37_BAD_TOF,
+            state.alarm.code(), ALARM_P37_BAD_TOF,
             "TOF above MAX must raise alarm 1410"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");

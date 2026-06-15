@@ -12,28 +12,21 @@
 /// Current alarm state.
 ///
 /// Holds a 3-deep FIFO of recent alarm codes (oldest → middle → newest) plus
-/// the call-site tag, BBANK reserve, and a counter that increments on every
-/// alarm raise or RESTART.  These are surfaced via the diagnostic display
-/// nouns V05N08 (call-site info) and V05N09 (alarm-code history).
+/// the call-site tag and a counter that increments on every alarm raise or
+/// RESTART.  These are surfaced via the diagnostic display nouns V05N08
+/// (call-site info) and V05N09 (alarm-code history).
 ///
 /// AGC erasable correspondence (`ERASABLE_ASSIGNMENTS.agc`):
-///   FAILREG/+1/+2 — the 3-deep alarm-code FIFO (here: `code1`, `code2`, `code`).
+///   FAILREG/+1/+2 — the 3-deep alarm-code FIFO (here: `fifo[0..3]`).
 ///   ERCOUNT       — alarm/restart counter.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AlarmState {
-    /// The most recent alarm code (0 = none). Displayed in V05N09 R3.
-    pub code: u16,
-    /// Middle alarm code in the 3-deep FIFO. Displayed in V05N09 R2.
-    pub code2: u16,
-    /// Oldest alarm code in the 3-deep FIFO. Displayed in V05N09 R1.
-    pub code1: u16,
+    /// 3-deep alarm-code FIFO: `fifo[0]` = oldest, `fifo[2]` = newest.
+    /// Displayed in V05N09 as (R1, R2, R3).
+    pub fifo: [u16; 3],
     /// Call-site / module tag captured at raise time. Displayed in V05N08 R1.
     /// Values come from `tables::alarm_codes` (`SITE_*` constants).
     pub adres: u16,
-    /// BBANK at raise time. Reserved for AGC-fidelity display — always 0 in
-    /// this port because the Rust model has no bank addressing.
-    /// Displayed in V05N08 R2.
-    pub bbank: u16,
     /// Alarm/restart counter. Incremented by every `raise` and every
     /// `services::fresh_start::restart`. Displayed in V05N08 R3.
     pub ercount: u16,
@@ -42,14 +35,20 @@ pub struct AlarmState {
 }
 
 impl AlarmState {
+    /// Most recent alarm code (newest in the FIFO).  Convenience accessor.
+    #[inline]
+    pub fn code(&self) -> u16 {
+        self.fifo[2]
+    }
+
     /// Raise an alarm with an associated call-site tag.
     ///
-    /// Shifts the FIFO: `code1 ← code2 ← code ← code`, sets `adres`,
+    /// Shifts the FIFO: `fifo[0] ← fifo[1] ← fifo[2] ← code`, sets `adres`,
     /// increments `ercount`, and lights the PROG alarm lamp.
     pub fn raise(&mut self, code: u16, adres: u16) {
-        self.code1 = self.code2;
-        self.code2 = self.code;
-        self.code = code;
+        self.fifo[0] = self.fifo[1];
+        self.fifo[1] = self.fifo[2];
+        self.fifo[2] = code;
         self.adres = adres;
         self.ercount = self.ercount.saturating_add(1);
         self.lit = true;
@@ -174,17 +173,17 @@ mod tests {
         use crate::tables::alarm_codes::SITE_EXECUTIVE;
         let mut a = AlarmState::default();
         a.raise(0o1202, SITE_EXECUTIVE);
-        assert_eq!(a.code, 0o1202);
-        assert_eq!(a.code2, 0);
-        assert_eq!(a.code1, 0);
+        assert_eq!(a.code(), 0o1202);
+        assert_eq!(a.fifo[1], 0);
+        assert_eq!(a.fifo[0], 0);
         assert_eq!(a.adres, SITE_EXECUTIVE);
         assert_eq!(a.ercount, 1);
         assert!(a.lit);
 
         a.raise(0o1211, SITE_EXECUTIVE);
-        assert_eq!(a.code, 0o1211);
-        assert_eq!(a.code2, 0o1202);
-        assert_eq!(a.code1, 0);
+        assert_eq!(a.code(), 0o1211);
+        assert_eq!(a.fifo[1], 0o1202);
+        assert_eq!(a.fifo[0], 0);
         assert_eq!(a.ercount, 2);
         assert!(a.lit);
     }
@@ -196,7 +195,7 @@ mod tests {
         a.raise(0o1410, 0o11);
         a.reset();
         assert!(!a.lit);
-        assert_eq!(a.code, 0o1410);
+        assert_eq!(a.code(), 0o1410);
         assert_eq!(a.adres, 0o11);
         assert_eq!(a.ercount, 1);
     }
@@ -213,17 +212,17 @@ mod tests {
         a.raise(0o1200, 0o02);
         a.raise(0o1300, 0o03);
 
-        assert_eq!(a.code1, 0o1100, "oldest in code1");
-        assert_eq!(a.code2, 0o1200, "middle in code2");
-        assert_eq!(a.code, 0o1300, "newest in code");
+        assert_eq!(a.fifo[0], 0o1100, "oldest in code1");
+        assert_eq!(a.fifo[1], 0o1200, "middle in code2");
+        assert_eq!(a.code(), 0o1300, "newest in code");
         assert_eq!(a.ercount, 3, "ercount must equal raise count");
         assert_eq!(a.adres, 0o03, "adres reflects most recent raise");
 
         // Fourth raise: 1100 falls off.
         a.raise(0o1400, 0o04);
-        assert_eq!(a.code1, 0o1200, "after 4th raise: 1200 is oldest");
-        assert_eq!(a.code2, 0o1300, "middle = 1300");
-        assert_eq!(a.code, 0o1400, "newest = 1400");
+        assert_eq!(a.fifo[0], 0o1200, "after 4th raise: 1200 is oldest");
+        assert_eq!(a.fifo[1], 0o1300, "middle = 1300");
+        assert_eq!(a.code(), 0o1400, "newest = 1400");
         assert_eq!(a.ercount, 4);
     }
 
@@ -247,7 +246,7 @@ mod tests {
 
         assert_eq!(state.major_mode, 0, "poodoo must return to P00");
         assert_eq!(state.dsky.prog, 0, "dsky.prog must reflect P00");
-        assert_eq!(state.alarm.code, 0o1410, "alarm.code must be set");
+        assert_eq!(state.alarm.code(), 0o1410, "alarm.code must be set");
         assert!(state.alarm.lit, "alarm.lit must be true");
         assert!(!state.dsky.flashing, "dsky.flashing must be cleared");
         assert!(state.pending_maneuver.is_none(), "pending_maneuver must be cleared");
@@ -266,11 +265,11 @@ mod tests {
         state.csm_state = leo_state();
         state.time = Met(36_000_000);
 
-        let alarm_before = state.alarm.code;
+        let alarm_before = state.alarm.code();
         gotopooh(&mut state);
 
         assert_eq!(state.major_mode, 0, "gotopooh must return to P00");
-        assert_eq!(state.alarm.code, alarm_before, "gotopooh must not raise a new alarm");
+        assert_eq!(state.alarm.code(), alarm_before, "gotopooh must not raise a new alarm");
         assert!(!state.alarm.lit, "alarm.lit must not be set by gotopooh");
 
         // Navigation state must survive.
@@ -291,6 +290,6 @@ mod tests {
 
         assert_eq!(state.major_mode, 0, "poodoo in P40 must return to P00");
         assert!(!state.engine_thrusting, "engine must be stopped");
-        assert_eq!(state.alarm.code, 0o1411, "alarm code must be set");
+        assert_eq!(state.alarm.code(), 0o1411, "alarm code must be set");
     }
 }
