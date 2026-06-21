@@ -4,6 +4,7 @@ pub mod average_g;
 pub mod backup;
 pub mod display;
 pub mod fresh_start;
+pub mod lamps;
 pub mod pinball;
 pub mod t4rupt;
 pub mod uplink;
