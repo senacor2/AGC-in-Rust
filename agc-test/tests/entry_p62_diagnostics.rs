@@ -564,8 +564,19 @@ fn read_offset(core: &CoreImage, symtab: &Symtab, symbol: &str, offset: u16) -> 
 
 /// Poll the dump file every 200 ms for up to `max_ms`, reloading on
 /// each fresh mtime. Returns `(core, dumps_seen, settle_wait_ms,
-/// settled_in_p62)` as soon as a dump arrives that shows
-/// `MODREG = 0o076`, or after `max_ms` if no such dump appears.
+/// settled_in_p62)` as soon as a dump arrives that shows the AGC
+/// truly parked at `GOFLASH V06N61` — i.e. `MODREG == 0o076` AND
+/// `CADRSTOR != 0` — or after `max_ms` if no such dump appears.
+///
+/// **Why the two-condition gate.** P62's prelude bumps `MMNUMBER`
+/// (which writes `MODREG = 0o076`) before its first
+/// `GOFLASH V06N61 → NVSUB` body has executed. `NVSUB` is what
+/// populates `CADRSTOR` (PINBALL `ENDIDLE` storage; see
+/// `PINBALL_GAME__BUTTONS_AND_LIGHTS.agc:110, 238`) and writes
+/// `DOTINC = TC NVSUBEND`. A naive `MODREG == 0o076` gate catches
+/// the brief window in between and produces a snapshot where
+/// `CADRSTOR == 0` / `DOTINC = 0`, which is not the ENDIDLE steady
+/// state the hypothesis is examining. See issue #119.
 fn wait_for_p62_parked(
     dump_path: &Path,
     symtab: &Symtab,
@@ -589,8 +600,12 @@ fn wait_for_p62_parked(
             if let Some(c) = try_load_core(dump_path) {
                 dumps_seen += 1;
                 let modreg = symtab.get("MODREG").and_then(|a| c.read_sp(a)).unwrap_or(0);
+                let cadrstor = symtab
+                    .get("CADRSTOR")
+                    .and_then(|a| c.read_sp(a))
+                    .unwrap_or(0);
                 latest_core = Some(c);
-                if modreg == 0o076 {
+                if modreg == 0o076 && cadrstor != 0 {
                     settled = true;
                     break;
                 }
