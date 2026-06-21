@@ -32,4 +32,8 @@ pub struct DskyState {
     /// Set by V35 (lamp test). The T4RUPT display shim reads this and
     /// drives every indicator lamp on for one cycle, then clears it.
     pub lamp_test_active: bool,
+    /// Snapshot of `AgcState::pinball_ticks` taken by the most recent
+    /// `services::lamps::refresh_lamps` call. The next refresh latches
+    /// `comp_acty` on iff the live counter has advanced since this value.
+    pub last_pinball_ticks_seen: u32,
 }

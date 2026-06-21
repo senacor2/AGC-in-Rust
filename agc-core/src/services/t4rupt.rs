@@ -19,6 +19,7 @@
 
 use crate::hal::AgcHardware;
 use crate::services::downlink::downlink_step;
+use crate::services::lamps::refresh_lamps;
 use crate::services::uplink::poll_uplink;
 use crate::AgcState;
 
@@ -29,14 +30,26 @@ const DOWNRUPTS_PER_T4: usize = 6;
 
 /// One T4RUPT tick.
 ///
-/// Performs:
-/// - Uplink drain ([`poll_uplink`]) — UPRUPT path from HAL to V/N.
+/// Performs (in order):
+/// - Uplink drain ([`poll_uplink`]) — UPRUPT path from HAL to V/N. Any
+///   keystrokes delivered here update `state.dsky` and bump
+///   `state.pinball_ticks` (via `feed_key` → `note_pinball_activity`).
+/// - [`refresh_lamps`] — recompute every indicator-lamp boolean so the
+///   DSKY frame that the host scheduler decodes next reflects the
+///   AGC's current internal condition. Must run before any
+///   `decode_dsky` call in the same tick.
 /// - MSFN downlink: 6 word-pairs emitted via `hw.telemetry()`.
 ///
 /// AGC source: `Comanche055/DOWN-TELEMETRY_PROGRAM.agc` — DODOWNTM driven by
 /// DOWNRUPT every 20 ms.
 pub fn t4rupt_step<H: AgcHardware>(state: &mut AgcState, hw: &mut H) {
     poll_uplink(state, hw.uplink());
+
+    // Refresh indicator lamps before the DSKY frame is decoded by the
+    // scheduler (bare-metal) or the sim's display path. Placed after
+    // poll_uplink so any uplink-driven V/N state transition is already
+    // reflected in `key_rel` / `comp_acty`.
+    refresh_lamps(state);
 
     // Drain 6 downlink word-pairs (≈ 120 ms worth of DOWNRUPT output).
     for _ in 0..DOWNRUPTS_PER_T4 {

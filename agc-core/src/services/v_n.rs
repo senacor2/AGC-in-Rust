@@ -230,7 +230,12 @@ pub fn request_v50(state: &mut crate::AgcState, noun: u8, on_proceed: fn(&mut cr
 /// to the appropriate handler. After the phase transitions,
 /// `sync_display` mirrors the in-progress entry back into `state.dsky`
 /// so the crew sees every keystroke as they type it.
+///
+/// Each call also records one PINBALL tick via
+/// [`crate::services::lamps::note_pinball_activity`] so the next
+/// `refresh_lamps` pass can latch `COMP ACTY` for a T4 window.
 pub fn feed_key(state: &mut crate::AgcState, key: Key) {
+    crate::services::lamps::note_pinball_activity(state);
     feed_key_inner(state, key);
     sync_display(state);
 }
@@ -1509,7 +1514,19 @@ fn v94_attitude_maneuver(state: &mut crate::AgcState) {
 }
 
 /// V37 — Select major mode / program.
+///
+/// On a successful major-mode change:
+/// - Clears the RESTART indicator (`state.dsky.restart_flag`). The lamp
+///   is latched by `services::fresh_start::restart` to signal that the
+///   CMC was forced through a restart sequence; the next deliberate
+///   V37 dispatch is the documented acknowledgement that wipes it. See
+///   #137 driver table.
+/// - Clears STANDBY (`state.dsky.stby`) when transitioning *out of*
+///   P06. P06 (`init`) lit STBY on entry; any other major mode means
+///   the crew has powered the CMC back up.
 fn v37_program_select(state: &mut crate::AgcState, noun: u8) {
+    use crate::programs::p06::P06_MAJOR_MODE;
+
     let slot = noun as usize;
     if slot >= PROGRAM_TABLE.len() {
         raise_opr_err(state);
@@ -1518,6 +1535,10 @@ fn v37_program_select(state: &mut crate::AgcState, noun: u8) {
     match PROGRAM_TABLE[slot] {
         Some(init_fn) => {
             let _prio = init_fn(state);
+            state.dsky.restart_flag = false;
+            if state.major_mode != P06_MAJOR_MODE {
+                state.dsky.stby = false;
+            }
         }
         None => raise_opr_err(state),
     }
@@ -1992,6 +2013,81 @@ mod tests {
 
         assert_eq!(state.major_mode, 30);
         assert_eq!(state.vn.phase, VnPhase::Idle);
+    }
+
+    // ── TC-VN-3-RESTART: V37 dispatch clears restart_flag (#137) ────────────
+
+    /// V37 acknowledges the RESTART by clearing the lamp the next
+    /// successful major-mode change. Per #137 driver table.
+    #[test]
+    fn tc_vn_3_v37_clears_restart_flag() {
+        let mut state = AgcState::new();
+        state.dsky.restart_flag = true;
+
+        feed(
+            &mut state,
+            &[Key::Verb, d(3), d(7), Key::Entr, d(0), d(0), Key::Entr],
+        );
+
+        assert_eq!(state.major_mode, 0);
+        assert!(
+            !state.dsky.restart_flag,
+            "V37 dispatch must clear restart_flag"
+        );
+    }
+
+    /// A failed V37 dispatch (unknown program slot) must NOT clear the
+    /// restart lamp — only a *successful* major-mode change does.
+    #[test]
+    fn tc_vn_3_v37_unknown_preserves_restart_flag() {
+        let mut state = AgcState::new();
+        state.dsky.restart_flag = true;
+
+        // P99 has no entry in PROGRAM_TABLE.
+        feed(
+            &mut state,
+            &[Key::Verb, d(3), d(7), Key::Entr, d(9), d(9), Key::Entr],
+        );
+
+        assert!(
+            state.dsky.restart_flag,
+            "failed V37 must leave restart_flag set"
+        );
+        assert!(state.dsky.opr_err);
+    }
+
+    // ── TC-VN-3-STBY: V37 to non-P06 clears stby (#137) ─────────────────────
+
+    /// Leaving P06 via V37 to any non-P06 mode clears the STBY lamp.
+    #[test]
+    fn tc_vn_3_v37_non_p06_clears_stby() {
+        let mut state = AgcState::new();
+        // Enter P06 directly so STBY is set realistically.
+        crate::programs::p06::init(&mut state);
+        assert!(state.dsky.stby, "fixture: P06 init must set STBY");
+
+        feed(
+            &mut state,
+            &[Key::Verb, d(3), d(7), Key::Entr, d(0), d(0), Key::Entr],
+        );
+
+        assert_eq!(state.major_mode, 0, "V37 E00 E must select P00");
+        assert!(!state.dsky.stby, "V37 to non-P06 must clear STBY");
+    }
+
+    /// Re-entering P06 via V37 must NOT clear STBY (P06's own init
+    /// re-lights it; the V37 dispatch must not race with that).
+    #[test]
+    fn tc_vn_3_v37_p06_keeps_stby_lit() {
+        let mut state = AgcState::new();
+
+        feed(
+            &mut state,
+            &[Key::Verb, d(3), d(7), Key::Entr, d(0), d(6), Key::Entr],
+        );
+
+        assert_eq!(state.major_mode, crate::programs::p06::P06_MAJOR_MODE);
+        assert!(state.dsky.stby, "V37 → P06 must leave STBY lit");
     }
 
     // ── TC-VN-3b: V37 N## ENTR raises OPR ERR (not a valid V37 form) ─────────

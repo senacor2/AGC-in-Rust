@@ -238,6 +238,7 @@ impl WaitlistPump {
 
             match state.waitlist.pop_task() {
                 Some((task, _next_delta)) => {
+                    agc_core::services::lamps::note_pinball_activity(state);
                     task(state);
                     self.head_remaining_cs = state
                         .waitlist

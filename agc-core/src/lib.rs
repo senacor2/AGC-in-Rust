@@ -294,6 +294,17 @@ pub struct AgcState {
     ///
     /// AGC source: `Comanche055/DOWN-TELEMETRY_PROGRAM.agc` — DODOWNTM handler.
     pub downlink: DownlinkDriver,
+
+    // ── Scheduler / PINBALL activity counter ─────────────────────────────────
+    /// Free-running counter incremented on every PINBALL keystroke
+    /// (`services::v_n::feed_key`) and every Waitlist task dispatch.
+    ///
+    /// Read by `services::lamps::refresh_lamps` to drive the DSKY
+    /// `COMP ACTY` lamp: the lamp lights whenever the counter has
+    /// advanced since `state.dsky.last_pinball_ticks_seen` and clears
+    /// after the next quiet T4 window. Wraps freely on overflow — only
+    /// the inequality matters.
+    pub pinball_ticks: u32,
 }
 
 impl Default for AgcState {
@@ -378,6 +389,7 @@ impl AgcState {
                 comp_acty: false,
                 tracker: false,
                 lamp_test_active: false,
+                last_pinball_ticks_seen: 0,
             },
             alarm: AlarmState {
                 fifo: [0; 3],
@@ -421,6 +433,7 @@ impl AgcState {
             p23_preferred_attitude: None,
             launch_lat_rad: 0.4986, // Kennedy Space Center default
             downlink: DownlinkDriver::new(),
+            pinball_ticks: 0,
         }
     }
 }

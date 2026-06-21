@@ -137,6 +137,7 @@ impl Executive {
                 // rejected by the borrow checker, so the task fn pointer is
                 // extracted first and then called separately.
                 if let Some((task, next_delta)) = state.waitlist.pop_task() {
+                    crate::services::lamps::note_pinball_activity(state);
                     task(state);
                     if let Some(cs) = next_delta {
                         hw.timers().arm_t3(cs);
@@ -166,6 +167,12 @@ impl Executive {
                     }
                     state.last_drift_comp_time = state.time;
                 }
+
+                // Refresh indicator lamps from internal state so the DSKY
+                // frame below reflects current alarm / IMU / nav-mark
+                // / KEY-REL / COMP-ACTY conditions rather than the stale
+                // defaults left in place by FRESH START.
+                crate::services::lamps::refresh_lamps(state);
 
                 // Emit the DSKY frame only when it has changed since the last
                 // T4 tick. decode_dsky is pure computation; emit_dsky_to_hw
