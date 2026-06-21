@@ -44,6 +44,27 @@ impl SimTimers {
 }
 pub struct SimDsky {
     pub keys: std::collections::VecDeque<u8>,
+    /// Recorded `set_lamp(lamp, on)` invocations in dispatch order.
+    ///
+    /// Populated by [`Dsky::set_lamp`] whenever
+    /// `services::pinball::emit_dsky_to_hw` walks the lamp table. The
+    /// sim's interactive UI does not depend on these events — it reads
+    /// the lamp truth via `decode_dsky(&state.dsky)` — so the recorder
+    /// exists purely as a debug-log / test surface (#138).
+    ///
+    /// Tests drain the queue with [`SimDsky::drain_lamp_events`] after
+    /// running enough sim ticks (and a manual `emit_dsky_to_hw`) to
+    /// drive the expected lamp transitions.
+    pub lamp_events: std::collections::VecDeque<(Lamp, bool)>,
+}
+
+impl SimDsky {
+    /// Take and clear every recorded `set_lamp` event since the last
+    /// drain. Events are returned in dispatch order
+    /// (oldest → newest).
+    pub fn drain_lamp_events(&mut self) -> Vec<(Lamp, bool)> {
+        self.lamp_events.drain(..).collect()
+    }
 }
 pub struct SimImu {
     pub pipa: [i16; 3],
@@ -153,7 +174,9 @@ impl Timers for SimTimers {
 impl Dsky for SimDsky {
     fn write_row(&mut self, _row: u8, _data: u16) {}
     fn clear_row(&mut self, _row: u8) {}
-    fn set_lamp(&mut self, _lamp: Lamp, _on: bool) {}
+    fn set_lamp(&mut self, lamp: Lamp, on: bool) {
+        self.lamp_events.push_back((lamp, on));
+    }
     fn set_flash(&mut self, _on: bool) {}
     fn read_key(&mut self) -> Option<u8> {
         self.keys.pop_front()
@@ -283,6 +306,7 @@ impl SimHardware {
             timers: SimTimers::new(),
             dsky: SimDsky {
                 keys: Default::default(),
+                lamp_events: Default::default(),
             },
             imu: SimImu {
                 pipa: [0; 3],
@@ -453,6 +477,101 @@ mod tests {
         hw.dsky().clear_row(1);
         hw.dsky().set_lamp(Lamp::ProgAlarm, true);
         hw.dsky().set_flash(true);
+    }
+
+    /// TC-DSKY-04: `set_lamp` records every call into `lamp_events`,
+    /// `drain_lamp_events` returns them in dispatch order and resets
+    /// the queue.
+    #[test]
+    fn tc_dsky_04_set_lamp_records_events() {
+        let mut hw = SimHardware::new();
+        hw.dsky().set_lamp(Lamp::ProgAlarm, true);
+        hw.dsky().set_lamp(Lamp::NoAtt, true);
+        hw.dsky().set_lamp(Lamp::ProgAlarm, false);
+
+        let events = hw.dsky.drain_lamp_events();
+        assert_eq!(
+            events,
+            vec![
+                (Lamp::ProgAlarm, true),
+                (Lamp::NoAtt, true),
+                (Lamp::ProgAlarm, false),
+            ]
+        );
+        assert!(
+            hw.dsky.drain_lamp_events().is_empty(),
+            "second drain must return nothing"
+        );
+    }
+
+    /// TC-DSKY-05: end-to-end SERVICER → refresh_lamps →
+    /// `emit_dsky_to_hw` → `set_lamp` recorder.
+    ///
+    /// V46 ENTR brings up the SERVICER. The keystroke alone bumps
+    /// `pinball_ticks` (latching COMP ACTY for the next T4 window),
+    /// and the IMU is at its FRESH-START default of `Caged` (so NO ATT
+    /// must be lit). After one T4Pump tick + a manual
+    /// `emit_dsky_to_hw`, the recorded events must reflect both lamps
+    /// being driven on, with PROG ALARM staying off (no alarm raised).
+    #[test]
+    fn tc_dsky_05_servicer_drives_recorded_lamp_events() {
+        use crate::runtime::T4Pump;
+        use agc_core::services::pinball::{decode_dsky, emit_dsky_to_hw};
+        use agc_core::services::v_n::{feed_key, Key};
+        use agc_core::AgcState;
+
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        let mut t4 = T4Pump::new();
+
+        // Drive V46 ENTR through the V/N processor — establishes the
+        // SERVICER cycle and bumps the PINBALL tick counter.
+        for k in [Key::Verb, Key::Digit(4), Key::Digit(6), Key::Entr] {
+            feed_key(&mut state, k);
+        }
+
+        // One T4 tick fires t4rupt_step → refresh_lamps. Sim ticks do
+        // not themselves call emit_dsky_to_hw (the interactive UI reads
+        // via decode_dsky), so drive that step manually here — exactly
+        // what the test/debug surface is intended for.
+        t4.tick(&mut state, &mut hw);
+        let frame = decode_dsky(&state.dsky);
+        emit_dsky_to_hw(&frame, hw.dsky());
+
+        let events = hw.dsky.drain_lamp_events();
+
+        // Each lamp must appear exactly once per emit.
+        assert_eq!(
+            events.len(),
+            10,
+            "emit_dsky_to_hw must drive all 10 HAL lamps; got {events:?}"
+        );
+
+        let find = |lamp: Lamp| -> Option<bool> {
+            events.iter().find(|(l, _)| *l == lamp).map(|(_, on)| *on)
+        };
+
+        assert_eq!(find(Lamp::NoAtt), Some(true), "Caged IMU → NO ATT lit");
+        assert_eq!(
+            find(Lamp::CompActy),
+            Some(true),
+            "PINBALL keystroke → COMP ACTY latched"
+        );
+        assert_eq!(
+            find(Lamp::ProgAlarm),
+            Some(false),
+            "no alarm raised → PROG ALARM off"
+        );
+        assert_eq!(
+            find(Lamp::Stby),
+            Some(false),
+            "no P06 entry → STBY off"
+        );
+        assert_eq!(
+            find(Lamp::GimbalLock),
+            Some(false),
+            "CDU at 0° → GIMBAL LOCK off"
+        );
     }
 
     // ── IMU (TC-IMU-01 through TC-IMU-03) ───────────────────────────────────
