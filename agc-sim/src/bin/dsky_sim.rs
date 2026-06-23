@@ -207,6 +207,7 @@ fn run<W: Write>(out: &mut W) -> io::Result<()> {
                 state.time.0 as u64,
                 &status,
                 flash_on,
+                state.alarm.code(),
             )?;
             last_frame = Instant::now();
         }
