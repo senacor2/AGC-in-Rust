@@ -65,21 +65,10 @@ pub const TPI_NOMINAL_ELEVATION_RAD: f64 = 0.4793;
 //
 // P33/P34 use codes 0o01440–0o01445 (no collision).
 
-/// Alarm 01440 (octal): target state is zero — P20 never ran or radar lost.
-pub(crate) const ALARM_P33_NO_TARGET: u16 = 0o01440;
-
-/// Alarm 01441 (octal): required input not available (pending_tig is None for
-/// P33; tpi_arrival_epoch is None for P34).
-pub(crate) const ALARM_P33_NO_TIG: u16 = 0o01441;
-
-/// Alarm 01442 (octal): target state epoch is stale (non-fatal warning).
-pub(crate) const ALARM_P33_STALE_TARGET: u16 = 0o01442;
-
-/// Alarm 01443 (octal): degenerate geometry or invalid time interval.
-pub(crate) const ALARM_P33_DEGENERATE: u16 = 0o01443;
-
-/// Alarm 01444 (octal): Lambert non-convergence or anti-parallel vectors.
-pub(crate) const ALARM_P33_LAMBERT: u16 = 0o01444;
+pub(crate) use crate::tables::alarm_codes::{
+    ALARM_P33_DEGENERATE, ALARM_P33_LAMBERT, ALARM_P33_NO_TARGET, ALARM_P33_NO_TIG,
+    ALARM_P33_STALE_TARGET,
+};
 
 // ── Result and error types ─────────────────────────────────────────────────────
 

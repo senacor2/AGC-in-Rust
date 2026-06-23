@@ -30,15 +30,18 @@ pub const UPLINK_TOO_FAST: u16 = 0o1106;
 // ── P22 (Orbital Navigation / Landmark Tracking) ──────────────────────────────
 //
 // AGC source: alarms raised by the P22 measurement-incorporation pipeline.
-// p20/p21/p23 still define local duplicates of FRAME_MISMATCH and NO_CSM_SV
-// pending a follow-up sweep — see PR #114 description.
+// These three are also reused by P20/P21/P23 (the #114/#115 sweep removed the
+// per-program duplicate `const`s that previously shadowed them).
 
 /// CSM state-vector frame is not a navigation frame (only `StableMember`
 /// triggers this; both ECI and MCI are valid for landmark tracking).
+/// Reused by P20 and P23.
 pub const FRAME_MISMATCH: u16 = 0o00400;
-/// No valid CSM state vector (epoch == 0). Raised at P22 init.
+/// No valid CSM state vector (epoch == 0). Raised at P22 init. Reused by
+/// P21 and P23.
 pub const NO_CSM_SV: u16 = 0o01420;
-/// P22 W-matrix diagonal went negative (loss of positive definiteness).
+/// CSM W-matrix diagonal went negative (loss of positive definiteness).
+/// Reused by P20 and P23 for their rendezvous/cislunar W-matrix guard.
 pub const CSM_W_OVERFLOW: u16 = 0o01421;
 /// Five consecutive landmark marks rejected by the 3-sigma gate (P22).
 pub const LANDMARK_REJECT: u16 = 0o01422;
@@ -46,6 +49,127 @@ pub const LANDMARK_REJECT: u16 = 0o01422;
 pub const BAD_LANDMARK_INDEX: u16 = 0o01424;
 /// CSM-to-landmark slant range below the safety floor (P22).
 pub const LANDMARK_RANGE_ZERO: u16 = 0o01425;
+
+// ── Per-program alarm codes ───────────────────────────────────────────────────
+//
+// Centralised here per the architecture doc (§ "Constant tables") and issue
+// #115. Names are program-scoped so codes that share a value across programs
+// stay distinct symbols. NOTE: a few octal values are intentionally reused
+// across unrelated programs (e.g. 0o01430–0o01432 appear in both P23 and P29);
+// these are pre-existing collisions preserved by the centralisation sweep, not
+// introduced by it.
+
+// P01/P02 — gyrocompass alignment.
+/// P02 invoked from a gyrocompass state that forbids it.
+pub const ALARM_GYROCOMPASS_WRONG_STATE: u16 = 235;
+
+// P11 — earth-orbit insertion monitor.
+/// P11 state vector is hyperbolic (e ≥ 1).
+pub const ALARM_P11_HYPERBOLIC_ORBIT: u16 = 229;
+/// P11 entered with the CSM state vector in the wrong frame.
+pub const ALARM_P11_WRONG_FRAME: u16 = 230;
+
+// P15 — TLI / trans-lunar injection targeting.
+/// P15 entered with the CSM state vector in the wrong frame.
+pub const ALARM_P15_WRONG_FRAME: u16 = 236;
+/// P15 trajectory solution is hyperbolic.
+pub const ALARM_P15_HYPERBOLIC: u16 = 237;
+
+// P20 — rendezvous navigation.
+/// P20 radar mark requested but no tracking source available.
+pub const ALARM_P20_NO_RADAR: u16 = 0o00404;
+/// P20 mark rejected by the editing gate and the crew override expired.
+pub const ALARM_P20_REJECT_OVERRIDE: u16 = 0o00405;
+
+// P23 — cislunar star/horizon navigation.
+/// P23 lost star lock during a sighting.
+pub const ALARM_P23_NO_STAR_LOCK: u16 = 0o01426;
+/// P23 measured a geometrically invalid star/horizon angle.
+pub const ALARM_P23_BAD_ANGLE: u16 = 0o01427;
+/// P23 sighting body is too close to the line of sight.
+pub const ALARM_P23_TOO_CLOSE_TO_BODY: u16 = 0o01430;
+/// P23 mark rejected by the editing gate and the crew override expired.
+pub const ALARM_P23_REJECT_OVERRIDE: u16 = 0o01431;
+/// P23 star/horizon slant range below the safety floor.
+pub const ALARM_P23_LANDMARK_RANGE_ZERO: u16 = 0o01432;
+
+// P29 — geodetic-target time-of-event solver.
+/// P29 has no valid CSM state vector.
+pub const ALARM_P29_NO_CSM_SV: u16 = 0o01430;
+/// P29 orbit is hyperbolic.
+pub const ALARM_P29_HYPERBOLIC: u16 = 0o01431;
+/// P29 solver failed to converge.
+pub const ALARM_P29_NO_CONV: u16 = 0o01432;
+
+// P30 — external-ΔV targeting.
+/// P30 TIG is in the past.
+pub const ALARM_P30_TIG_IN_PAST: u16 = 210;
+
+// P31 — rendezvous-final targeting.
+/// P31 has no valid target.
+pub const ALARM_P31_NO_TARGET: u16 = 0o01434;
+/// P31 targeting failed to converge.
+pub const ALARM_P31_NOT_CONVERGED: u16 = 0o01435;
+
+// P32 — coelliptic-sequence targeting.
+/// P32 has no valid target.
+pub const ALARM_P32_NO_TARGET: u16 = 0o01436;
+/// P32 geometry is degenerate.
+pub const ALARM_P32_DEGENERATE: u16 = 0o01437;
+
+// P33 — constant-differential-height targeting.
+/// P33 has no valid target.
+pub const ALARM_P33_NO_TARGET: u16 = 0o01440;
+/// P33 has no staged TIG.
+pub const ALARM_P33_NO_TIG: u16 = 0o01441;
+/// P33 target is stale.
+pub const ALARM_P33_STALE_TARGET: u16 = 0o01442;
+/// P33 geometry is degenerate.
+pub const ALARM_P33_DEGENERATE: u16 = 0o01443;
+/// P33 Lambert solver failed.
+pub const ALARM_P33_LAMBERT: u16 = 0o01444;
+
+// P34 — transfer-phase-initiation targeting (shares P33's solver alarms).
+/// P34 target is closer than the safety floor.
+pub const ALARM_P34_TOO_CLOSE: u16 = 0o01445;
+
+// P37 — return-to-earth targeting.
+/// P37 time-of-flight is out of range.
+pub const ALARM_P37_BAD_TOF: u16 = 1410;
+/// P37 entered with the state vector in the wrong frame.
+pub const ALARM_P37_WRONG_FRAME: u16 = 1411;
+
+// P40/P41 — SPS / RCS powered-flight.
+/// P40/P41 armed with no pending maneuver.
+pub const ALARM_P40_NO_PENDING_MANEUVER: u16 = 224;
+/// P40/P41 TIG is in the past.
+pub const ALARM_P40_TIG_IN_PAST: u16 = 225;
+/// P40/P41 ΔV is below the minimum burn threshold.
+pub const ALARM_P40_DV_TOO_SMALL: u16 = 226;
+/// P40 burn too small for the SPS regime.
+pub const ALARM_P40_WRONG_REGIME: u16 = 227;
+/// P41 burn too large for the RCS regime.
+pub const ALARM_P41_WRONG_REGIME: u16 = 228;
+
+// P51/P52 — IMU alignment.
+/// Two selected stars are collinear; TRIAD cannot build a basis.
+pub const ALARM_COLLINEAR_STARS: u16 = 220;
+/// P52 invoked while the platform is still caged.
+pub const ALARM_PLATFORM_CAGED: u16 = 221;
+
+// P61–P67 — entry guidance.
+/// P62 entered in the wrong phase.
+pub const ALARM_P62_WRONG_PHASE: u16 = 231;
+/// P63 entered in the wrong phase.
+pub const ALARM_P63_WRONG_PHASE: u16 = 232;
+/// P64 entered before its phase was reached.
+pub const ALARM_P64_EARLY: u16 = 233;
+/// P67 entered in the wrong phase.
+pub const ALARM_P67_WRONG_PHASE: u16 = 234;
+
+// V/N processor.
+/// V25 N81 (ΔV load) entered without a prior TIG load.
+pub const ALARM_DV_LOAD_WITHOUT_TIG: u16 = 240;
 
 // ── Call-site tags (ADRES field on AlarmState) ────────────────────────────────
 //

@@ -1790,8 +1790,7 @@ fn commit_p27_time(state: &mut crate::AgcState, verb: u8, values: [i64; 3]) {
 
 // ── Noun scale table and commit handlers ─────────────────────────────────────
 
-/// Program alarm raised when V25 N81 is entered without a prior TIG load.
-const ALARM_DV_LOAD_WITHOUT_TIG: u16 = 240;
+use crate::tables::alarm_codes::ALARM_DV_LOAD_WITHOUT_TIG;
 
 /// Convert the raw accumulated integer into the noun's target unit.
 fn noun_scale(noun: u8) -> f64 {

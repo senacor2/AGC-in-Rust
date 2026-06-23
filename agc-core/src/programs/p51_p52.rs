@@ -38,11 +38,7 @@ const NOUN_REFSMMAT_OK: u8 = 93;
 
 // ── Program alarms ────────────────────────────────────────────────────────────
 
-/// Program alarm: star vectors collinear → TRIAD cannot build a basis.
-const ALARM_COLLINEAR_STARS: u16 = 220;
-
-/// Program alarm: P52 invoked while the platform is still caged.
-const ALARM_PLATFORM_CAGED: u16 = 221;
+use crate::tables::alarm_codes::{ALARM_COLLINEAR_STARS, ALARM_PLATFORM_CAGED};
 
 // ── Entry points registered in PROGRAM_TABLE ──────────────────────────────────
 

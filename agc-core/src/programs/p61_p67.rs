@@ -42,10 +42,9 @@ const VERB_MONITOR: u8 = 16;
 
 // ── Program alarms ────────────────────────────────────────────────────────────
 
-const ALARM_P62_WRONG_PHASE: u16 = 231;
-const ALARM_P63_WRONG_PHASE: u16 = 232;
-const ALARM_P64_EARLY: u16 = 233;
-const ALARM_P67_WRONG_PHASE: u16 = 234;
+use crate::tables::alarm_codes::{
+    ALARM_P62_WRONG_PHASE, ALARM_P63_WRONG_PHASE, ALARM_P64_EARLY, ALARM_P67_WRONG_PHASE,
+};
 
 // ── EntryPhase ────────────────────────────────────────────────────────────────
 

@@ -48,8 +48,7 @@ pub const R_EARTH: f64 = 6_371_000.0; // m
 
 // ── Alarm codes ─────────────────────────────────────────────────────────────────
 
-/// Alarm 01420 (octal): no valid CSM state vector (epoch == 0).
-const ALARM_NO_CSM_SV: u16 = 0o01420;
+use crate::tables::alarm_codes::NO_CSM_SV as ALARM_NO_CSM_SV;
 
 // ── Result type ────────────────────────────────────────────────────────────────
 

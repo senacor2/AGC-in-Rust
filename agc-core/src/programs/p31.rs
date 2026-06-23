@@ -59,11 +59,7 @@ pub const CSI_TO_CDH_INTERVAL_S: f64 = 2700.0;
 // P23 uses 0o01430 (TOO_CLOSE_TO_BODY), 0o01431 (REJECT_OVERRIDE), 0o01432 (LANDMARK_RANGE_ZERO).
 // Therefore P31/P32 use codes 0o01434–0o01437.
 
-/// Alarm 01434 (octal): target state is zero — P20 never ran or radar lost.
-const ALARM_P31_NO_TARGET: u16 = 0o01434;
-
-/// Alarm 01435 (octal): CSI Newton iteration did not converge in CSI_MAX_ITER steps.
-const ALARM_P31_NOT_CONVERGED: u16 = 0o01435;
+use crate::tables::alarm_codes::{ALARM_P31_NO_TARGET, ALARM_P31_NOT_CONVERGED};
 
 // ── Result and error types ─────────────────────────────────────────────────────
 

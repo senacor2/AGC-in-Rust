@@ -19,12 +19,7 @@ use crate::types::Met;
 /// Job priority for P37 (background computation, same tier as P30/P31).
 pub const PRIORITY: JobPriority = 16;
 
-/// Alarm raised when P37 receives a TOF outside `[MIN_TEI_TOF_S, MAX_TEI_TOF_S]`.
-pub const ALARM_P37_BAD_TOF: u16 = 1410;
-
-/// Alarm raised when P37 is invoked with a CSM state vector that is not in
-/// `Frame::MoonInertial`.
-pub const ALARM_P37_WRONG_FRAME: u16 = 1411;
+pub use crate::tables::alarm_codes::{ALARM_P37_BAD_TOF, ALARM_P37_WRONG_FRAME};
 
 /// Default TIG offset: 30 minutes from current MET (centiseconds).
 pub const DEFAULT_TEI_TIG_OFFSET_CS: u32 = 180_000;
