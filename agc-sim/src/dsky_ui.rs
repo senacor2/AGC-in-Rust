@@ -39,6 +39,10 @@ pub const HEIGHT: u16 = 39;
 const ACTIVE: Color = Color::White;
 /// Colour used for inactive lamps, panel frames, legends.
 const DIM: Color = Color::DarkGrey;
+/// Caution-class indicator lamps (yellow) — O'Brien §7.2.
+const CAUTION: Color = Color::Yellow;
+/// Warning-class indicator lamps (red) — O'Brien §7.2.
+const WARNING: Color = Color::Red;
 /// Accent colour used for the MET counter.
 const ACCENT: Color = Color::Grey;
 /// Colour for firing RCS jets.
@@ -72,6 +76,13 @@ pub struct PropulsionFrame {
 ///
 /// When `propulsion` is `Some`, the propulsion panel is drawn below the
 /// keyboard and the status line is shifted down.
+///
+/// `alarm_code` is the most recent program-alarm code (`AlarmState::code`).
+/// It is rendered as a footer in the display panel's bottom border only
+/// while the PROG alarm lamp is lit (`frame.lamps.prog_alarm`).
+// A terminal-render entry point: each argument is an independent display
+// input, so bundling them into a struct would not aid readability.
+#[allow(clippy::too_many_arguments)]
 pub fn render<W: Write>(
     out: &mut W,
     origin: (u16, u16),
@@ -80,11 +91,12 @@ pub fn render<W: Write>(
     met_cs: u64,
     status: &str,
     flash_on: bool,
+    alarm_code: u16,
 ) -> io::Result<()> {
     let (ox, oy) = origin;
 
     draw_lamp_panel(out, ox, oy, &frame.lamps, frame.lamp_test)?;
-    draw_display_panel(out, ox + 32, oy, frame, flash_on)?;
+    draw_display_panel(out, ox + 32, oy, frame, flash_on, alarm_code)?;
     draw_keyboard(out, ox, oy + 17)?;
 
     if let Some(prop) = propulsion {
@@ -100,29 +112,34 @@ pub fn render<W: Write>(
 
 // ── Lamp panel (left) ─────────────────────────────────────────────────────────
 
-/// Lamp grid: (label, lit?). Pairs of (left, right) rows, top-to-bottom.
-fn lamp_grid(lamps: &Lamps, lamp_test: bool) -> [[(&'static str, bool); 2]; 7] {
+/// Lamp grid: (label, lit?, lit-colour). Pairs of (left, right) rows,
+/// top-to-bottom. The colour distinguishes *caution* (yellow) from
+/// *warning* (red) per Frank O'Brien §7.2; unlit lamps render in [`DIM`].
+fn lamp_grid(lamps: &Lamps, lamp_test: bool) -> [[(&'static str, bool, Color); 2]; 7] {
     let on = |b: bool| lamp_test || b;
     [
         [
-            ("UPLINK ACTY", on(lamps.uplink_activity)),
-            ("TEMP", on(lamps.temp)),
+            ("UPLINK ACTY", on(lamps.uplink_activity), CAUTION),
+            ("TEMP", on(lamps.temp), CAUTION),
         ],
         [
-            ("NO ATT", on(lamps.no_att)),
-            ("GIMBAL LOCK", on(lamps.gimbal_lock)),
-        ],
-        [("STBY", on(lamps.stby)), ("PROG", on(lamps.prog_alarm))],
-        [
-            ("KEY REL", on(lamps.key_rel)),
-            ("RESTART", on(lamps.restart)),
+            ("NO ATT", on(lamps.no_att), WARNING),
+            ("GIMBAL LOCK", on(lamps.gimbal_lock), WARNING),
         ],
         [
-            ("OPR ERR", on(lamps.opr_err)),
-            ("TRACKER", on(lamps.tracker)),
+            ("STBY", on(lamps.stby), CAUTION),
+            ("PROG", on(lamps.prog_alarm), WARNING),
         ],
-        [("", false), ("", false)],
-        [("", false), ("", false)],
+        [
+            ("KEY REL", on(lamps.key_rel), CAUTION),
+            ("RESTART", on(lamps.restart), CAUTION),
+        ],
+        [
+            ("OPR ERR", on(lamps.opr_err), CAUTION),
+            ("TRACKER", on(lamps.tracker), CAUTION),
+        ],
+        [("", false, DIM), ("", false, DIM)],
+        [("", false, DIM), ("", false, DIM)],
     ]
 }
 
@@ -160,9 +177,9 @@ fn draw_lamp_panel<W: Write>(
 
     for (row_idx, row) in grid.iter().enumerate() {
         let y = oy + 1 + (row_idx as u16) * 2;
-        for (col_idx, (label, lit)) in row.iter().enumerate() {
+        for (col_idx, (label, lit, lit_color)) in row.iter().enumerate() {
             let x = ox + 1 + (col_idx as u16) * 14;
-            let color = if *lit { ACTIVE } else { DIM };
+            let color = if *lit { *lit_color } else { DIM };
             queue!(out, SetForegroundColor(color))?;
             // Labels are centred in a 13-col cell.
             let padded = centre(label, 13);
@@ -180,6 +197,7 @@ fn draw_display_panel<W: Write>(
     oy: u16,
     frame: &DskyFrame,
     flash_on: bool,
+    alarm_code: u16,
 ) -> io::Result<()> {
     queue!(out, SetForegroundColor(DIM))?;
     // Outer frame (31 cols wide, 17 rows tall, matching the lamp panel height).
@@ -241,16 +259,24 @@ fn draw_display_panel<W: Write>(
         MoveTo(ox, oy + 15),
         Print("│                             │")
     )?;
+    // Bottom border doubles as the alarm-code footer when the PROG alarm
+    // is lit; the code is embedded in the border (like the PROPULSION
+    // title) and the whole line is drawn in the warning colour.
+    let footer_code = frame.lamps.prog_alarm.then_some(alarm_code);
+    if footer_code.is_some() {
+        queue!(out, SetForegroundColor(WARNING))?;
+    }
     queue!(
         out,
         MoveTo(ox, oy + 16),
-        Print("└─────────────────────────────┘")
+        Print(display_bottom_border(footer_code))
     )?;
+    queue!(out, SetForegroundColor(DIM))?;
 
     // Row 0: COMP ACTY lamp | PROG label
     queue!(
         out,
-        SetForegroundColor(if frame.lamps.comp_acty { ACTIVE } else { DIM })
+        SetForegroundColor(if frame.lamps.comp_acty { CAUTION } else { DIM })
     )?;
     queue!(out, MoveTo(ox + 2, oy + 1), Print("  COMP  "))?;
     queue!(out, MoveTo(ox + 2, oy + 2), Print("  ACTY  "))?;
@@ -691,6 +717,27 @@ fn two_digit(td: &TwoDigit) -> String {
     format!("{}{}", td.tens, td.units)
 }
 
+/// Build the display-panel bottom border (31 display columns wide).
+///
+/// With `alarm_code = Some(code)`, the code is embedded as an `ALM nnnnn`
+/// footer centred in the border — mirroring the V05N09 alarm display, where
+/// the code value is shown as a 5-digit decimal. With `None`, a plain border
+/// is returned. A `u16` is always ≤ 5 digits, so the footer always fits.
+fn display_bottom_border(alarm_code: Option<u16>) -> String {
+    /// Inner width of the display panel (between the corner glyphs).
+    const INNER: usize = 29;
+    match alarm_code {
+        None => format!("└{}┘", "─".repeat(INNER)),
+        Some(code) => {
+            let label = format!(" ALM {:05} ", code);
+            let dashes = INNER.saturating_sub(label.chars().count());
+            let left = dashes / 2;
+            let right = dashes - left;
+            format!("└{}{}{}┘", "─".repeat(left), label, "─".repeat(right))
+        }
+    }
+}
+
 fn centre(s: &str, width: usize) -> String {
     if s.len() >= width {
         return s[..width].to_string();
@@ -731,6 +778,94 @@ pub fn key_from_code(code: KeyCode) -> Option<Key> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A blank register (no sign, all-zero digits, no overflow).
+    fn blank_register() -> Register {
+        Register {
+            sign: 0,
+            digits: [0; 5],
+            overflow: false,
+        }
+    }
+
+    /// A minimal `DskyFrame` with all lamps dark, used as a test fixture.
+    fn blank_frame() -> DskyFrame {
+        DskyFrame {
+            prog: TwoDigit { tens: 0, units: 0 },
+            verb: TwoDigit { tens: 0, units: 0 },
+            noun: TwoDigit { tens: 0, units: 0 },
+            r1: blank_register(),
+            r2: blank_register(),
+            r3: blank_register(),
+            lamps: Lamps {
+                uplink_activity: false,
+                no_att: false,
+                stby: false,
+                key_rel: false,
+                opr_err: false,
+                restart: false,
+                gimbal_lock: false,
+                temp: false,
+                prog_alarm: false,
+                comp_acty: false,
+                tracker: false,
+            },
+            lamp_test: false,
+            flashing: false,
+        }
+    }
+
+    /// TC-#139-1: the plain bottom border is 31 display columns wide and has
+    /// no embedded text.
+    #[test]
+    fn display_bottom_border_plain() {
+        let s = display_bottom_border(None);
+        assert_eq!(s, "└─────────────────────────────┘");
+        assert_eq!(s.chars().count(), 31);
+    }
+
+    /// TC-#139-2: a synthetic alarm code is embedded as a 5-digit decimal
+    /// `ALM nnnnn` footer, centred, with the border still 31 columns wide.
+    #[test]
+    fn display_bottom_border_with_alarm_code() {
+        let s = display_bottom_border(Some(1202));
+        // 29-col inner = 18 dashes split 9/9 around the 11-char " ALM 01202 ".
+        let expected = format!("└{}{}{}┘", "─".repeat(9), " ALM 01202 ", "─".repeat(9));
+        assert_eq!(s, expected);
+        assert_eq!(s.chars().count(), 31);
+        assert!(s.contains(" ALM 01202 "));
+    }
+
+    /// TC-#139-3: codes wider than five digits are reduced modulo 100000 so
+    /// the footer never overflows the border.
+    #[test]
+    fn display_bottom_border_clamps_wide_code() {
+        let s = display_bottom_border(Some(u16::MAX)); // 65535
+        assert_eq!(s.chars().count(), 31);
+        assert!(s.contains(" ALM 65535 "));
+    }
+
+    /// TC-#139-4: rendering a frame with the PROG alarm lit emits the footer
+    /// text; a dark PROG alarm does not.
+    #[test]
+    fn render_emits_alarm_footer_only_when_lit() {
+        let mut frame = blank_frame();
+
+        let mut buf = Vec::new();
+        render(&mut buf, (1, 1), &frame, None, 0, "", true, 1202).unwrap();
+        assert!(
+            !String::from_utf8_lossy(&buf).contains("ALM 01202"),
+            "footer must be absent while the PROG alarm is dark"
+        );
+
+        frame.lamps.prog_alarm = true;
+        let mut buf = Vec::new();
+        render(&mut buf, (1, 1), &frame, None, 0, "", true, 1202).unwrap();
+        assert!(
+            String::from_utf8_lossy(&buf).contains("ALM 01202"),
+            "footer must appear once the PROG alarm is lit"
+        );
+    }
 
     #[test]
     fn centre_pads_symmetrically() {
