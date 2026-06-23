@@ -30,8 +30,14 @@ pub struct DskyState {
     /// Star tracker lamp (IMU optical alignment activity).
     pub tracker: bool,
     /// Set by V35 (lamp test). The T4RUPT display shim reads this and
-    /// drives every indicator lamp on for one cycle, then clears it.
+    /// drives every indicator lamp on. `refresh_lamps` auto-clears it
+    /// after [`lamp_test_ticks_remaining`](Self::lamp_test_ticks_remaining)
+    /// T4 passes (~5 s).
     pub lamp_test_active: bool,
+    /// Countdown, in T4RUPT ticks, until `lamp_test_active` auto-reverts.
+    /// Loaded by V35 with `services::lamps::LAMP_TEST_DURATION_TICKS` and
+    /// decremented once per `refresh_lamps` pass.
+    pub lamp_test_ticks_remaining: u16,
     /// Snapshot of `AgcState::pinball_ticks` taken by the most recent
     /// `services::lamps::refresh_lamps` call. The next refresh latches
     /// `comp_acty` on iff the live counter has advanced since this value.

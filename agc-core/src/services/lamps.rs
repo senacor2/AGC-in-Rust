@@ -30,6 +30,10 @@ use crate::control::imu_control::{is_gimbal_lock_critical, ImuAlignmentState};
 use crate::services::v_n::VnPhase;
 use crate::AgcState;
 
+/// Number of T4RUPT ticks (~120 ms each) the V35 lamp test stays lit
+/// before `refresh_lamps` auto-reverts it — about 5 seconds.
+pub const LAMP_TEST_DURATION_TICKS: u16 = 42;
+
 /// Record one PINBALL/Waitlist tick. Called from `feed_key` and from
 /// each Waitlist dispatch site. Wraps on overflow.
 #[inline]
@@ -45,6 +49,17 @@ pub fn note_pinball_activity(state: &mut AgcState) {
 /// surface does not exist in agc-sim today, so the parameter is omitted
 /// and will be re-added when `temp` becomes a real driver.
 pub fn refresh_lamps(state: &mut AgcState) {
+    // lamp test (V35): auto-revert after ~5 s. Count down one tick per
+    // refresh pass and clear the flag once the window expires, so the
+    // panel returns to reflecting real conditions.
+    if state.dsky.lamp_test_active {
+        if state.dsky.lamp_test_ticks_remaining == 0 {
+            state.dsky.lamp_test_active = false;
+        } else {
+            state.dsky.lamp_test_ticks_remaining -= 1;
+        }
+    }
+
     // comp_acty: latch true for one T4 window after any PINBALL/Waitlist tick.
     let ticks = state.pinball_ticks;
     state.dsky.comp_acty = ticks != state.dsky.last_pinball_ticks_seen;

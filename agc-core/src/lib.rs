@@ -389,6 +389,7 @@ impl AgcState {
                 comp_acty: false,
                 tracker: false,
                 lamp_test_active: false,
+                lamp_test_ticks_remaining: 0,
                 last_pinball_ticks_seen: 0,
             },
             alarm: AlarmState {
