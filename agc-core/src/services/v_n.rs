@@ -1361,8 +1361,12 @@ fn v34_terminate(state: &mut crate::AgcState) {
 }
 
 /// V35 — Lamp test.
+///
+/// Lights every indicator lamp; `services::lamps::refresh_lamps`
+/// auto-reverts the test after `LAMP_TEST_DURATION_TICKS` T4 passes (~5 s).
 fn v35_lamp_test(state: &mut crate::AgcState) {
     state.dsky.lamp_test_active = true;
+    state.dsky.lamp_test_ticks_remaining = crate::services::lamps::LAMP_TEST_DURATION_TICKS;
 }
 
 /// V36 — Request FRESH START.
