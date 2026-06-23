@@ -35,8 +35,7 @@ pub const VERB_DISPLAY_OCT: u8 = 6;
 
 // ── Program alarm code for targeting errors ───────────────────────────────────
 
-/// Program alarm: TIG in the past.
-const ALARM_TIG_IN_PAST: u16 = 210;
+use crate::tables::alarm_codes::ALARM_P30_TIG_IN_PAST as ALARM_TIG_IN_PAST;
 
 // ── Entry point registered in PROGRAM_TABLE ───────────────────────────────────
 

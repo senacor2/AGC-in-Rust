@@ -30,8 +30,10 @@ const NOUN_APO_PERI_TFF: u8 = 44;
 
 // ── Program alarms ────────────────────────────────────────────────────────────
 
-const ALARM_HYPERBOLIC_ORBIT: u16 = 229;
-const ALARM_WRONG_FRAME: u16 = 230;
+use crate::tables::alarm_codes::{
+    ALARM_P11_HYPERBOLIC_ORBIT as ALARM_HYPERBOLIC_ORBIT,
+    ALARM_P11_WRONG_FRAME as ALARM_WRONG_FRAME,
+};
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 

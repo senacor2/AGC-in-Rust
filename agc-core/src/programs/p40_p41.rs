@@ -37,11 +37,11 @@ pub const BURN_MIN_DV: f64 = 0.05;
 
 // ── Program alarms ────────────────────────────────────────────────────────────
 
-const ALARM_NO_PENDING_MANEUVER: u16 = 224;
-const ALARM_TIG_IN_PAST: u16 = 225;
-const ALARM_DV_TOO_SMALL: u16 = 226;
-const ALARM_P40_WRONG_REGIME: u16 = 227; // burn too small for SPS
-const ALARM_P41_WRONG_REGIME: u16 = 228; // burn too large for RCS
+use crate::tables::alarm_codes::{
+    ALARM_P40_DV_TOO_SMALL as ALARM_DV_TOO_SMALL,
+    ALARM_P40_NO_PENDING_MANEUVER as ALARM_NO_PENDING_MANEUVER,
+    ALARM_P40_TIG_IN_PAST as ALARM_TIG_IN_PAST, ALARM_P40_WRONG_REGIME, ALARM_P41_WRONG_REGIME,
+};
 
 /// DSKY verb/noun for the burn status display (V06N40).
 const VERB_DISPLAY: u8 = 6;

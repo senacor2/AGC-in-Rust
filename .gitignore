@@ -38,3 +38,8 @@ target
 
 # macOS Finder metadata.
 .DS_Store
+
+# Editor / language-server tooling caches (not project artifacts).
+.clj-kondo/
+.lsp/
+.claude/settings.local.json

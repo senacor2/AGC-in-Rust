@@ -40,8 +40,7 @@ pub const PRIORITY: JobPriority = 3;
 const VERB_DISPLAY: u8 = 6;
 const NOUN_PRELAUNCH: u8 = 68;
 
-/// Program alarm: P02 invoked from a non-Caged alignment state.
-pub const ALARM_GYROCOMPASS_WRONG_STATE: u16 = 235;
+pub use crate::tables::alarm_codes::ALARM_GYROCOMPASS_WRONG_STATE;
 
 /// Waitlist period for the gyrocompass loop: 500 cs = 5 s.
 ///

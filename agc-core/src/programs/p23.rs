@@ -113,45 +113,13 @@ pub const P23_MAX_PROCESS_NOISE_DT_S: f64 = 86_400.0; // 24 h
 // P23 shares 0o01420 (NO_CSM_SV) and 0o01421 (W_OVERFLOW) with P22 — semantics identical.
 // P23-exclusive codes: 0o01426–0o01432 (all previously unused; spec §8 confirms this range).
 
-/// Alarm 01420 (octal): no valid CSM state vector (epoch == 0).
-/// Shared with P21/P22 — same semantics.
-/// Spec: p23-spec.md §8
-const ALARM_NO_CSM_SV: u16 = 0o01420;
-
-/// Alarm 00400 (octal): CSM state vector is in an unexpected frame (StableMember).
-/// Shared with P20/P22 — same semantics.
-/// Spec: p23-spec.md §8
-const ALARM_FRAME_MISMATCH: u16 = 0o00400;
-
-/// Alarm 01421 (octal): W-matrix diagonal entry went negative (loss of positive definiteness).
-/// Shared with P20/P22 — same code, same semantics (shared W-matrix).
-/// Spec: p23-spec.md §8
-const ALARM_W_OVERFLOW: u16 = 0o01421;
-
-/// Alarm 01426 (octal): star_direction magnitude not in [0.999, 1.001] (zero or invalid).
-/// Spec: p23-spec.md §8
-const ALARM_NO_STAR_LOCK: u16 = 0o01426;
-
-/// Alarm 01427 (octal): measured angle outside [0, π] or measurement geometry degenerate
-/// (star co-linear with body/landmark direction — unobservable configuration).
-/// Spec: p23-spec.md §8, EC-5, EC-6
-const ALARM_BAD_ANGLE: u16 = 0o01427;
-
-/// Alarm 01430 (octal): CSM inside R_body + R_MIN_HORIZON_M (horizon geometry degenerate).
-/// Spec: p23-spec.md §8
-const ALARM_P23_TOO_CLOSE_TO_BODY: u16 = 0o01430;
-
-/// Alarm 01431 (octal): five consecutive marks rejected by 3-sigma gate.
-/// Tracking suspended; crew must key V32E to re-enable.
-/// Spec: p23-spec.md §8
-const ALARM_P23_REJECT_OVERRIDE: u16 = 0o01431;
-
-/// Alarm 01432 (octal): CSM-to-landmark range below P23_MIN_LANDMARK_RANGE_M.
-/// Spec: p23-spec.md §8
-const ALARM_P23_LANDMARK_RANGE_ZERO: u16 = 0o01432;
-
-/// Alarm 1211: Waitlist full (standard AGC waitlist-overflow alarm).
-const ALARM_WAITLIST_FULL: u16 = 1211;
+use crate::tables::alarm_codes::{
+    ALARM_P23_BAD_ANGLE as ALARM_BAD_ANGLE, ALARM_P23_LANDMARK_RANGE_ZERO,
+    ALARM_P23_NO_STAR_LOCK as ALARM_NO_STAR_LOCK, ALARM_P23_REJECT_OVERRIDE,
+    ALARM_P23_TOO_CLOSE_TO_BODY, CSM_W_OVERFLOW as ALARM_W_OVERFLOW,
+    FRAME_MISMATCH as ALARM_FRAME_MISMATCH, NO_CSM_SV as ALARM_NO_CSM_SV,
+    WAITLIST_OVERFLOW as ALARM_WAITLIST_FULL,
+};
 
 // ── Public types ───────────────────────────────────────────────────────────────
 

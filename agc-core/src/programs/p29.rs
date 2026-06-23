@@ -43,14 +43,7 @@ pub const P29_PRIORITY: JobPriority = 7;
 
 // ── Alarm codes (octal) ───────────────────────────────────────────────────────
 
-/// `01430` — no valid CSM state vector (epoch == 0).
-const ALARM_P29_NO_CSM_SV: u16 = 0o01430;
-
-/// `01431` — hyperbolic trajectory (no orbital period, no recurring crossing).
-const ALARM_P29_HYPERBOLIC: u16 = 0o01431;
-
-/// `01432` — Newton solver did not converge within the iteration cap.
-const ALARM_P29_NO_CONV: u16 = 0o01432;
+use crate::tables::alarm_codes::{ALARM_P29_HYPERBOLIC, ALARM_P29_NO_CONV, ALARM_P29_NO_CSM_SV};
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 

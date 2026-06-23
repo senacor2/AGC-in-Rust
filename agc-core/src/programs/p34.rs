@@ -44,9 +44,7 @@ pub const TPM_MIN_RANGE_M: f64 = 100.0;
 // P34 shares alarm codes 01440–01444 with P33 (same conditions).
 // Alarm 01445 is P34-specific.
 
-/// Alarm 01445 (octal): chaser already within `TPM_MIN_RANGE_M` of target
-/// (P34 is meaningless at this range; braking P47 should be used instead).
-pub(crate) const ALARM_P34_TOO_CLOSE: u16 = 0o01445;
+pub(crate) use crate::tables::alarm_codes::ALARM_P34_TOO_CLOSE;
 
 // ── Entry point registered in PROGRAM_TABLE ────────────────────────────────────
 

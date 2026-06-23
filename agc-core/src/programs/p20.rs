@@ -88,20 +88,11 @@ const MAX_PROCESS_NOISE_DT_S: f64 = 3600.0;
 
 // ── Alarm codes ────────────────────────────────────────────────────────────────
 
-/// Alarm 01421 (octal): W-matrix diagonal entry went negative (loss of positive definiteness).
-const ALARM_W_OVERFLOW: u16 = 0o01421;
-
-/// Alarm 00404 (octal): No valid target state vector on entry, or radar lost for > 60 s.
-const ALARM_NO_RADAR: u16 = 0o00404;
-
-/// Alarm 00405 (octal): Five consecutive marks rejected by the 3-sigma gate.
-const ALARM_REJECT_OVERRIDE: u16 = 0o00405;
-
-/// Alarm 00400 (octal): CSM and target state vectors are in different coordinate frames.
-const ALARM_FRAME_MISMATCH: u16 = 0o00400;
-
-/// Alarm 1211: Waitlist full (standard AGC waitlist-overflow alarm).
-const ALARM_WAITLIST_FULL: u16 = 1211;
+use crate::tables::alarm_codes::{
+    ALARM_P20_NO_RADAR as ALARM_NO_RADAR, ALARM_P20_REJECT_OVERRIDE as ALARM_REJECT_OVERRIDE,
+    CSM_W_OVERFLOW as ALARM_W_OVERFLOW, FRAME_MISMATCH as ALARM_FRAME_MISMATCH,
+    WAITLIST_OVERFLOW as ALARM_WAITLIST_FULL,
+};
 
 // ── Navigation state ───────────────────────────────────────────────────────────
 

@@ -36,11 +36,7 @@ pub const CDH_MIN_DELTAH: f64 = 1_000.0; // m
 // Codes 0o01434 and 0o01435 are used by P31.
 // Codes 0o01436 and 0o01437 are assigned here.
 
-/// Alarm 01436 (octal): target state is zero — P20 never ran or radar lost.
-const ALARM_P32_NO_TARGET: u16 = 0o01436;
-
-/// Alarm 01437 (octal): CDH geometry degenerate (|r_c_mag - r_t_mag| < CDH_MIN_DELTAH).
-const ALARM_P32_DEGENERATE: u16 = 0o01437;
+use crate::tables::alarm_codes::{ALARM_P32_DEGENERATE, ALARM_P32_NO_TARGET};
 
 // ── Result and error types ─────────────────────────────────────────────────────
 

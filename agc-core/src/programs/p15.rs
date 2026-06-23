@@ -23,8 +23,9 @@ pub const PRIORITY: JobPriority = 6;
 const VERB_MONITOR: u8 = 16;
 const NOUN_APO_PERI: u8 = 44;
 
-const ALARM_WRONG_FRAME: u16 = 236;
-const ALARM_HYPERBOLIC: u16 = 237;
+use crate::tables::alarm_codes::{
+    ALARM_P15_HYPERBOLIC as ALARM_HYPERBOLIC, ALARM_P15_WRONG_FRAME as ALARM_WRONG_FRAME,
+};
 
 /// Entry point registered in `PROGRAM_TABLE[15]`.
 pub fn init(state: &mut crate::AgcState) -> JobPriority {
