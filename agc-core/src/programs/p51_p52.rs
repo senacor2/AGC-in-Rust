@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! P51 — IMU Orientation Determination
 //! P52 — IMU Realignment
 //!

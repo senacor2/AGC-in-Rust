@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! DSKY indicator-lamp driver pass.
 //!
 //! `refresh_lamps` is invoked from `t4rupt_step` (and from the bare-metal

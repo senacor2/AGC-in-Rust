@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Shared bridge state, protected by a critical-section mutex (ADR-008).
 
 use heapless::Deque;

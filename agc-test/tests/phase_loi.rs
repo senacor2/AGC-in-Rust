@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! MS-T4 integration test: Apollo 8 Lunar Orbit Insertion (LOI-1) scenario.
 //!
 //! # Purpose

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! P30 — External Delta-V Targeting
 //!
 //! Accepts a ground-uploaded maneuver (TIG + LVLH delta-V) and computes

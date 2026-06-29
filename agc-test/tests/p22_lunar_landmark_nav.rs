@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! MS-T3 exit-criterion test 2 of 2: P22 lunar landmark Kalman update.
 //!
 //! Seeds the AGC CSM state in equatorial lunar orbit and delivers one lunar

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /// Reaction Control System jet interface.
 ///
 /// Jets are addressed by bitmask. The SM RCS has 16 jets (two 8-bit words);

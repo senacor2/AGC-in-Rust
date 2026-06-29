@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! P06 — CMC Power-down (standby mode).
 //!
 //! Quiesces every active task so the CMC can be placed into a low-power

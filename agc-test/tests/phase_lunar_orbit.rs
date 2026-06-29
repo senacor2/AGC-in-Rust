@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! MS-T4 integration test: Apollo 8 lunar orbit tracking across 8 revolutions.
 //!
 //! # Purpose

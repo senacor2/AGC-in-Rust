@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Quaternion helpers for attitude representation.
 //!
 //! All quaternions use the **scalar-first `[w, x, y, z]`** layout

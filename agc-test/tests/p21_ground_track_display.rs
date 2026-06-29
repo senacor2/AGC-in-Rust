@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! M-A.5 — P21 ground-track display via the noun pipeline (issue #128).
 //!
 //! Drives `V37 ENTR 21 ENTR` through the scenario runner against a

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Numerical integration of the equations of motion.
 //!
 //! Implements Cowell's method (direct numerical integration) providing two

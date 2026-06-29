@@ -3,6 +3,7 @@ name = "agc-core"
 version = "0.1.0"
 edition = "2021"
 description = "Apollo Guidance Computer – Comanche055 (Command Module) flight software in Rust"
+license.workspace = true
 
 [features]
 # bare-metal: activates cortex-m / cortex-m-rt dependencies for hardware targets.

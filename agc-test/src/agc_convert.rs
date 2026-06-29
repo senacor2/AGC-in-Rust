@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! AGC fixed-point word to `f64` conversion utilities.
 //!
 //! The AGC used 15-bit ones-complement words. Navigation quantities were stored

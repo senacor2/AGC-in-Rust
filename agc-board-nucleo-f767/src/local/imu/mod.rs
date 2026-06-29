@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Real `Imu` trait impl backed by the BMI088 + `agc_imu_platform` emulator.
 
 pub mod bmi088;

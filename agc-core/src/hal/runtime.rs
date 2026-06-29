@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! ISR-to-foreground rendezvous flags for the bare-metal Executive.
 //!
 //! Each AGC timer interrupt has a corresponding `AtomicBool`. The ISR sets

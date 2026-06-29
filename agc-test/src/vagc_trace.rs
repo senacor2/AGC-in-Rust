@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Channel-write recorder, JSON fixture format, and comparator for
 //! MS-E7c end-to-end entry-guidance traces.
 //!

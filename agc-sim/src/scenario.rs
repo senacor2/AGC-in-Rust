@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Mission scenario runner and builder.
 //!
 //! Provides a structured way to describe and execute end-to-end AGC integration

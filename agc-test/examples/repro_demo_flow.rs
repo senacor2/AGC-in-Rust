@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Walks through the `docs/p40_burn_demo.md` keystroke sequence and prints
 //! the AGC state at each step. Useful when triaging a desk-top demo
 //! that looks broken on the `dsky_sim` console — running this binary

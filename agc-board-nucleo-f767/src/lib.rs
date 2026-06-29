@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Bare-metal HAL for the Nucleo-F767ZI board.
 //!
 //! This crate provides a concrete [`AgcHardware`] implementation for the

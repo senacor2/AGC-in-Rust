@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! ASCII keystroke → DSKY key code mapping.
 //!
 //! Key codes are the 5-bit values from the Block 2 AGC KEYTEMP1 table,

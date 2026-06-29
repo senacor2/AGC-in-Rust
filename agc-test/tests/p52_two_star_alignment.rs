@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! MS-T3 exit-criterion test 1 of 2: P52 two-star IMU realignment.
 //!
 //! Seeds a perturbed REFSMMAT (~5 arc-min per axis), delivers two

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! P31 — Coelliptic Sequence Initiation (CSI) targeting.
 //!
 //! Computes the CSI burn that adjusts the chaser's (CSM) orbital period so

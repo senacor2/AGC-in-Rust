@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Remote optics: CDU angles and mark flag come from `BridgeState` cache;
 //! drive commands are forwarded over the link.
 

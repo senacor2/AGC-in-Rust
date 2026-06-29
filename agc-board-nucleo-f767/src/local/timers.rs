@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! AGC timer trait implementation backed by STM32F7 hardware timers.
 //!
 //! ## Timer assignment

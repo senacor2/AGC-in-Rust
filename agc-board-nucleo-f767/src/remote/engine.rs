@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Remote SPS engine: commands forwarded over the link; thrust-on discrete
 //! read from `BridgeState` cache.
 

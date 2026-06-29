@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Remote DSKY: commands are encoded as `Msg::*` and sent over the UART link;
 //! key reads drain the `BridgeState.key_queue`.
 

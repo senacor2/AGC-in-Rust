@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Maneuver targeting — Time of Ignition (TIG), delta-V, and burn attitude.
 //!
 //! This module is the central computation layer for all maneuver planning in

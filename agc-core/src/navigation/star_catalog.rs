@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! AGC navigation star catalogue (37 stars) — Apollo Comanche055.
 //!
 //! The direction vectors are stored in the AGC **Mean of 1969.5**

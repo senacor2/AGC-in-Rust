@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! MS-T5 — Inter-phase handoff integration tests.
 //!
 //! Implements GitHub issue #28. Spec: `specs/ms-t5-handoffs-spec.md`.

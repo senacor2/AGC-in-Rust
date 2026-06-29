@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! CI-visible tests that load JSON fixtures captured by the developer-
 //! only `capture_*` binaries and validate them against agc-core's
 //! entry-guidance implementation.

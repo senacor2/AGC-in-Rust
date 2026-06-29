@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! High-level drivers for yaAGC's TCP channel-word protocol.
 //!
 //! Builds on [`crate::vagc_channel::YaAgcClient`] and adds two

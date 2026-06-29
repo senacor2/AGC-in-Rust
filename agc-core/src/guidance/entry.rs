@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! CM entry guidance — closed-loop P64 / P65 / P67 math (MS-E3 ..).
 //!
 //! AGC source: `Comanche055/REENTRY_CONTROL.agc`. ENTRY_LEXICON.agc names are

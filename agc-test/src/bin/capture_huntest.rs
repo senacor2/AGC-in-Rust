@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! `capture_huntest` — Phase-3 scaffold for HUNTEST fixture capture.
 //!
 //! Reads a TOML case-list, patches the input erasable variables into a

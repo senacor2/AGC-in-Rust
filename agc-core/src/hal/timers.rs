@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /// Scheduler timer interface.
 ///
 /// The three scheduling timers map to the AGC's TIME3, TIME5, and TIME6.

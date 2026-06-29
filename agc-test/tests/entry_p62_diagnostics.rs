@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! MS-E7i Experiment A — snapshot the AGC's parked state after
 //! `V37 ENTR 62 ENTR` and again after `V33 ENTR`, to confirm or refute
 //! the V33 / TESTNN / POODOO hypothesis from issue #45.

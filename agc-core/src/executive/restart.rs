@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /// Number of restart groups (matches Comanche055).
 pub const NUM_RESTART_GROUPS: usize = 6;
 

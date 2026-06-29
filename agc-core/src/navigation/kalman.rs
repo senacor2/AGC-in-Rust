@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Shared scalar Kalman measurement-update helper.
 //!
 //! This module contains the pure-state scalar Kalman update used by both

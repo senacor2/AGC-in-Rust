@@ -3,6 +3,7 @@ name = "agc-board-nucleo-f767"
 version = "0.1.0"
 edition = "2021"
 description = "Bare-metal HAL for AGC-in-Rust on Nucleo-F767ZI"
+license.workspace = true
 
 [dependencies]
 agc-core          = { path = "../agc-core",          features = ["bare-metal"] }

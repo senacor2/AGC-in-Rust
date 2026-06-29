@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! P20 — Rendezvous Navigation.
 //!
 //! Runs as a continuously active background job during the rendezvous phase,

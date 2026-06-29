@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Navigation accuracy tests.
 //!
 //! Loads fixture files from `agc-test/fixtures/` and verifies that the

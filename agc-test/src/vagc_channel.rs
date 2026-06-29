@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! TCP client for yaAGC's channel-word socket protocol.
 //!
 //! yaAGC listens on a TCP port (default 19697, configurable via

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Linear algebra primitives for Vec3 and Mat3x3.
 //!
 //! These are plain functions, not methods. Call them as `linalg::dot(a, b)`.

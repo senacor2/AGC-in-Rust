@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! DSKY display formatting (PINBALL layer).
 //!
 //! Pure-computation translator from `DskyState` to a decoded

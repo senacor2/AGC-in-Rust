@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use agc_imu_platform::UnitQuaternion;
 use core::f64::consts::{FRAC_PI_2, PI, TAU};
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Sextant geometry and MARK keystroke pipeline (#57).
 //!
 //! Converts the AGC's CM optics shaft/trunnion CDU angles into a body-frame

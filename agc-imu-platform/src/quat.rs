@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use core::ops::Mul;
 use libm::{asin, atan2, cos, sin, sqrt};
 

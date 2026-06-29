@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! P32 — Constant Delta-Height (CDH) targeting.
 //!
 //! Computes the CDH burn that makes the chaser's orbit coelliptic with the

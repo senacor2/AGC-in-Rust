@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! MS-T7 — Apollo 8 full-mission walkthrough capstone.
 //!
 //! Implements GitHub issue #30. Spec: `specs/ms-t7-full-mission-spec.md`.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Delta-V computation and burn execution guidance.
 
 use crate::guidance::targeting::{Maneuver, TargetingMode};

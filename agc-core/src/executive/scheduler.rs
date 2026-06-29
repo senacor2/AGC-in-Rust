@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use super::job::{JobEntry, JobPriority, MAX_JOBS};
 use crate::hal::dsky::Dsky;
 use crate::hal::engine::Engine;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! P29 — Time-of-Longitude.
 //!
 //! Display-only program. Given a target geographic longitude entered by the

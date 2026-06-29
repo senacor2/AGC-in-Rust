@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Inbound message dispatch: bridge → AGC.
 //!
 //! Called from the USART6 ISR after `UartLink::poll_rx` returns a complete

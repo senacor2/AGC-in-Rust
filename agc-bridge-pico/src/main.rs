@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! RP2040 bridge firmware entry point.
 //!
 //! Phase 4 stub: speaks the AGC wire protocol over UART0 (GPIO0/1 at 460800

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Backup state — the survives-RESTART subset of [`AgcState`].
 //!
 //! On the bare-metal target this struct will be placed in the STM32F767ZI's

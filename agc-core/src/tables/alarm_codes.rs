@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Program alarm code definitions.
 
 /// Executive overflow — no free job slots (the Apollo 11 "1202" alarm).

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! UART0 link driver: encodes and decodes AGC protocol frames over GPIO0/1.
 //!
 //! TX is blocking at 460800 baud; at <10 µs per byte a max-frame (252 B) takes

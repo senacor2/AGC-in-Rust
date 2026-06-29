@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Terminal-based DSKY user interface for interactive simulation.
 //!
 //! Renders a `DskyFrame` to the terminal in a layout faithful to the

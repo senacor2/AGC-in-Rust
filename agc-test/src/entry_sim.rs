@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! 3DOF atmospheric-entry integrator for end-to-end MS-E7 scenarios.
 //!
 //! Generates the sensed (non-gravitational) Δv that the SERVICER's PIPA

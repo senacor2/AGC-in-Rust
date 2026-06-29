@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Rendezvous navigation primitives (P20–P23, P31–P34).
 //!
 //! This module provides stateless, pure-math functions that answer the four

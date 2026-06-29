@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! M-A.4 — V82 / R30 orbital-parameter display integration scenario
 //! (issue #127).
 //!

@@ -3,6 +3,7 @@ name = "agc-test"
 version = "0.1.0"
 edition = "2021"
 description = "Integration and property-based tests for agc-core"
+license.workspace = true
 
 [dependencies]
 agc-core = { path = "../agc-core" }

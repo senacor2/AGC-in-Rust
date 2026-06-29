@@ -3,6 +3,7 @@ name = "agc-bridge-pico"
 version = "0.1.0"
 edition = "2021"
 description = "RP2040 bridge firmware for AGC-in-Rust — stub side of the AGC↔bridge link"
+license.workspace = true
 
 [dependencies]
 agc-protocol  = { path = "../agc-protocol" }

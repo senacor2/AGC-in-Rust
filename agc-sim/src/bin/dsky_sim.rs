@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Interactive terminal DSKY simulator.
 //!
 //! Runs a host-side copy of `agc_core::AgcState`, drives the V/N

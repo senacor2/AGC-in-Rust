@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Lunar and solar ephemeris for the AGC-in-Rust port.
 //!
 //! Computes Moon position in the AGC Mean of 1969.5 equatorial frame

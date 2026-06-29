@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use crate::navigation::time::OMEGA_EARTH;
 use crate::types::{Met, Vec3};
 

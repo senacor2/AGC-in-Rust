@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use agc_protocol::{encode, DecodeError, DecodeStatus, FrameDecoder, Msg, MAX_FRAME};
 
 /// Feed every byte of `frame[..len]` into a fresh decoder; return the final status.

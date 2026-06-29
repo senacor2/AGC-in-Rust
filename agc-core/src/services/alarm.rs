@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Program alarm system — alarm state, POODOO, and GOTOPOOH recovery.
 //!
 //! Alarms are 4-digit codes displayed on the DSKY PROG register.

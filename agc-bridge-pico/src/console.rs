@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! USB CDC-ACM developer console.
 //!
 //! Wraps a `usbd_serial::SerialPort` and the `usb_device::UsbDevice`.

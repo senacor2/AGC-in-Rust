@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 pub mod alarm;
 pub mod downlink;
 pub mod average_g;

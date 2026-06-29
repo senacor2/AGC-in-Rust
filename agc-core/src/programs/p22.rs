@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! P22 — Orbital Navigation (Landmark Tracking).
 //!
 //! The navigation counterpart of P20 but for the CSM's own state vector (not

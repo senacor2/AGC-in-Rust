@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! RCS jet selection logic.
 //!
 //! Maps desired torque commands to individual jet bitmasks for the SM RCS

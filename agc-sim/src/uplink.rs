@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Scripted host-side [`Uplink`] implementation.
 //!
 //! [`ScriptedUplink`] is a FIFO of pre-loaded uplink words drained by
