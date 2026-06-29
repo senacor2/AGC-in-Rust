@@ -116,6 +116,47 @@ pub fn format_register(value: f32) -> Register {
     }
 }
 
+/// Format a register value as an unsigned 5-octal-digit field.
+///
+/// Used for V05 displays (alarm diagnostics V05N08/V05N09). Values are rounded
+/// to the nearest integer, treated as unsigned, and decomposed into 5 octal
+/// digits (max `0o77777` = 32767). Negative values are taken by absolute value
+/// (alarm codes are unsigned `u16`); the sign field is left blank to match
+/// the AGC's V05 rendering. Non-finite inputs produce a blank display.
+pub fn format_register_octal(value: f32) -> Register {
+    if !value.is_finite() {
+        return Register {
+            sign: 0,
+            digits: [0; 5],
+            overflow: true,
+        };
+    }
+
+    let n = libm::round(value as f64) as i64;
+    let mut mag = if n >= 0 {
+        n as u64
+    } else {
+        (n as i128).unsigned_abs() as u64
+    };
+
+    let overflow = mag > 0o77777;
+    if overflow {
+        mag = 0o77777;
+    }
+
+    let d0 = (mag / 0o10000 % 8) as u8;
+    let d1 = (mag / 0o1000 % 8) as u8;
+    let d2 = (mag / 0o100 % 8) as u8;
+    let d3 = (mag / 0o10 % 8) as u8;
+    let d4 = (mag % 8) as u8;
+
+    Register {
+        sign: 0,
+        digits: [d0, d1, d2, d3, d4],
+        overflow,
+    }
+}
+
 /// Format a `u8` into the two-digit display field.
 ///
 /// Values `>= 100` are reduced modulo 100.
@@ -128,14 +169,23 @@ pub fn format_two_digit(n: u8) -> TwoDigit {
 }
 
 /// Decode a `DskyState` into a ready-to-write `DskyFrame`.
+///
+/// When `state.verb == 5`, R1/R2/R3 are rendered as 5-octal-digit unsigned
+/// fields (V05 = "display octal", used for the alarm-diagnostic nouns
+/// V05N08 and V05N09). Otherwise registers render as signed decimal.
 pub fn decode_dsky(state: &DskyState) -> DskyFrame {
+    let format_r: fn(f32) -> Register = if state.verb == 5 {
+        format_register_octal
+    } else {
+        format_register
+    };
     DskyFrame {
         prog: format_two_digit(state.prog),
         verb: format_two_digit(state.verb),
         noun: format_two_digit(state.noun),
-        r1: format_register(state.r[0]),
-        r2: format_register(state.r[1]),
-        r3: format_register(state.r[2]),
+        r1: format_r(state.r[0]),
+        r2: format_r(state.r[1]),
+        r3: format_r(state.r[2]),
         lamps: Lamps {
             uplink_activity: state.uplink_activity,
             no_att: state.no_att,
@@ -367,6 +417,86 @@ mod tests {
         let td = format_two_digit(105);
         assert_eq!(td.tens, 0);
         assert_eq!(td.units, 5);
+    }
+
+    // ── format_register_octal ─────────────────────────────────────────────────
+
+    /// TC-PB-OCT-1: 0o31202 (EXEC_OVERFLOW, the famous "1202") → 31202 octal.
+    #[test]
+    fn tc_pb_oct_1_exec_overflow() {
+        let r = format_register_octal(0o31202 as f32);
+        assert_eq!(r.sign, 0, "V05 octal blanks the sign field");
+        assert_eq!(r.digits, [3, 1, 2, 0, 2]);
+        assert!(!r.overflow);
+    }
+
+    /// TC-PB-OCT-2: 0o01106 (UPLINK_TOO_FAST) → 01106 octal.
+    #[test]
+    fn tc_pb_oct_2_uplink_too_fast() {
+        let r = format_register_octal(0o01106 as f32);
+        assert_eq!(r.digits, [0, 1, 1, 0, 6]);
+    }
+
+    /// TC-PB-OCT-3: 0 → all-zero digits, no overflow.
+    #[test]
+    fn tc_pb_oct_3_zero() {
+        let r = format_register_octal(0.0);
+        assert_eq!(r.digits, [0; 5]);
+        assert!(!r.overflow);
+    }
+
+    /// TC-PB-OCT-4: 0o77777 is the max non-overflow octal value.
+    #[test]
+    fn tc_pb_oct_4_max() {
+        let r = format_register_octal(0o77777 as f32);
+        assert_eq!(r.digits, [7, 7, 7, 7, 7]);
+        assert!(!r.overflow);
+    }
+
+    /// TC-PB-OCT-5: values above 0o77777 clamp with overflow set.
+    #[test]
+    fn tc_pb_oct_5_overflow() {
+        let r = format_register_octal((0o77777u32 + 1) as f32);
+        assert_eq!(r.digits, [7, 7, 7, 7, 7]);
+        assert!(r.overflow);
+    }
+
+    /// TC-PB-OCT-6: NaN → blank with overflow.
+    #[test]
+    fn tc_pb_oct_6_nan() {
+        let r = format_register_octal(f32::NAN);
+        assert_eq!(r.digits, [0; 5]);
+        assert!(r.overflow);
+    }
+
+    // ── decode_dsky: V05 vs other verbs ───────────────────────────────────────
+
+    /// TC-PB-DV5-1: V05 renders R1..R3 in octal.
+    #[test]
+    fn tc_pb_dv5_1_v05_renders_octal() {
+        let state = DskyState {
+            verb: 5,
+            noun: 9,
+            r: [0.0, 0.0, 0o31202 as f32],
+            ..Default::default()
+        };
+        let frame = decode_dsky(&state);
+        assert_eq!(frame.r3.digits, [3, 1, 2, 0, 2], "V05 must use octal");
+        assert_eq!(frame.r3.sign, 0, "V05 octal blanks the sign");
+    }
+
+    /// TC-PB-DV5-2: Non-V05 verbs render decimal (V06 / V16).
+    #[test]
+    fn tc_pb_dv5_2_v06_renders_decimal() {
+        let state = DskyState {
+            verb: 6,
+            noun: 36,
+            r: [0.0, 0.0, 1202.0],
+            ..Default::default()
+        };
+        let frame = decode_dsky(&state);
+        assert_eq!(frame.r3.digits, [0, 1, 2, 0, 2], "V06 must use decimal");
+        assert_eq!(frame.r3.sign, 1, "V06 decimal shows positive sign");
     }
 
     /// TC-PB-12: 7-segment encoding table is exact.

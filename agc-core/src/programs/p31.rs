@@ -49,17 +49,6 @@ pub const CSI_MIN_DV: f64 = 0.1; // m/s
 /// CSI→CDH timing is deferred.
 pub const CSI_TO_CDH_INTERVAL_S: f64 = 2700.0;
 
-// ── Alarm codes ────────────────────────────────────────────────────────────────
-//
-// Collision analysis (grep ALARM_ across programs/):
-//   p20.rs:  0o01421, 0o00404, 0o00405, 0o00400
-//   p22.rs:  0o01420, 0o01421, 0o01422, 0o01424, 0o01425, 0o00400
-//   p23.rs:  0o01420, 0o01421, 0o01426, 0o01427, 0o01430, 0o01431, 0o01432
-//   p30.rs:  210 (decimal)
-//
-// P23 uses 0o01430 (TOO_CLOSE_TO_BODY), 0o01431 (REJECT_OVERRIDE), 0o01432 (LANDMARK_RANGE_ZERO).
-// Therefore P31/P32 use codes 0o01434–0o01437.
-
 use crate::tables::alarm_codes::{ALARM_P31_NO_TARGET, ALARM_P31_NOT_CONVERGED};
 
 // ── Result and error types ─────────────────────────────────────────────────────
@@ -110,7 +99,7 @@ pub fn init_p31(state: &mut AgcState) -> JobPriority {
 ///
 /// # Preconditions
 /// - `state.rendezvous_nav.target_pos` and `target_vel` must be non-zero
-///   (target state must exist); otherwise alarm 01434 is raised.
+///   (target state must exist); otherwise `ALARM_P31_NO_TARGET` is raised.
 /// - `state.vn.pending_tig` must be `Some(tig)` with the desired CSI TIG.
 ///
 /// # Post-conditions (success)
@@ -537,13 +526,10 @@ mod tests {
             state.pending_maneuver.is_none(),
             "pending_maneuver must stay None when target is zero"
         );
-        // ALARM_P31_NO_TARGET is a non-pub const in the parent module.
-        // Access via `super::` path — child modules can see parent private items.
-        // Value: 0o01434 (octal) = 796 (decimal), verified from p31.rs source.
         assert_eq!(
             state.alarm.code(),
             super::ALARM_P31_NO_TARGET,
-            "alarm.code must be ALARM_P31_NO_TARGET (0o01434 = 796), got {}",
+            "alarm.code must equal ALARM_P31_NO_TARGET, got 0o{:o}",
             state.alarm.code()
         );
         assert!(state.alarm.lit, "alarm.lit must be true");

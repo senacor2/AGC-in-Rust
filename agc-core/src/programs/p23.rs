@@ -102,18 +102,6 @@ pub const P23_MIN_LANDMARK_RANGE_M: f64 = 1_000.0;
 /// Spec: p23-spec.md §4.6
 pub const P23_MAX_PROCESS_NOISE_DT_S: f64 = 86_400.0; // 24 h
 
-// ── Alarm codes ─────────────────────────────────────────────────────────────────
-//
-// Collision analysis (grep ALARM_ across programs/):
-//   p20.rs:  0o01421 ALARM_W_OVERFLOW, 0o00404 ALARM_NO_RADAR, 0o00405 ALARM_REJECT_OVERRIDE,
-//            0o00400 ALARM_FRAME_MISMATCH
-//   p22.rs:  0o01420 ALARM_NO_CSM_SV, 0o01421 ALARM_CSM_W_OVERFLOW (same code, same semantics),
-//            0o01422 ALARM_LANDMARK_REJECT, 0o01424 ALARM_BAD_LANDMARK_INDEX,
-//            0o01425 ALARM_LANDMARK_RANGE_ZERO, 0o00400 ALARM_FRAME_MISMATCH
-//
-// P23 shares 0o01420 (NO_CSM_SV) and 0o01421 (W_OVERFLOW) with P22 — semantics identical.
-// P23-exclusive codes: 0o01426–0o01432 (all previously unused; spec §8 confirms this range).
-
 use crate::tables::alarm_codes::{
     ALARM_P23_BAD_ANGLE as ALARM_BAD_ANGLE, ALARM_P23_LANDMARK_RANGE_ZERO,
     ALARM_P23_NO_STAR_LOCK as ALARM_NO_STAR_LOCK, ALARM_P23_REJECT_OVERRIDE,
@@ -871,8 +859,9 @@ mod tests {
         p23_init(&mut state);
 
         assert_eq!(
-            state.alarm.code(), 0o01420,
-            "alarm.code must be 0o01420 (NO_CSM_SV)"
+            state.alarm.code(),
+            crate::tables::alarm_codes::NO_CSM_SV,
+            "alarm.code must equal NO_CSM_SV"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");
         assert!(
@@ -1073,8 +1062,9 @@ mod tests {
             "tracking_active must be false after 5 rejects"
         );
         assert_eq!(
-            state.alarm.code(), 0o01431,
-            "alarm.code must be 0o01431 (REJECT_OVERRIDE)"
+            state.alarm.code(),
+            crate::tables::alarm_codes::ALARM_P23_REJECT_OVERRIDE,
+            "alarm.code must equal ALARM_P23_REJECT_OVERRIDE"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");
 
@@ -1146,8 +1136,9 @@ mod tests {
         p23_incorporate_star_horizon_mark(&mut state, mark);
 
         assert_eq!(
-            state.alarm.code(), 0o01430,
-            "alarm.code must be 0o01430 (TOO_CLOSE_TO_BODY)"
+            state.alarm.code(),
+            crate::tables::alarm_codes::ALARM_P23_TOO_CLOSE_TO_BODY,
+            "alarm.code must equal ALARM_P23_TOO_CLOSE_TO_BODY"
         );
         assert!(state.alarm.lit, "alarm.lit must be true");
         assert_eq!(

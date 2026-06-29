@@ -142,7 +142,7 @@ pub struct RendezvousNavState {
     pub reject_count: u16,
 
     /// Consecutive rejects since the last accepted mark. Reset to 0 on acceptance.
-    /// Triggers alarm 00405 when it reaches 5.
+    /// Triggers `ALARM_P20_REJECT_OVERRIDE` when it reaches 5.
     /// Spec override: added per Phase 2 hard override §3 (§11 edge case (c)).
     pub consecutive_reject_count: u8,
 
@@ -644,7 +644,7 @@ fn p20_rectify_w_matrix_internal(state: &mut AgcState) {
 ///
 /// Unpacks the `RendezvousNavState` pos/vel into a flat 6-vector, delegates to
 /// `navigation::kalman::scalar_measurement_update`, then writes the result back.
-/// On W-matrix overflow, raises alarm 01421 and calls `p20_rectify_w_matrix`.
+/// On W-matrix overflow, raises `CSM_W_OVERFLOW` and calls `p20_rectify_w_matrix`.
 ///
 /// This wrapper preserves the observable behaviour of the original function
 /// (including alarm and rectify on overflow) so that existing P20 tests and
@@ -690,7 +690,7 @@ fn scalar_measurement_update(
 
 /// Check and act on the consecutive-reject counter.
 ///
-/// Raises alarm 00405 and sets tracking_active = false when the counter
+/// Raises `ALARM_P20_REJECT_OVERRIDE` and sets tracking_active = false when the counter
 /// reaches 5 consecutive rejects without an accepted mark.
 ///
 /// Spec: p20-spec.md §6.6, §11 edge case (c)
@@ -827,10 +827,10 @@ mod tests {
         );
     }
 
-    // ── TC-P20-2: Init with zero target SV raises alarm 00404 ─────────────────
+    // ── TC-P20-2: Init with zero target SV raises ALARM_P20_NO_RADAR ──────────
 
     /// TC-P20-2: Verify that `p20_init` with `StateVector::ZERO` as target
-    /// raises alarm 00404 and leaves tracking inactive.
+    /// raises `ALARM_P20_NO_RADAR` and leaves tracking inactive.
     #[test]
     fn tc_p20_2_init_zero_target_sv_alarms_00404() {
         let mut state = AgcState::new();
@@ -986,10 +986,10 @@ mod tests {
         );
     }
 
-    // ── TC-P20-5: Five consecutive rejects raise alarm 00405 ──────────────────
+    // ── TC-P20-5: Five consecutive rejects raise ALARM_P20_REJECT_OVERRIDE ────
 
     /// TC-P20-5: Verify that five consecutive rejected marks increment
-    /// `consecutive_reject_count` to 5, raise alarm 00405, and set
+    /// `consecutive_reject_count` to 5, raise `ALARM_P20_REJECT_OVERRIDE`, and set
     /// `tracking_active = false`.
     #[test]
     fn tc_p20_5_five_consecutive_rejects_alarm_00405() {
@@ -1122,9 +1122,9 @@ mod tests {
 
     // TC-P20-7: deferred (see spec §10 override)
 
-    // ── TC-P20-8: Frame mismatch on nav cycle raises alarm 00400 ──────────────
+    // ── TC-P20-8: Frame mismatch on nav cycle raises FRAME_MISMATCH ───────────
 
-    /// TC-P20-8: Verify that `p20_rendezvous_nav_cycle` raises alarm 00400
+    /// TC-P20-8: Verify that `p20_rendezvous_nav_cycle` raises `FRAME_MISMATCH`
     /// and sets `tracking_active = false` when CSM and target are in different
     /// frames (simulating a mid-flight SOI crossing).
     #[test]
