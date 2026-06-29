@@ -28,14 +28,8 @@ pub const P32_PRIORITY: JobPriority = 10;
 
 /// Minimum chaser-target radial separation at CDH TIG below which the geometry
 /// is considered degenerate (m). If |r_c_mag - r_t_mag| < CDH_MIN_DELTAH,
-/// alarm 01436 is raised.
+/// `ALARM_P32_NO_TARGET` is raised.
 pub const CDH_MIN_DELTAH: f64 = 1_000.0; // m
-
-// ── Alarm codes ────────────────────────────────────────────────────────────────
-//
-// See p31.rs for full collision analysis.
-// Codes 0o01434 and 0o01435 are used by P31.
-// Codes 0o01436 and 0o01437 are assigned here.
 
 use crate::tables::alarm_codes::{ALARM_P32_DEGENERATE, ALARM_P32_NO_TARGET};
 

@@ -86,7 +86,7 @@ pub struct GroundTrackResult {
 /// `p21_compute_ground_track` directly with the desired GET.
 ///
 /// # Preconditions
-/// - `state.csm_state.epoch` must be non-zero; otherwise alarm 01420 is raised
+/// - `state.csm_state.epoch` must be non-zero; otherwise `NO_CSM_SV` is raised
 ///   and the program returns without a computation.
 /// - `state.gha_epoch_rad` must have been set by uplink or crew entry.
 ///

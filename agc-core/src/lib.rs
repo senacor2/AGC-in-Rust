@@ -258,7 +258,7 @@ pub struct AgcState {
     ///
     /// Seconds from mission epoch (same time base as `Met.to_seconds()`).
     /// Set to `Some(epoch_s)` by `p33_init` on successful TPI computation.
-    /// Read by `p34_init`; if `None`, P34 raises alarm 01441.
+    /// Read by `p34_init`; if `None`, P34 raises `ALARM_P33_NO_TIG`.
     /// Reset to `None` on FRESH START.
     ///
     /// AGC erasable: TTPI (computed TPI arrival time; scale B+17 centiseconds).

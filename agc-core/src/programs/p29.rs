@@ -248,7 +248,7 @@ mod tests {
         assert!(!state.alarm.lit);
     }
 
-    /// TC-P29-FLOW-2: alarm 01430 fires when CSM state vector is fresh-start
+    /// TC-P29-FLOW-2: ALARM_P29_NO_CSM_SV fires when CSM state vector is fresh-start
     /// zero (epoch_cs == 0).
     #[test]
     fn tc_p29_flow_2_no_csm_sv_alarm() {

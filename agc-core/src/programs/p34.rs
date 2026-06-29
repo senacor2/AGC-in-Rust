@@ -62,9 +62,9 @@ pub(crate) use crate::tables::alarm_codes::ALARM_P34_TOO_CLOSE;
 /// - `state.rendezvous_nav.target_pos` must be non-zero; otherwise alarm
 ///   01440.
 /// - `state.tpi_arrival_epoch` must be `Some(_)` (P33 must have run);
-///   otherwise alarm 01441.
-/// - `state.vn.pending_tig` must be `Some(_)`; otherwise alarm 01441.
-/// - `dt_midcourse` must be ≥ `TPI_MIN_TOF_S`; otherwise alarm 01443.
+///   otherwise `ALARM_P33_NO_TIG`.
+/// - `state.vn.pending_tig` must be `Some(_)`; otherwise `ALARM_P33_NO_TIG`.
+/// - `dt_midcourse` must be ≥ `TPI_MIN_TOF_S`; otherwise `ALARM_P33_DEGENERATE`.
 /// - Chaser-to-target range must be ≥ `TPM_MIN_RANGE_M`; otherwise alarm
 ///   01445.
 ///
@@ -323,7 +323,7 @@ mod tests {
 
     // ── TC-P34-3: P34 without prior P33 (tpi_arrival_epoch == None) → alarm ──
     //
-    // p34_init must raise alarm 01441 (ALARM_P33_NO_TIG) and leave
+    // p34_init must raise ALARM_P33_NO_TIG and leave
     // pending_maneuver unchanged when tpi_arrival_epoch is None.
     #[test]
     fn tc_p34_3_no_prior_p33_alarms() {
@@ -344,7 +344,7 @@ mod tests {
         assert!(state.alarm.lit, "TC-P34-3: alarm must be lit");
         assert_eq!(
             state.alarm.code(), ALARM_P33_NO_TIG,
-            "TC-P34-3: alarm code should be ALARM_P33_NO_TIG (0o01441)"
+            "TC-P34-3: alarm code should be ALARM_P33_NO_TIG"
         );
         assert!(
             state.pending_maneuver.is_none(),
@@ -355,7 +355,7 @@ mod tests {
     // ── TC-P34-4: dt_midcourse too small (arrival already passed) → alarm ────
     //
     // Set tpi_arrival_epoch just 5 s after the P34 TIG so dt_midcourse = 5 < 60.
-    // p34_init must raise alarm 01443 (ALARM_P33_DEGENERATE).
+    // p34_init must raise ALARM_P33_DEGENERATE.
     #[test]
     fn tc_p34_4_arrival_already_passed_alarms() {
         let r_c: Vec3 = [R_LEO, 0.0, 0.0];
@@ -379,7 +379,7 @@ mod tests {
         assert!(state.alarm.lit, "TC-P34-4: alarm must be lit");
         assert_eq!(
             state.alarm.code(), ALARM_P33_DEGENERATE,
-            "TC-P34-4: alarm code should be ALARM_P33_DEGENERATE (0o01443)"
+            "TC-P34-4: alarm code should be ALARM_P33_DEGENERATE"
         );
         assert!(
             state.pending_maneuver.is_none(),
@@ -389,7 +389,7 @@ mod tests {
 
     // ── TC-P34-5: chaser within TPM_MIN_RANGE_M of target → alarm ────────────
     //
-    // Place target at only 50 m from chaser. p34_init must raise alarm 01445
+    // Place target at only 50 m from chaser. p34_init must raise ALARM_P34_TOO_CLOSE
     // (ALARM_P34_TOO_CLOSE) before attempting Lambert.
     #[test]
     fn tc_p34_5_too_close_alarms() {
@@ -412,7 +412,7 @@ mod tests {
         assert!(state.alarm.lit, "TC-P34-5: alarm must be lit");
         assert_eq!(
             state.alarm.code(), ALARM_P34_TOO_CLOSE,
-            "TC-P34-5: alarm code should be ALARM_P34_TOO_CLOSE (0o01445)"
+            "TC-P34-5: alarm code should be ALARM_P34_TOO_CLOSE"
         );
         assert!(
             state.pending_maneuver.is_none(),

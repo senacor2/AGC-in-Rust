@@ -54,18 +54,6 @@ pub const TPI_STALE_TARGET_CS: u64 = 180_000;
 /// Used only for display — P33 does not iterate TIG to match this angle.
 pub const TPI_NOMINAL_ELEVATION_RAD: f64 = 0.4793;
 
-// ── Alarm codes ────────────────────────────────────────────────────────────────
-//
-// Collision analysis (grep ALARM_ across programs/):
-//   p20.rs:  0o01421, 0o00404, 0o00405, 0o00400
-//   p22.rs:  0o01420, 0o01421, 0o01422, 0o01424, 0o01425, 0o00400
-//   p23.rs:  0o01420, 0o01421, 0o01426, 0o01427, 0o01430, 0o01431, 0o01432
-//   p30.rs:  210 (decimal)
-//   p31.rs:  0o01434, 0o01435
-//   p32.rs:  0o01436, 0o01437
-//
-// P33/P34 use codes 0o01440–0o01445 (no collision).
-
 pub(crate) use crate::tables::alarm_codes::{
     ALARM_P33_DEGENERATE, ALARM_P33_LAMBERT, ALARM_P33_NO_TARGET, ALARM_P33_NO_TIG,
     ALARM_P33_STALE_TARGET,
@@ -596,7 +584,7 @@ mod tests {
         );
         assert_eq!(
             state.alarm.code(), ALARM_P33_NO_TARGET,
-            "TC-P33-6: alarm code should be ALARM_P33_NO_TARGET (0o01440)"
+            "TC-P33-6: alarm code should be ALARM_P33_NO_TARGET"
         );
         assert!(
             state.pending_maneuver.is_none(),
