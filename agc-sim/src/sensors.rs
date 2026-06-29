@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Sensor simulation helpers for P51/P52 star sightings, P22 landmark sightings,
 //! and P02 gyrocompass Earth-rate injection.
 //!

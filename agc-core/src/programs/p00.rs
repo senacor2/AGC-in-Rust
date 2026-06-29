@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! P00 — CMC Idle.
 //!
 //! The lowest-priority background job. Maintains coasting state-vector

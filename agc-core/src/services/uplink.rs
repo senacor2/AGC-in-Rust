@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! UPRUPT path: ground uplink → V/N processor.
 //!
 //! [`poll_uplink`] drains words from the HAL [`Uplink`] FIFO and feeds them

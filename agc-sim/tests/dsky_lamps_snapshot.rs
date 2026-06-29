@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! M-D.4 — DSKY indicator-lamp snapshot tests (issue #140).
 //!
 //! Drives five scenarios and asserts on the **rendered** `DskyFrame`

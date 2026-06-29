@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Timing compliance tests.
 //!
 //! Verify that T3RUPT, T5RUPT, and T6RUPT tasks complete within their

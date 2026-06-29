@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Verb/Noun processor (PINBALL).
 //!
 //! State machine that assembles crew keystrokes into Verb/Noun commands

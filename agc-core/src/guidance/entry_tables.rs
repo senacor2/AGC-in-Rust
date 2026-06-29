@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Reference profile and named constants for the P64 / P65 / P67 entry
 //! guidance law (REENTRY_CONTROL.agc).
 //!

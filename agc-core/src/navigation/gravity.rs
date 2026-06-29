@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Earth and Moon gravity models.
 //!
 //! Provides gravitational acceleration as a function of position, including

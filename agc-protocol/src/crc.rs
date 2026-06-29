@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! CRC-16/CCITT: poly=0x1021, init=0xFFFF, no reflection, no xorout.
 
 // Convenience wrapper used in tests; callers that need streaming use Crc16 directly.

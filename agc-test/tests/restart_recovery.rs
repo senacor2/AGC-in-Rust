@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Restart recovery tests.
 //!
 //! Inject restarts at random points during execution and verify that the

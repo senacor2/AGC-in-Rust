@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! MS-E7d live yaAGC entry-scenario tests.
 //!
 //! Drives the two named entry scenarios end-to-end through a real

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /// SPS (Service Propulsion System) engine interface.
 pub trait Engine {
     /// Enable or disable the SPS engine (ignition / cutoff).

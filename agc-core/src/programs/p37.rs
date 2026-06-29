@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! P37 — Return to Earth
 //!
 //! Contingency program for computing a Trans-Earth Injection (TEI) burn

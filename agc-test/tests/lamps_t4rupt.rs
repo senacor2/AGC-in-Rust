@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! T4RUPT lamp-refresh ordering tests for issue #137.
 //!
 //! Verifies that `services::t4rupt::t4rupt_step` invokes

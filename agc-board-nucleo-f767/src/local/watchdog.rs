@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Independent Watchdog (IWDG) wrapper.
 //!
 //! `init()` programs the IWDG for a 1.024 s timeout:

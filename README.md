@@ -39,3 +39,15 @@ Per-phase tests (`phase_tli.rs`, `phase_translunar.rs`, `phase_loi.rs`, `phase_l
 * [User's Guide to The General Assembler Program (GAP)](https://www.ibiblio.org/apollo/Documents/Users_Guide_GAP_text.pdf)
 * [Izzo, D. (2015) "Revisiting Lambert's problem"](https://www.esa.int/gsp/ACT/doc/MAD/pub/ACT-RPR-MAD-2014-RevisitingLambertProblem.pdf) *Celestial Mechanics and Dynamical Astronomy*, 121(1), 1–15. The Lambert solver used in `math/lambert.rs` is based on this paper (Eqs. 18–30).
 * [Rust Embedded](https://github.com/rust-embedded) the description of the target environment.
+
+## License
+
+This project is licensed under the **GNU General Public License v3.0 or later** (GPL-3.0-or-later). See [LICENSE](LICENSE) for the full text.
+
+Strong copyleft is a deliberate choice: any derivative work must be released under the same terms, which keeps this re-implementation — and anything built on top of it — open and non-proprietary.
+
+## Credits & Attribution
+
+The original Apollo Guidance Computer software is in the **public domain**. It was developed at the MIT Instrumentation Laboratory (later Charles Stark Draper Laboratory) under NASA contract. Foundational design and implementation are owed to Hal Laning, J. Halcombe Laning, Margaret Hamilton, Don Eyles, and the many other engineers and programmers of the MIT IL team.
+
+The digitized AGC source code used as reference here comes from the [chrislgarry/Apollo-11](https://github.com/chrislgarry/Apollo-11) mirror and from the [VirtualAGC project](https://www.ibiblio.org/apollo/) by Ron Burkey and contributors. All original AGC assembler quoted, mirrored, or referenced in `input/` remains in the public domain; only the Rust re-implementation in this repository is covered by the GPL-3.0-or-later license above.

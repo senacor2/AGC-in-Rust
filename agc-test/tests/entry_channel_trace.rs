@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! MS-E7c channel-trace integration tests.
 //!
 //! Three tiers:

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use agc_imu_platform::{PlatformEmulator, UnitQuaternion, CDU_PULSE_RAD, GYRO_PULSE_RAD};
 
 fn assert_near(a: f64, b: f64, tol: f64, label: &str) {

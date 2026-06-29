@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! MS-T4 integration test: Apollo 8 trans-lunar coast from post-TLI to LOI-1.
 //!
 //! # Purpose

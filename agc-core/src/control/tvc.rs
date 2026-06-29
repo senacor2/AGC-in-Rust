@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Thrust Vector Control state for SPS burns.
 //!
 //! # Phase C — compute functions

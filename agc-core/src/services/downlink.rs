@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! MSFN downlink — encode AGC state into the MSFN telemetry word stream.
 //!
 //! The AGC generates downlink data every 20 ms (50 Hz) via a DOWNRUPT interrupt.

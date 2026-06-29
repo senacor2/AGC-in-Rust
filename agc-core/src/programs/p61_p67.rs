@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Entry guidance programs P61–P67.
 //!
 //! **Milestone 4 Phase 5 — skeletons only.** These programs wire up the

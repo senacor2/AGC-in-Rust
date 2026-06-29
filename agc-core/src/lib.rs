@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! AGC-in-Rust — Comanche055 (Command Module) guidance software.
 //!
 //! This crate is `no_std` (no heap, no OS). All state lives in [`AgcState`].

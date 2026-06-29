@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Lunar orientation (libration) model — IAU 2015 / Eckhardt-equivalent.
 //!
 //! Computes the rotation that takes a point expressed in the Moon-fixed

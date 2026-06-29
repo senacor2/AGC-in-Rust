@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Time conversion utilities and Earth-rotation constants.
 //!
 //! The AGC uses the Greenwich Hour Angle of Aries (GHA) — the angle between

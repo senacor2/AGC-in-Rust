@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Kepler equation solvers and universal variable formulation.
 //!
 //! Implements the conic propagation routines that replace the AGC's

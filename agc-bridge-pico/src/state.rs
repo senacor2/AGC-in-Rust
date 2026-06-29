@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Shared bridge state (no peripheral ownership — just data).
 
 pub struct BridgeState {

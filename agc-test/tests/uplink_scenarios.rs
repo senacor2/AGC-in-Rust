@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! End-to-end uplink scenarios driven through the agc-sim
 //! [`ScriptedUplink`] + [`T4Pump`] path.
 //!

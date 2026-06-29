@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! JSON fixture loading for navigation accuracy tests.
 //!
 //! Each public function loads one of the committed fixture files from the

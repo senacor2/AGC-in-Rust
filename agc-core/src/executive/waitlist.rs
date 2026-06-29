@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /// Maximum number of concurrently pending waitlist tasks.
 pub const MAX_WAITLIST_TASKS: usize = 8;
 

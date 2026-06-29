@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Tabulated exponential atmosphere model for entry guidance.
 //!
 //! The Apollo entry routine (`REENTRY_CONTROL.agc`, sub-routine `RHO`) treats

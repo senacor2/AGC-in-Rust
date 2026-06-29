@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Attitude control — rate damping, attitude hold, and maneuver logic.
 //!
 //! This module is the computational core of the CSM Coast DAP. It is called by

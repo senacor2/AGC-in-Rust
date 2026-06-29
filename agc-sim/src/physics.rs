@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Simplified spacecraft dynamics model for simulation.
 //!
 //! Integrates Δv from the SPS engine each simulator tick and emits PIPA

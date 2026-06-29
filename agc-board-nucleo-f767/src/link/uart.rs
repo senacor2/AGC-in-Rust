@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! USART6 bridge link driver.
 //!
 //! Provides `UartLink`, which owns the USART6 peripheral wired to PC6 (TX) /

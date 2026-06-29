@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! P11 — Earth Orbit Insertion Monitor
 //!
 //! Passive monitor that continuously refreshes the DSKY V16N44 display

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! M-A.2 — V16 monitor integration tests for the entry-phase display
 //! nouns N63 / N64 / N66 / N67 / N68 (issue #125).
 //!

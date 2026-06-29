@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /// Sequential Events Control System interface — the pyrotechnic discrete
 /// channel for parachute deployment and other one-shot CM/SM events.
 ///

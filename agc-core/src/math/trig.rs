@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Trigonometric helpers.
 //!
 //! Thin wrappers around `libm` for `no_std` compatibility.

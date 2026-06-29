@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! P23 — Cislunar Midcourse Navigation (star-horizon and star-landmark sightings).
 //!
 //! Runs during the translunar and transearth coast phases of the lunar mission.

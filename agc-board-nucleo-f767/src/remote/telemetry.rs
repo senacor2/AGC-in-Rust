@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Remote telemetry downlink: words forwarded over the link.
 
 use agc_core::hal::telemetry::Telemetry;

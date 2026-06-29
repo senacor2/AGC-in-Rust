@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! FRESH START and RESTART sequences.
 //!
 //! **FRESH START**: Full re-initialisation (power-on or crew-initiated).

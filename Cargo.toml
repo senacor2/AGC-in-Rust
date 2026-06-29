@@ -12,6 +12,9 @@ members = ["agc-core", "agc-sim", "agc-test", "agc-protocol", "agc-board-nucleo-
 default-members = ["agc-core", "agc-sim", "agc-test", "agc-protocol", "agc-imu-platform"]
 resolver = "2"
 
+[workspace.package]
+license = "GPL-3.0-or-later"
+
 [profile.release]
 panic = "abort"
 opt-level = "s"

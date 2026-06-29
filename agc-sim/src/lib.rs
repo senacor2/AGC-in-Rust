@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! agc-sim — host-side simulator for agc-core.
 //!
 //! Provides a software implementation of [`agc_core::hal::AgcHardware`]

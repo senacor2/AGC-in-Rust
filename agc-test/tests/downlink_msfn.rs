@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! MSFN downlink format tests — compares the Rust CMCSTADL encoder output
 //! against the analytically-derived `downlink_fresh_start.json` fixture.
 //!

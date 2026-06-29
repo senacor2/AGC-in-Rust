@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! P15 — Trans-Lunar Injection (TLI) Monitor.
 //!
 //! Passive monitor that refreshes the DSKY V16N44 triplet (apogee /

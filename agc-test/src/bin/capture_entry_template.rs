@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! `capture_entry_template` — produce the binary template core dump
 //! that the MS-E7d live yaAGC entry tests resume from.
 //!

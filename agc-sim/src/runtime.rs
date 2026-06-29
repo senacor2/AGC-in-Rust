@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! "Soft executive" helpers for host-side simulation.
 //!
 //! On the bare-metal target, [`agc_core::executive::Executive::run`]

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Digital Autopilot (DAP) supervisor state.
 
 use crate::types::{CduAngle, Vec3};

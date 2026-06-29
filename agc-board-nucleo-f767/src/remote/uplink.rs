@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Remote uplink receiver: words are cached in `BridgeState.uplink_queue`.
 
 use agc_core::hal::uplink::Uplink;

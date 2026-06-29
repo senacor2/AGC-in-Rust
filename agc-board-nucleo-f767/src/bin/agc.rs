@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! AGC firmware entry point for the Nucleo-F767ZI.
 //!
 //! Boot sequence:

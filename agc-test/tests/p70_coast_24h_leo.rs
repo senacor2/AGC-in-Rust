@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! MS-T2 exit-criterion test: 24-hour LEO coast — AGC tracks ground truth.
 //!
 //! Seeds a circular LEO state vector, provides the same state as the

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! P01 — Pre-launch IMU Initialisation.
 //! P02 — Gyrocompassing.
 //!

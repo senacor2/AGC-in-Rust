@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! IMU coarse/fine alignment, gyro drift compensation, and PIPA compensation.
 //!
 //! This module owns:

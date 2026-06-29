@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! P33 — Terminal Phase Initiation (TPI) targeting.
 //!
 //! Computes the TPI burn that carries the chaser (CSM) to the target's (LM)

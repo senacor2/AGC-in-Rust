@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /// Job priority. 0 = slot empty / idle. Higher value = higher priority.
 /// The original AGC used octal values such as 37 for the autopilot job.
 pub type JobPriority = u8;

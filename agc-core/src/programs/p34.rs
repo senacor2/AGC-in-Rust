@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! P34 — Terminal Phase Midcourse (TPM) correction targeting.
 //!
 //! Computes the midcourse correction burn during the TPI transfer that

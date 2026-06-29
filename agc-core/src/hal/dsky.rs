@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /// DSKY (Display and Keyboard) hardware interface.
 ///
 /// Per ADR-019 the bridge uses a per-field row encoding (not the original

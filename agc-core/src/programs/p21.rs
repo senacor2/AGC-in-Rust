@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! P21 — Ground-Track Determination.
 //!
 //! Display-only program. Given a target GET, propagates the CSM state vector

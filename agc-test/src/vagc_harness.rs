@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! VirtualAGC fixture-capture harness for AGC-in-Rust.
 //!
 //! Provides three building blocks used by the routine-level capture

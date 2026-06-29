@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! BMI088 SPI3 driver.
 //!
 //! Owns the SPI3 peripheral and the two chip-select pins (PA15 for the

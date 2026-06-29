@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! P47 — Thrust Monitor.
 //!
 //! Passive display-only program that shows the inertial delta-V the

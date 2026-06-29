@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! DSKY display state (PINBALL system).
 //!
 //! Maintains the shadow copy of the DSKY display. The T4RUPT handler reads

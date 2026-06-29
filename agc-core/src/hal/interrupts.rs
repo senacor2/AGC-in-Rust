@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /// AGC program interrupt sources, in priority order (lowest number = highest priority).
 ///
 /// Mapped to hardware timer interrupts on the MCU via the device PAC's

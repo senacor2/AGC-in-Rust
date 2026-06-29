@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! `capture_downlink` — Capture one 2-second CMCSTADL cycle from a fresh-start yaAGC.
 //!
 //! Starts yaAGC with the Comanche055 rope, connects a channel client, waits for

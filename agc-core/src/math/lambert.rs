@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Lambert's problem — transfer orbit between two position vectors in a given time.
 //!
 //! Implements the Lambert targeting algorithm that underlies P31, P34, and

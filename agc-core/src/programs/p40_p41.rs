@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! P40 — SPS thrusting program.
 //! P41 — RCS thrusting program.
 //!

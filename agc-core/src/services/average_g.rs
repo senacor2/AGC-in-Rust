@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! SERVICER — the 2-second navigation cycle (Average-G integration).
 //!
 //! Reads PIPA delta-V counts from the staging field `AgcState::pipa_counts`,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Conic section trajectory routines (Keplerian elements, orbit classification).
 //!
 //! Provides conversion between Cartesian state vectors and classical Keplerian

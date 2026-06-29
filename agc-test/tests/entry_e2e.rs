@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! MS-E7 end-to-end entry scenarios — Rust-only path.
 //!
 //! Drives the AGC entry-guidance pipeline (P61–P67) through a complete

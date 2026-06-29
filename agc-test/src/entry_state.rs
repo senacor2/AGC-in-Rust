@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Entry-scenario erasable-state preload for the MS-E7d live yaAGC tests.
 //!
 //! Encodes a high-level [`EntryInitialState`] (SI units, ECI frame)

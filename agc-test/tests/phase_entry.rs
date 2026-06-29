@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! MS-T6 — Entry phase end-to-end integration test, scenario-runner-driven.
 //!
 //! Implements GitHub issue #29. Spec: `specs/ms-t6-phase-entry-spec.md`.

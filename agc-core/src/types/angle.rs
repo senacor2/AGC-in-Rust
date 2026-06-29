@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 use super::vector::Vec3;
 
 /// CDU (Coupling Data Unit) gimbal angle from the IMU or optics.

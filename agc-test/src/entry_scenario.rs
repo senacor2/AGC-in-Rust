@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Shared entry-scenario runner for the MS-E7 / MS-E7d test suites.
 //!
 //! Hosts the Rust-only closed-loop entry pipeline (`simulate_to_drogue`)

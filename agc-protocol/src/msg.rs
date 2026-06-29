@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /// All messages that can travel over the bridge link.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Msg {

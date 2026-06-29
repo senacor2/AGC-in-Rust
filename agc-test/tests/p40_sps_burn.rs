@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! P40 SPS-burn integration test driven by V/N keystrokes.
 //!
 //! Drives a complete crew keystroke sequence through the agc-sim
