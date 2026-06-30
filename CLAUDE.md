@@ -73,3 +73,9 @@ The Rust implementation must reflect the original AGC constraints:
 - Inputs: stellar positions, inertial navigation platform (orientation + acceleration)
 - Outputs: thruster control (orientation changes), main engine control (velocity changes)
 - Crew interface: simple console (DSKY-style) for invoking navigation programs
+
+## License
+
+The source code of this project is under GPLv3 as described in the [README](README.md). 
+Dependencies shall only be selected if their license is compatible with integration into a GPLv3 project.
+Also make sure that the SPDX-License-Identifier is added to each new source file.
