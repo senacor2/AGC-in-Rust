@@ -14,10 +14,10 @@ Work proceeds through a pipeline of specialized subagents defined in `.claude/ag
 
 1. **analyst-reengineer** — reads the AGC assembler source and reference docs, produces functional specifications per component. This step is optional, if there is no legacy code involved. The analyst-reengineer however can be consulted later in the process if AGC-related questions arise.
 2. **orbital-mechanics** - produces a specification of the underlying physics of spaceflight for the architect. This step is optional but the orbital-mechanics agent must be consulted when issues arise concerning the physical model.
-2. **architect** — designs the Rust architecture based on functional specs; uses `EnterPlanMode`/`ExitPlanMode`
-3. **developer** — implements Rust code following architect guidelines and analyst specs
-4. **tester** — writes Rust unit tests (per public interface) and system tests
-5. **debugger** - invoked when tests break or do not deliver the expected results. The developer may ask the debugger about the actual behaviour of the code.
+3. **architect** — designs the Rust architecture based on functional specs; uses `EnterPlanMode`/`ExitPlanMode`
+4. **developer** — implements Rust code following architect guidelines and analyst specs
+5. **tester** — writes Rust unit tests (per public interface) and system tests
+6. **debugger** - invoked when tests break or do not deliver the expected results. The developer may ask the debugger about the actual behaviour of the code.
 
 Each agent reads outputs from the prior stage. The analyst's functional specs are the primary input to the architect and developer.
 
@@ -61,7 +61,6 @@ are deprecated. Update the issue status when you start working on the ticket and
 
 We use feature branching to implement major changes with one feature per change.
 The feature branch must be linked to the top-level issue and the name must match the change.
-
 
 ## Architecture Constraints
 
