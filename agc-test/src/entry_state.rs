@@ -160,9 +160,18 @@ const SCALE_VELOCITY_M_PER_CS: i8 = -21;
 const SCALE_TIME_CS: i8 = 0;
 
 /// Generic "fraction of 1" scale (`B+0` DP). 1 LSB = 2^-28.
-/// Used for REFSMMAT direction cosines (each element ∈ [−1, 1)) and
-/// for the target lat/lon expressed as a fraction of one revolution.
+/// Used at full scale for the target lat/lon (fraction of one
+/// revolution). REFSMMAT direction cosines also encode at this scale but
+/// with an additional half-scale factor — see [`REFSMMAT_HALF_SCALE`].
 const SCALE_FRACTION: i8 = -28;
+
+/// REFSMMAT is stored at AGC **half-scale** (B-1) per `P61-P67.agc:566`
+/// ("REFSMMAT (-1) .5 REF TO SM MATRIX"): each stored fraction is the
+/// direction cosine divided by two (the AGC multiplies by two on read).
+/// We encode at [`SCALE_FRACTION`] (B+0) and apply this factor directly;
+/// a literal B-1 scale (−29) would overflow the 28-bit combined word for
+/// a 1.0 element (issue #185).
+const REFSMMAT_HALF_SCALE: f64 = 0.5;
 
 /// Altitude scale (m). EMSALT is documented "I(2)PL" with no specific
 /// B-scale in `ERASABLE_ASSIGNMENTS.agc:2309`. We use the same scale
@@ -445,10 +454,13 @@ fn write_refsmmat(
                     scale: SCALE_FRACTION,
                     dp: true,
                 },
-                // Direction-cosine ±1 saturates at +1 - 2^-28; clamp
-                // toward 0 by an epsilon so writing identity does not
-                // hit the AGC's ones-complement overflow boundary.
-                cell.clamp(-1.0 + 2.0_f64.powi(-28), 1.0 - 2.0_f64.powi(-28)),
+                // REFSMMAT is stored at AGC half-scale (B-1): the stored
+                // fraction is the direction cosine / 2 (see
+                // `REFSMMAT_HALF_SCALE`). The halved value ∈ [−0.5, 0.5]
+                // stays clear of the ones-complement overflow boundary at
+                // ±1, so no epsilon clamp is needed; clamp the input to
+                // the valid direction-cosine range as a guard.
+                REFSMMAT_HALF_SCALE * cell.clamp(-1.0, 1.0),
             );
             if !ok {
                 return Err(PatchError::WriteRejected {
@@ -652,11 +664,14 @@ Symbol Table\n\
         }
     }
 
-    /// TC-ES-3: REFSMMAT cells are written into 9 consecutive DP
-    /// slots, each round-tripping near 1 (identity diagonal) or 0
-    /// (off-diagonal).
+    /// TC-ES-3: REFSMMAT is written into 9 consecutive DP slots at the
+    /// AGC **half-scale** (B-1) convention — the stored fraction is the
+    /// direction cosine ÷ 2 (`P61-P67.agc:566`). This checks the
+    /// convention, not just round-trip self-consistency: the stored
+    /// identity diagonal is 0.5 (off-diagonal 0.0), and interpreting at
+    /// half-scale (×2, as the AGC does) recovers the identity (issue #185).
     #[test]
-    fn tc_es_3_refsmmat_identity_layout() {
+    fn tc_es_3_refsmmat_half_scale_identity() {
         let symtab = fixture_symtab();
         let mut core = empty_core();
         let state = default_state();
@@ -667,7 +682,8 @@ Symbol Table\n\
             for col in 0..3 {
                 let idx = row * 3 + col;
                 let addr = bump_dp(base, idx).unwrap();
-                let value = read_scaled(
+                // Raw stored fraction (B+0).
+                let stored = read_scaled(
                     &core,
                     &ScaledVar {
                         addr,
@@ -676,13 +692,18 @@ Symbol Table\n\
                     },
                 )
                 .unwrap();
-                let expected = if row == col { 1.0 } else { 0.0 };
-                // Direction-cosines are clamped one LSB inside the
-                // ones-complement range, so the diagonal lands at
-                // 1.0 − 2^−28.
+                let cosine = if row == col { 1.0 } else { 0.0 };
+                // The AGC stores cosine ÷ 2 …
                 assert!(
-                    (value - expected).abs() < 2.0_f64.powi(-26),
-                    "REFSMMAT[{row}][{col}] = {value}, expected ≈ {expected}"
+                    (stored - REFSMMAT_HALF_SCALE * cosine).abs() < 2.0_f64.powi(-26),
+                    "REFSMMAT[{row}][{col}] stored = {stored}, expected {} (half-scale)",
+                    REFSMMAT_HALF_SCALE * cosine
+                );
+                // … and recovers the cosine by multiplying by 2 on read.
+                assert!(
+                    ((stored * 2.0) - cosine).abs() < 2.0_f64.powi(-26),
+                    "REFSMMAT[{row}][{col}] decoded = {}, expected {cosine}",
+                    stored * 2.0
                 );
             }
         }
