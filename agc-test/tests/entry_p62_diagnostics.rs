@@ -1047,6 +1047,173 @@ fn tc_e7i_b_parked_state_no_v33() {
     );
 }
 
+/// TC-E7I-D: use the yaAGC built-in debugger to catch the ACTUAL caller
+/// that raises the `0o01204` WAITLIST "zero/neg DT" alarm. Resumes the
+/// SAME patched core as `tc_e7i_b`, but runs yaAGC with the debugger
+/// active (breakpoints at `WATLST0-` — the `TC POODOO; OCT 1204` site —
+/// and at `POODOO`), drives `V37 ENTR 62 ENTR`, and on the first hit
+/// dumps a backtrace, the central registers, and a core image.
+///
+/// Diagnostic for issue #49. The `01204` is generated live during P62
+/// entry init (the committed template has `FAILREG = [01107, 0, 0]`;
+/// the parked state has `[01107, 01204, 0]` — the `01204` fills the
+/// first empty slot per `ALARM_AND_ABORT.agc` CHKFAIL1/CHKFAIL2). This
+/// test captures where it comes from instead of inferring it.
+#[test]
+fn tc_e7i_d_debugger_catch_01204() {
+    let template_path = template_core_path();
+    if !template_path.exists() {
+        eprintln!("skipping: no template core at {}", template_path.display());
+        return;
+    }
+    let root = vagc_root();
+    let yaagc = root.join("yaAGC/yaAGC");
+    let rope = root.join("Comanche055/MAIN.agc.bin");
+    let listing = root.join("Comanche055/MAIN.agc.lst");
+    let symtab_file = root.join("Comanche055/MAIN.agc.symtab");
+    if !yaagc.exists() || !rope.exists() || !listing.exists() || !symtab_file.exists() {
+        eprintln!(
+            "skipping: VirtualAGC build incomplete at {}",
+            root.display()
+        );
+        return;
+    }
+
+    let mut core = CoreImage::load(&template_path)
+        .unwrap_or_else(|e| panic!("load template {}: {e}", template_path.display()));
+    let symtab =
+        Symtab::load(&listing).unwrap_or_else(|e| panic!("load symtab {}: {e}", listing.display()));
+    let rust_state = setup_state_direct_leo();
+    let init = EntryInitialState {
+        position_m: rust_state.csm_state.position,
+        velocity_mps: rust_state.csm_state.velocity,
+        time_s: 0.0,
+        target_lat_rad: rust_state.entry.target_lat_rad,
+        target_lon_rad: rust_state.entry.target_lon_rad,
+        emsalt_m: 122_000.0,
+        alfa_pad_deg: -20.0,
+        lift_up: true,
+        refsmmat: EntryInitialState::identity_refsmmat(),
+        cmdapmod: -1,
+    };
+    patch_into(&mut core, &symtab, &init).expect("patch_into ok");
+
+    let work = std::env::temp_dir().join(format!("vagc_e7i_d_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).unwrap();
+    let core_in = work.join("core_in");
+    core.save(&core_in).unwrap();
+
+    // Debugger script: break at the 01204-specific WAITLIST alarm site
+    // and at POODOO; on the first hit dump the call chain, registers,
+    // and a core image, then quit. `WATLST0-` (the `TC POODOO`) is hit
+    // just before 01204 is raised, so BACKTRACES shows the WAITLIST
+    // caller that passed the bad DT.
+    let hit_core = work.join("hit.core");
+    let cmd_path = work.join("watch.txt");
+    let script = format!(
+        "BREAK WATLST0-\nBREAK POODOO\nCONT\nBACKTRACES\ninfo registers\nCOREDUMP {}\nQUIT\n",
+        hit_core.display()
+    );
+    std::fs::write(&cmd_path, script).unwrap();
+
+    let dbg_out = work.join("dbg.txt");
+    let out_file = std::fs::File::create(&dbg_out).unwrap();
+
+    let port = pick_port();
+    let mut child = std::process::Command::new(&yaagc)
+        .current_dir(&work)
+        .arg("--quiet")
+        .arg(format!("--symbols={}", symtab_file.display()))
+        .arg("--inhibit-alarms")
+        .arg(format!("--command={}", cmd_path.display()))
+        .arg(format!("--port={port}"))
+        .arg(&rope)
+        .arg(&core_in)
+        .stdout(std::process::Stdio::from(out_file))
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("yaAGC spawn");
+
+    let stderr = child.stderr.take().expect("piped stderr");
+    let _stderr_buf = spawn_stderr_capture(stderr);
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Drive V37 ENTR 62 ENTR to enter P62. The 01204 alarm fires during
+    // P62 init and should trip BREAK WATLST0-.
+    let mut dsky = DskyScript::new(connect_with_retry(port));
+    let _ = dsky.verb_major_mode(62);
+
+    // Poll for the debugger script to hit, dump, and QUIT (up to ~30s).
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut exited = false;
+    while Instant::now() < deadline {
+        if let Ok(Some(_)) = child.try_wait() {
+            exited = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    if !exited {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+
+    let dbg = std::fs::read_to_string(&dbg_out).unwrap_or_default();
+    let hit = CoreImage::load(&hit_core).ok();
+    let (z, a) = hit
+        .as_ref()
+        .map(|c| (c.erasable[0][5], c.erasable[0][0]))
+        .unwrap_or((0, 0));
+
+    eprintln!(
+        "[ms-e7i-d] exited={} hit.core={} Z(PC)=0o{:05o} A=0o{:05o}",
+        exited,
+        hit.is_some(),
+        z,
+        a
+    );
+
+    // Confirm the state-vector-epoch-vs-clock mechanism: read the AGC
+    // hardware clock (TIME2:TIME1, 14 bits each = centiseconds) and the
+    // state-vector epoch cells (TET/PIPTIME) at the breakpoint. If the
+    // clock has advanced far beyond TET/PIPTIME, the ENTMID1 integration
+    // must bridge that gap and overruns WAITLIST's 12.5 s DT budget.
+    if let Some(c) = hit.as_ref() {
+        let rd = |bank: u8, offset: u16| c.read_sp(AgcAddress::Erasable { bank, offset });
+        let time2 = rd(0, 0o24).unwrap_or(0) as u32;
+        let time1 = rd(0, 0o25).unwrap_or(0) as u32;
+        let clock_cs = time2 * 0o40000 + time1; // 2^14 = 0o40000
+        let dp = |sym: &str| -> Option<i64> {
+            match symtab.get(sym) {
+                Some(AgcAddress::Erasable { bank, offset }) => {
+                    let hi = rd(bank, offset)? as i64;
+                    let lo = rd(bank, offset + 1)? as i64;
+                    Some(hi * 0o40000 + lo)
+                }
+                _ => None,
+            }
+        };
+        eprintln!(
+            "[ms-e7i-d] clock TIME2=0o{:05o} TIME1=0o{:05o} = {} cs ({:.2} s) | \
+             TET={:?} cs  PIPTIME={:?} cs  S61DT={:?}",
+            time2,
+            time1,
+            clock_cs,
+            clock_cs as f64 / 100.0,
+            dp("TET"),
+            dp("PIPTIME"),
+            dp("S61DT"),
+        );
+    }
+    eprintln!(
+        "[ms-e7i-d] ── debugger session stdout ──\n{}",
+        dbg.trim_end()
+    );
+
+    let _ = std::fs::remove_dir_all(&work);
+}
+
 /// TC-E7I-C: warm-template control — boot yaAGC from the **unpatched**
 /// cold rope (no `core-in`, no `patch_into`), drive `V37 ENTR 01 ENTR`
 /// (PRELAUNCH OR SERVICE), wait for P01 idle, then `V37 ENTR 62 ENTR`,
