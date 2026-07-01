@@ -7,18 +7,19 @@
 //!
 //! # Scale factors from Comanche055 / `docs/AGC Symbolic Listing.md`
 //!
-//! | Quantity        | AGC symbol | B-scale | 1 DP LSB ≈          |
+//! | Quantity        | AGC symbol | B-scale | full-scale          |
 //! |-----------------|------------|---------|---------------------|
-//! | Position (m)    | RN         | B+28    | 2²⁸ m ≈ 2.684×10⁸  |
-//! | Velocity (m/s)  | VN         | B+7     | 2⁷ m/s = 128 m/s   |
+//! | Position (m)    | RN         | B+29    | 2²⁹ m ≈ 5.369×10⁸  |
+//! | Velocity (m/cs) | VN         | B+7     | 2⁷ m/cs = 128 m/cs |
 //!
 //! Note: those are the full-scale values. The DP LSB is:
 //!
 //! For a 29-bit combined word (sign + 28 bits), with full-scale = 2^scale:
 //!   1 DP LSB = 2^scale / 2^28 = 2^(scale-28)
 //!
-//! Position LSB: 2^(28-28) = 1 m (1 metre per DP LSB)
-//! Velocity LSB: 2^(7-28) = 2^(-21) ≈ 4.77×10⁻⁷ m/s (sub-millimetre per second)
+//! Position LSB: 2^(29-28) = 2 m (2 metres per DP LSB) — `RN` is B+29 per
+//! SERVICER207.agc / P61-P67.agc:563 / INTEGRATION_INITIALIZATION.agc
+//! Velocity LSB: 2^(7-28) = 2^(-21) ≈ 4.77×10⁻⁷ m/cs
 //!
 //! In practice the conversion functions below implement the formula from
 //! `docs/testing.md §6` directly.
