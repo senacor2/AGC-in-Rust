@@ -138,12 +138,15 @@ impl std::error::Error for PatchError {}
 
 // ── B-scale constants ──────────────────────────────────────────────────────
 
-/// Position scale: AGC `RN` is "B(6)PRM" with single-precision word at
-/// `B+7 m` per `agc_convert::from_agc_word` documentation; DP extends
-/// the LSB by 2^14. With our `to_agc_dword(value_m, scale)` convention,
-/// `scale = 0` gives 1 LSB = 1 m and full-scale = 2^28 m ≈ 268 Mm —
-/// plenty for both LEO and lunar-return entry interfaces.
-const SCALE_POSITION_M: i8 = 0;
+/// Position scale: the AGC precision state vector (`RN`, and the
+/// permanent `RRECTCSM`/`RCVCSM`) is **B+29 metres** — full-scale 2^29 m,
+/// 1 DP LSB = 2 m. Sourced from `INTEGRATION_INITIALIZATION.agc`'s preset
+/// table, `SERVICER207.agc` ("RN WILL BE SCALED AT 2(+29)"), and
+/// `P61-P67.agc:563` ("RN (-29) M"). With our `to_agc_dword(value_m,
+/// scale)` convention `scale = N - 28`, so B+29 ⇒ `scale = 1` (1 LSB =
+/// 2 m, full-scale 2^29 m ≈ 537 Mm). Using `scale = 0` here previously
+/// encoded position at B+28, i.e. twice the true value (issue #49).
+const SCALE_POSITION_M: i8 = 1;
 
 /// Velocity scale: AGC `VN` is documented at B+7. Working in m/cs
 /// (m/s ÷ 100) with `scale = -21` gives 1 LSB ≈ 4.77 × 10⁻⁷ m/cs and
@@ -229,6 +232,31 @@ pub fn patch_into(
 
     // TET (DP × 1, value in cs).
     write_dp_scalar(core, symtab, "TET", SCALE_TIME_CS, state.time_s * 100.0)?;
+
+    // Permanent CSM state block. RN/VN/TET above are the integrator's
+    // *output* cells; `MIDTOAV2` (invoked by S61.1 from P61/P62) reads
+    // its state from the *permanent* block and, via `PTOACSM`, copies it
+    // over the working RN/VN/TET before integrating. Without a valid
+    // permanent block the template leaves it ~0, so the timestep
+    // collapses, the integrator returns a zero target time, and S61.1
+    // schedules WAITLIST with a negative delay → program alarm 0o01204
+    // (issue #49). Seed the permanent block with the same state so the
+    // integrator anchors on a valid vector and returns a future target.
+    //
+    // RCVCSM/VCVCSM are the rectified (conic) vector — equal to
+    // RRECTCSM/VRECTCSM since TCCSM=0. DELTACSM/NUVCSM (deviations) and
+    // TCCSM/XKEPCSM are cleared. The integrator's earth-frame precision
+    // scaling matches the RN/VN/TET writes above, so the same scale
+    // constants apply.
+    write_dp_vec3(core, symtab, "RRECTCSM", SCALE_POSITION_M, state.position_m)?;
+    write_dp_vec3(core, symtab, "RCVCSM", SCALE_POSITION_M, state.position_m)?;
+    write_dp_vec3(core, symtab, "VRECTCSM", SCALE_VELOCITY_M_PER_CS, v_mpercs)?;
+    write_dp_vec3(core, symtab, "VCVCSM", SCALE_VELOCITY_M_PER_CS, v_mpercs)?;
+    write_dp_scalar(core, symtab, "TETCSM", SCALE_TIME_CS, state.time_s * 100.0)?;
+    write_dp_vec3(core, symtab, "DELTACSM", SCALE_POSITION_M, [0.0; 3])?;
+    write_dp_vec3(core, symtab, "NUVCSM", SCALE_VELOCITY_M_PER_CS, [0.0; 3])?;
+    write_dp_scalar(core, symtab, "TCCSM", SCALE_TIME_CS, 0.0)?;
+    write_dp_scalar(core, symtab, "XKEPCSM", SCALE_TIME_CS, 0.0)?;
 
     // REFSMMAT (DP × 9, row-major identity by default).
     write_refsmmat(core, symtab, &state.refsmmat)?;
@@ -483,6 +511,11 @@ Symbol Table\n\
     10,E:   HEADSUP     E5,1516  \t  11,E:   MODREG      E5,1520  \n\
     12,E:   FLAGWRD3    E5,1522  \t  13,E:   ROLLC       E5,1524  \n\
     14,E:   CMDAPMOD    E5,1526  \n\
+    15,E:   RRECTCSM    E6,1400  \t  16,E:   RCVCSM      E6,1410  \n\
+    17,E:   VRECTCSM    E6,1420  \t  18,E:   VCVCSM      E6,1430  \n\
+    19,E:   TETCSM      E6,1440  \t  20,E:   DELTACSM    E6,1450  \n\
+    21,E:   NUVCSM      E6,1460  \t  22,E:   TCCSM       E6,1470  \n\
+    23,E:   XKEPCSM     E6,1474  \n\
 ";
         Symtab::parse(text)
     }
