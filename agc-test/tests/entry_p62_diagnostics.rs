@@ -1194,9 +1194,23 @@ fn tc_e7i_d_debugger_catch_01204() {
                 _ => None,
             }
         };
+        let sp = |sym: &str| -> Option<u16> {
+            match symtab.get(sym) {
+                Some(AgcAddress::Erasable { bank, offset }) => rd(bank, offset),
+                _ => None,
+            }
+        };
+        // AVEGFLAG = FLAGWRD1 bit 1 (mask 0o00001): AVERAGE-G on/off.
+        // Hypothesis: P62 entry init here runs with AVERAGE-G OFF, so
+        // S61.1 takes the MIDTOAV2 one-shot-integrate branch from a stale
+        // (epoch-0) state instead of extrapolating a live state vector,
+        // yielding a target time already behind the free-running clock.
+        let flagwrd1 = sp("FLAGWRD1");
+        let avegflag = flagwrd1.map(|w| w & 0o00001 != 0);
         eprintln!(
             "[ms-e7i-d] clock TIME2=0o{:05o} TIME1=0o{:05o} = {} cs ({:.2} s) | \
-             TET={:?} cs  PIPTIME={:?} cs  S61DT={:?}",
+             TET={:?} cs  PIPTIME={:?} cs  S61DT={:?} | \
+             AVEGFLAG={:?} FLAGWRD1={:?}",
             time2,
             time1,
             clock_cs,
@@ -1204,6 +1218,8 @@ fn tc_e7i_d_debugger_catch_01204() {
             dp("TET"),
             dp("PIPTIME"),
             dp("S61DT"),
+            avegflag,
+            flagwrd1.map(|w| format!("0o{:05o}", w)),
         );
     }
     eprintln!(
