@@ -302,16 +302,42 @@ PERFORM") is *immediate-return* and does not park via CADRSTOR — the first END
 park is P62.1 after PROCEED #1. `tc_e7i_f`'s Snapshot A gate was corrected
 accordingly.
 
-### 6.6 Remaining gap (next work package)
+### 6.6 PROCEED#2 → P63 gap — investigated (2026-07-02)
 
-`tc_e7i_f` Snapshot **C**: after PROCEED #2, `ROLLC` advances (`0 → 0o77777`, the
-P62.1 PROCEED branch runs) but `MODREG` stays `0o076` — **P63 is not yet reached**.
-The `PROCEED #2 → CMDAPMOD gate → TC P63` step does not complete under the preload.
-This is the next layer of the wake gap (reported, not asserted, in `tc_e7i_f`).
-Candidate causes to probe next (same `tc_e7i_g` debugger pattern, breakpoints on
-`P62.1`'s PROCEED branch, the CMDAPMOD gate, `WAKEP62`, and `P63`): the CMDAPMOD/45°
-gate, `GAMDIFSW`/CM-DAPON state, or the AVERAGE-G SERVICER not cycling under the
-preload.
+Two probes were added: `tc_e7i_h_proceed2_to_p63` (yaAGC debugger, breakpoints on
+the P62.1→P63 path) and `tc_e7i_i_v33_dispatch` (robust non-debugger DSKY/pinball
+state capture, driving PROCEEDs paced on the actual parked display). Findings:
+
+1. **The display sequence works, gated by GAMDIFSW timing.** With PROCEEDs paced on
+   the real parked display, P62 advances:
+   `V50N25` (GOPERF1R separation) → **PROCEED** → `V06N61` (P62.1 prompt) →
+   **PROCEED** → *(nothing parks; MODREG stays `0o076`)*. The `V50N25 → V06N61`
+   step only happens once **GAMDIFSW** (`CM/FLAGS` bit 11) is set — CM/DAPON spins
+   until the AVERAGE-G SERVICER cycles `CM/POSE`, which under the preload takes
+   ~20–30 s (`AVEGFLAG` is on the whole time). Sending PROCEED #2 before that (as
+   `tc_e7i_f` did) fires prematurely and does not advance.
+
+2. **V33 is NOT blocked.** `DSPLOCK = 0` throughout, and the first PROCEED does wake
+   its job and advance the display — so the old MS-E7h "V33 not reaching VBPROC /
+   not updating VERBREG at the P62.1 park" hypothesis is **disproven** for this
+   scenario.
+
+3. **A genuine blocker remains at the V06N61 PROCEED.** After PROCEED at `V06N61`,
+   `tc_e7i_h` shows the P62.1 `+2` continuation (`P61-P67.agc:238`) is **never
+   reached**, and no further display parks. `ROLLC` (`0o77777`) and `P63FLAG` (`-1`)
+   in that state are set by **CM/DAPON**, not the P62.1 branch — confirming the
+   `+2 → CMDAPMOD gate → TC P63` branch does not execute. Also notable: `CADRSTOR`
+   is the **same** value (`0o21523`) at both the `V50N25` and `V06N61` parks, which
+   suggests the `V06N61` "park" may not be a fresh P62.1 GOFLASH job cleanly asleep
+   in ENDIDLE (stale/shared re-entry CADR).
+
+**Open question for the next work package:** why the PROCEED at `V06N61` does not
+wake the P62.1 GOFLASH job into its `+2` branch. Candidate next probes: confirm
+whether a job is genuinely asleep in ENDIDLE at `V06N61` vs. a stale `CADRSTOR`
+from the `V50N25` park; trace `RECALTST`/`JOBWAKE` at the `V06N61` PROCEED (via a
+non-halting method — a `VBPROC`/`RECALTST` breakpoint halts the sim and breaks the
+DSKY socket); and check whether GOFLASH re-armed the flash/`DSPLOCK` state for
+`V06N61`.
 
 ---
 
