@@ -1893,236 +1893,29 @@ fn tc_e7i_g_locate_p62_stall() {
     let _ = std::fs::remove_dir_all(&work);
 }
 
-/// TC-E7I-H: localize the remaining PROCEED#2 → P63 gap (#49).
+/// TC-E7I-I: root-cause the P62→P63 wake gap (#49).
 ///
-/// After the entry-aligned REFSMMAT fix, `tc_e7i_f` reaches Snapshot B
-/// (PROCEED #1 → P62.1 GOFLASH parked, `CADRSTOR = 0o21523`), but
-/// PROCEED #2 does not advance to P63: `ROLLC` moves but `MODREG` stays
-/// `0o076`. This probe finds where PROCEED #2 execution goes.
+/// Drives PROCEEDs paced on the ACTUAL parked display (not just
+/// CADRSTOR≠0) without the debugger — breakpoints on the keyboard path
+/// halt the sim and break the DSKY socket, and the debugger runs too slow
+/// to reach the ~20-30 s GAMDIFSW delay. It walks the P62 displays and
+/// captures the state that discriminates the failure mode:
 ///
-/// The P62.1 PROCEED branch (`P61-P67.agc:235-265`) is:
-///
-///   TC +2              # [line 235] PROCEED #2 wake continuation
-///   +2: TC PHASCHNG    # [line 238] ← branch resumes here
-///       CCS HEADSUP / TS ROLLC / ... set ALFACOM, P63FLAG, ENTRYVN
-///       CS CMDAPMOD / MASK ONE / BZF P63.1   # [line 260-263] CMDAPMOD gate
-///       TC P63         # [line 265] with CMDAPMOD=-1 → direct P63
-///   P63: TC NEWMODEX / MM 63  # sets MODREG = 0o077
-///
-/// Breakpoints (none execute until PROCEED #2's branch runs, so the
-/// debugger free-runs through V37 62 / PROCEED #1):
-///   - `P61-P67.agc:238` — the wake continuation: hit ⇒ PROCEED #2 woke
-///     the P62.1 job. NOT hit ⇒ the wake itself failed (RECALTST/JOBWAKE).
-///   - `P61-P67.agc:260` — reached the CMDAPMOD gate.
-///   - `P63` / `P63.1` / `WAKEP62` — which P63-dispatch outcome was taken.
-///
-/// `--dump-time=1` runs alongside the debugger so the harness can gate
-/// PROCEED #1/#2 on the dump file while the sim free-runs (the P63-path
-/// breakpoints only halt it after PROCEED #2).
-#[test]
-fn tc_e7i_h_proceed2_to_p63() {
-    let template_path = template_core_path();
-    if !template_path.exists() {
-        eprintln!("skipping tc_e7i_h: no template core at {}", template_path.display());
-        return;
-    }
-    let root = vagc_root();
-    let yaagc = root.join("yaAGC/yaAGC");
-    let rope = root.join("Comanche055/MAIN.agc.bin");
-    let listing = root.join("Comanche055/MAIN.agc.lst");
-    let symtab_file = root.join("Comanche055/MAIN.agc.symtab");
-    if !yaagc.exists() || !rope.exists() || !listing.exists() || !symtab_file.exists() {
-        eprintln!(
-            "skipping tc_e7i_h: VirtualAGC build incomplete at {}",
-            root.display()
-        );
-        return;
-    }
-
-    let mut core = CoreImage::load(&template_path)
-        .unwrap_or_else(|e| panic!("load template {}: {e}", template_path.display()));
-    let symtab =
-        Symtab::load(&listing).unwrap_or_else(|e| panic!("load symtab {}: {e}", listing.display()));
-    let rust_state = setup_state_direct_leo();
-    let init = EntryInitialState {
-        position_m: rust_state.csm_state.position,
-        velocity_mps: rust_state.csm_state.velocity,
-        time_s: 0.0,
-        target_lat_rad: rust_state.entry.target_lat_rad,
-        target_lon_rad: rust_state.entry.target_lon_rad,
-        emsalt_m: 122_000.0,
-        alfa_pad_deg: -20.0,
-        lift_up: true,
-        refsmmat: EntryInitialState::entry_refsmmat(
-            rust_state.csm_state.position,
-            rust_state.csm_state.velocity,
-        ),
-        cmdapmod: -1,
-    };
-    patch_into(&mut core, &symtab, &init).expect("patch_into ok");
-
-    let work = std::env::temp_dir().join(format!("vagc_e7i_h_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&work);
-    std::fs::create_dir_all(&work).unwrap();
-    let core_in = work.join("core_in");
-    core.save(&core_in).unwrap();
-
-    let hit_core = work.join("hit.core");
-    let cmd_path = work.join("watch.txt");
-    // Break only on the PROCEED#2 → P63 path; these do not execute until
-    // PROCEED #2 wakes the P62.1 job, so the single CONT free-runs through
-    // V37 62 and PROCEED #1.
-    let script = format!(
-        "BREAK P61-P67.agc:238\nBREAK P61-P67.agc:260\n\
-         BREAK P63\nBREAK P63.1\nBREAK WAKEP62\n\
-         info breakpoints\n\
-         CONT\nBACKTRACES\ninfo registers\n\
-         CONT\nBACKTRACES\ninfo registers\n\
-         CONT\nBACKTRACES\ninfo registers\n\
-         COREDUMP {}\nQUIT\n",
-        hit_core.display()
-    );
-    std::fs::write(&cmd_path, script).unwrap();
-
-    let dbg_out = work.join("dbg.txt");
-    let out_file = std::fs::File::create(&dbg_out).unwrap();
-
-    let port = pick_port();
-    let mut child = std::process::Command::new(&yaagc)
-        .current_dir(&work)
-        .arg("--quiet")
-        .arg(format!("--symbols={}", symtab_file.display()))
-        .arg("--inhibit-alarms")
-        .arg("--dump-time=1")
-        .arg(format!("--command={}", cmd_path.display()))
-        .arg(format!("--port={port}"))
-        .arg(&rope)
-        .arg(&core_in)
-        .stdout(std::process::Stdio::from(out_file))
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("yaAGC spawn");
-
-    let stderr = child.stderr.take().expect("piped stderr");
-    let _stderr_buf = spawn_stderr_capture(stderr);
-    std::thread::sleep(Duration::from_millis(500));
-
-    let dump_path = work.join("core");
-    let mut dsky = DskyScript::new(connect_with_retry(port));
-
-    // V37 62 ENTR → P62. GOPERF1R (V50N25) posts but does not park via
-    // CADRSTOR, so gate PROCEED #1 on a generous settle, not on CADRSTOR.
-    let mtime_pre = current_mtime(&dump_path);
-    dsky.verb_major_mode(62).expect("V37 ENTR 62 ENTR");
-    // Wait for P62 to become active (MODREG = 0o076) plus a margin for the
-    // GOPERF1R display to appear.
-    let deadline_a = Instant::now() + Duration::from_secs(10);
-    let mut last_mt = mtime_pre;
-    while Instant::now() < deadline_a {
-        if let Some(mt) = wait_for_new_dump(&dump_path, last_mt, Instant::now() + Duration::from_millis(400)) {
-            last_mt = Some(mt);
-            if let Some(c) = try_load_core(&dump_path) {
-                let m = symtab.get("MODREG").and_then(|a| c.read_sp(a)).unwrap_or(0);
-                if m == 0o076 {
-                    break;
-                }
-            }
-        }
-    }
-    std::thread::sleep(Duration::from_millis(1_500));
-
-    // PROCEED #1 → CM/DAPON → P62.1 GOFLASH. Gate PROCEED #2 on the P62.1
-    // park (MODREG = 0o076 AND CADRSTOR ≠ 0), which tc_e7i_f showed settles.
-    dsky.proceed().expect("PROCEED #1");
-    let (_c, _d, settle_ms, settled_b) =
-        wait_for_p62_parked(&dump_path, &symtab, current_mtime(&dump_path), 12_000);
-    eprintln!(
-        "[e7i-h] P62.1 parked after PROCEED #1: settled={settled_b} wait_ms={settle_ms}"
-    );
-    std::thread::sleep(Duration::from_millis(500));
-
-    // PROCEED #2 → should wake P62.1 → CMDAPMOD gate → P63.
-    dsky.proceed().expect("PROCEED #2");
-
-    // Poll for the debugger to hit a P63-path breakpoint, dump, and QUIT.
-    let deadline = Instant::now() + Duration::from_secs(20);
-    let mut exited = false;
-    while Instant::now() < deadline {
-        if let Ok(Some(_)) = child.try_wait() {
-            exited = true;
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    if !exited {
-        let _ = child.kill();
-    }
-    let _ = child.wait();
-    std::thread::sleep(Duration::from_millis(100));
-
-    let dbg = std::fs::read_to_string(&dbg_out).unwrap_or_default();
-    let stopped_at = |label: &str| dbg.contains(&format!(", {label} ("))
-        || dbg.contains(&format!("P61-P67.agc:{label}"));
-    // The runtime breakpoint banner prints the source line for the
-    // line-based breakpoints, e.g. "Breakpoint 1, ... at P61-P67.agc:238".
-    let hit_line = |line: &str| {
-        dbg.lines().any(|l| l.starts_with("Breakpoint ") && l.contains(&format!("P61-P67.agc:{line}")))
-    };
-    eprintln!(
-        "[e7i-h] exited={} settled_b={} | reached: wake_continuation(:238)={} \
-         cmdapmod_gate(:260)={} P63={} P63.1={} WAKEP62={}",
-        exited,
-        settled_b,
-        hit_line("238"),
-        hit_line("260"),
-        stopped_at("P63"),
-        stopped_at("P63.1"),
-        stopped_at("WAKEP62"),
-    );
-
-    if let Ok(c) = CoreImage::load(&hit_core) {
-        let sp = |sym: &str| -> Option<u16> {
-            match symtab.get(sym) {
-                Some(AgcAddress::Erasable { bank, offset }) => {
-                    c.read_sp(AgcAddress::Erasable { bank, offset })
-                }
-                _ => None,
-            }
-        };
-        eprintln!(
-            "[e7i-h] final core: Z(PC)=0o{:05o} MODREG={:?} CADRSTOR={:?} \
-             ROLLC={:?} P63FLAG={:?} CMDAPMOD={:?}",
-            c.erasable[0][5],
-            sp("MODREG").map(|w| format!("0o{:05o}", w)),
-            sp("CADRSTOR").map(|w| format!("0o{:05o}", w)),
-            sp("ROLLC").map(|w| format!("0o{:05o}", w)),
-            sp("P63FLAG").map(|w| format!("0o{:05o}", w)),
-            sp("CMDAPMOD").map(|w| format!("0o{:05o}", w)),
-        );
-    } else {
-        eprintln!("[e7i-h] final core: none written (no P63-path breakpoint hit)");
-    }
-    eprintln!("[e7i-h] ── debugger session stdout ──\n{}", dbg.trim_end());
-
-    let _ = std::fs::remove_dir_all(&work);
-}
-
-/// TC-E7I-I: does PROCEED #2 wake the parked P62.1 job? (#49)
-///
-/// `tc_e7i_h` showed PROCEED #2 never reaches the P62.1 wake continuation
-/// (`P61-P67.agc:238`), even though PROCEED #1 works and P62.1 parks with
-/// `CADRSTOR = 0o21523`. This probe characterises the DSKY/pinball state
-/// without the debugger (breakpoints on the keyboard path halt the sim and
-/// break the DSKY socket). It captures erasable state at the P62.1 park
-/// (before PROCEED #2) and again after PROCEED #2:
-///
-///   - `CADRSTOR` — the parked-job re-entry CADR. RECALTST does
-///     `XCH CADRSTOR` (→ 0) then JOBWAKE, so **CADRSTOR unchanged at
-///     0o21523 after PROCEED #2 ⇒ the job was NOT woken.**
-///   - `VERBREG`  — 0o41 (33₁₀) if V33 registered as a verb, 0o45 (37₁₀)
-///     if still the V37 leftover (V33 ignored — the MS-E7h symptom).
-///   - `DSPLOCK`  — keyboard/subroutine interlock; nonzero ⇒ keyboard
-///     input is being blocked.
+///   - Display trail — expected `V50N25` (GOPERF1R separation) → `V06N61`
+///     (P62.1 prompt). The `V50N25 → V06N61` step is gated on GAMDIFSW
+///     (CM/DAPON ↔ AVERAGE-G SERVICER), so PROCEEDs must be display-paced.
+///   - `DSPLOCK` — 0 throughout ⇒ V33 is NOT blocked (disproves the
+///     MS-E7h "V33 ignored at the P62.1 park" hypothesis).
+///   - `P63FLAG` after the V06N61 PROCEED — `+1` (0o00001) proves the
+///     P62.1 `+2` branch ran (CM/DAPON leaves it `-1`).
+///   - `CMDAPMOD` after the V06N61 PROCEED — preloaded `-1` (0o77776) but
+///     found `-0` (0o77777): **EXDAP overwrites it from body attitude**
+///     (`CM_ENTRY_DIGITAL_AUTOPILOT.agc:602`; CALFA negative + outside 45°
+///     ⇒ `-0`). The `CS CMDAPMOD / MASK ONE / BZF P63.1` gate then takes
+///     the `P63.1` (WAKEP62) branch instead of `TC P63` — and WAKEP62
+///     never fires because the open-loop harness never maneuvers the CM
+///     within 45° of entry attitude. That is the root cause: the final
+///     P62→P63 handover is closed-loop on the entry-attitude maneuver.
 #[test]
 fn tc_e7i_i_v33_dispatch() {
     let template_path = template_core_path();
@@ -2265,12 +2058,41 @@ fn tc_e7i_i_v33_dispatch() {
         std::thread::sleep(Duration::from_millis(2_000));
     }
 
+    // Final steady-state after the last PROCEED. Discriminator for whether
+    // the P62.1 `+2` branch executed: it sets `P63FLAG = +1` (0o00001),
+    // whereas CM/DAPON left it `-1` (0o77776). It also sets ENTRYVN=V06N22
+    // (0o02026) and would fall through the CMDAPMOD gate to `TC P63`.
+    std::thread::sleep(Duration::from_millis(1_000));
+    let (p63flag, cmdapmod, entryvn, alfacom, rollc) = try_load_core(&dump_path)
+        .map(|c| {
+            (
+                read_cell(&c, "P63FLAG").unwrap_or(0),
+                read_cell(&c, "CMDAPMOD").unwrap_or(0),
+                read_cell(&c, "ENTRYVN").unwrap_or(0),
+                read_cell(&c, "ALFACOM").unwrap_or(0),
+                read_cell(&c, "ROLLC").unwrap_or(0),
+            )
+        })
+        .unwrap_or((0, 0, 0, 0, 0));
+
     let _ = child.kill();
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&work);
 
     // ── Interpretation ───────────────────────────────────────────────────────
     eprintln!("[e7i-i] display trail: {}", display_trail.join(" → "));
+    eprintln!(
+        "[e7i-i] final state: P63FLAG=0o{p63flag:05o} CMDAPMOD=0o{cmdapmod:05o} \
+         ENTRYVN=0o{entryvn:05o} ALFACOM=0o{alfacom:05o} ROLLC=0o{rollc:05o}"
+    );
+    eprintln!(
+        "[e7i-i]   ↳ P62.1 +2 branch ran? {} (P63FLAG +1=ran / -1=only CM/DAPON)",
+        if p63flag == 0o00001 {
+            "YES → diverted at CMDAPMOD gate / P63 (not TC P63)"
+        } else {
+            "NO → PROCEED at V06N61 never entered the +2 branch"
+        }
+    );
     eprintln!(
         "[e7i-i] after {proceeds} display-paced PROCEEDs: MODREG=0o{modreg_final:05o} {}",
         if modreg_final == 0o077 {

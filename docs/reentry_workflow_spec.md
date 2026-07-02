@@ -302,42 +302,50 @@ PERFORM") is *immediate-return* and does not park via CADRSTOR — the first END
 park is P62.1 after PROCEED #1. `tc_e7i_f`'s Snapshot A gate was corrected
 accordingly.
 
-### 6.6 PROCEED#2 → P63 gap — investigated (2026-07-02)
+### 6.6 PROCEED#2 → P63 gap — root cause (2026-07-02)
 
-Two probes were added: `tc_e7i_h_proceed2_to_p63` (yaAGC debugger, breakpoints on
-the P62.1→P63 path) and `tc_e7i_i_v33_dispatch` (robust non-debugger DSKY/pinball
-state capture, driving PROCEEDs paced on the actual parked display). Findings:
+Probe `tc_e7i_i_v33_dispatch` (non-debugger; PROCEEDs paced on the actual parked
+display, capturing the discriminating erasable state) root-caused this. The
+debugger approach was abandoned: breakpoints on the keyboard path (`VBPROC`/
+`RECALTST`) halt the sim and break the DSKY socket, and under the debugger the sim
+is too slow to reach the ~20–30 s GAMDIFSW delay in reasonable wall-clock.
 
-1. **The display sequence works, gated by GAMDIFSW timing.** With PROCEEDs paced on
-   the real parked display, P62 advances:
-   `V50N25` (GOPERF1R separation) → **PROCEED** → `V06N61` (P62.1 prompt) →
-   **PROCEED** → *(nothing parks; MODREG stays `0o076`)*. The `V50N25 → V06N61`
-   step only happens once **GAMDIFSW** (`CM/FLAGS` bit 11) is set — CM/DAPON spins
-   until the AVERAGE-G SERVICER cycles `CM/POSE`, which under the preload takes
-   ~20–30 s (`AVEGFLAG` is on the whole time). Sending PROCEED #2 before that (as
-   `tc_e7i_f` did) fires prematurely and does not advance.
+**Two factors, one a red herring:**
 
-2. **V33 is NOT blocked.** `DSPLOCK = 0` throughout, and the first PROCEED does wake
-   its job and advance the display — so the old MS-E7h "V33 not reaching VBPROC /
-   not updating VERBREG at the P62.1 park" hypothesis is **disproven** for this
-   scenario.
+1. **Pacing (partial factor).** The `V50N25` (GOPERF1R separation) → `V06N61`
+   (P62.1 prompt) step is gated on **GAMDIFSW** (`CM/FLAGS` bit 11), which CM/DAPON
+   waits for and the AVERAGE-G SERVICER sets only ~20–30 s in (`AVEGFLAG` is on the
+   whole time). `tc_e7i_f` sent its second PROCEED before that — prematurely. With
+   display-paced PROCEEDs, P62 does advance `V50N25 → V06N61`.
 
-3. **A genuine blocker remains at the V06N61 PROCEED.** After PROCEED at `V06N61`,
-   `tc_e7i_h` shows the P62.1 `+2` continuation (`P61-P67.agc:238`) is **never
-   reached**, and no further display parks. `ROLLC` (`0o77777`) and `P63FLAG` (`-1`)
-   in that state are set by **CM/DAPON**, not the P62.1 branch — confirming the
-   `+2 → CMDAPMOD gate → TC P63` branch does not execute. Also notable: `CADRSTOR`
-   is the **same** value (`0o21523`) at both the `V50N25` and `V06N61` parks, which
-   suggests the `V06N61` "park" may not be a fresh P62.1 GOFLASH job cleanly asleep
-   in ENDIDLE (stale/shared re-entry CADR).
+2. **Root cause — the P62→P63 handover is closed-loop on the entry-attitude
+   maneuver.** With correct pacing, the PROCEED at `V06N61` **does** run the P62.1
+   `+2` branch (`P63FLAG = +1` after it; CM/DAPON leaves it `-1`). But it then takes
+   the wrong gate arm:
+   - `CMDAPMOD` is preloaded `-1` (`0o77776`) — the value that makes
+     `CS CMDAPMOD / MASK ONE / BZF P63.1` fall through to `TC P63`. **EXDAP
+     overwrites it** every cycle from the body attitude
+     (`CM_ENTRY_DIGITAL_AUTOPILOT.agc:579-602`): `|CALFA| ≤ 45° ⇒ +1`; CALFA
+     positive/outside `⇒ +0`; **CALFA negative/outside `⇒ -0`** (`0o77777`, "rate
+     damp only"). Observed at the gate: `CMDAPMOD = 0o77777` (−0).
+   - With `CMDAPMOD = -0`, the gate takes **`BZF P63.1`** — which just
+     `PHASCHNG / ENDOFJOB`, expecting `WAKEP62` to have started P63.
+   - `WAKEP62` is scheduled by EXDAP only once the CM comes **within 45° of entry
+     trim** (CALFA in range, `P63FLAG = +1`). The open-loop harness drives PIPAs
+     (accelerometers) but **not the attitude/CDU loop**, so the CM never maneuvers
+     to the entry attitude, CALFA never enters the 45° window, `WAKEP62` never
+     fires, and P63 never starts.
 
-**Open question for the next work package:** why the PROCEED at `V06N61` does not
-wake the P62.1 GOFLASH job into its `+2` branch. Candidate next probes: confirm
-whether a job is genuinely asleep in ENDIDLE at `V06N61` vs. a stale `CADRSTOR`
-from the `V50N25` park; trace `RECALTST`/`JOBWAKE` at the `V06N61` PROCEED (via a
-non-halting method — a `VBPROC`/`RECALTST` breakpoint halts the sim and breaks the
-DSKY socket); and check whether GOFLASH re-armed the flash/`DSPLOCK` state for
-`V06N61`.
+**`DSPLOCK = 0` throughout** — V33 is not blocked; the MS-E7h "V33 ignored at the
+P62.1 park" hypothesis is disproven. (The `CADRSTOR = 0o21523` seen at both parks is
+the common GOFLASH/ENDIDLE re-entry, not a stale-wake bug.)
+
+**Conclusion.** The final P62→P63 step cannot close under a purely open-loop preload
+harness. It requires simulating the CM entry-attitude maneuver — entry-DAP thruster
+commands → CDU/IMU attitude feedback → `CALFA` within 45° → `WAKEP62` → P63. This is
+exactly the trajectory-level closed-loop validation issue #49 tracks as deferred:
+the per-routine fixtures do not need it, and closing it means standing up the
+attitude-control loop (or injecting CDU angles that walk CALFA into the 45° window).
 
 ---
 
