@@ -416,6 +416,19 @@ pub fn patch_into(
         });
     }
 
+    // IMODES33 / IMODES30 (§8.4 of `docs/reentry_workflow_spec.md`).
+    //
+    // IMODES33 bit 6 gates whether `READGYMB` reads the CDU counters
+    // (bit clear) or the coarse-align latches (bit set). Clearing it
+    // ensures the CDU injection in the closed-loop test reaches the
+    // CALFA computation. IMODES30 holds CDU-fail / mode bits; clearing
+    // it gives a clean starting state for both.
+    //
+    // Both symbols may be absent from the reduced fixture symtab used
+    // by unit tests; `write_sp_raw_opt` silently skips missing symbols.
+    write_sp_raw_opt(core, symtab, "IMODES33", 0)?;
+    write_sp_raw_opt(core, symtab, "IMODES30", 0)?;
+
     Ok(())
 }
 
@@ -509,6 +522,32 @@ fn write_sp_raw(
         return Err(PatchError::WriteRejected { symbol, addr });
     }
     Ok(())
+}
+
+/// Write a raw 15-bit word to an erasable SP cell, silently skipping
+/// the write when the symbol is absent from the symbol table.
+///
+/// Used for optional patches (e.g. `IMODES33`, `IMODES30`) that may not
+/// be present in the reduced fixture symtab used by unit tests, but ARE
+/// present in the full yaAGC listing used in live runs.
+fn write_sp_raw_opt(
+    core: &mut CoreImage,
+    symtab: &Symtab,
+    symbol: &'static str,
+    raw: u16,
+) -> Result<(), PatchError> {
+    match lookup_erasable(symtab, symbol) {
+        Ok(addr) => {
+            if !core.write_sp(addr, raw & 0x7FFF) {
+                Err(PatchError::WriteRejected { symbol, addr })
+            } else {
+                Ok(())
+            }
+        }
+        // Symbol absent from this symtab → skip gracefully.
+        Err(PatchError::MissingSymbol { .. }) => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 fn write_refsmmat(
