@@ -126,18 +126,51 @@ CADR in `CADRSTOR` and does JOBSLEEP. A crew key → `VBPROC` → `RECALTST`: if
 LOADSTAT (+1 = PROCEED, −1 = TERMINATE). **`CADRSTOR ≠ 0` is therefore the
 observable that a flashing display is parked and waiting for a keystroke.**
 
-### 3.3 WAKEP62 and the 45° gate
+### 3.3 WAKEP62 and the 45° entry-attitude window
+
+> **Terminology.** The "45°" here is the **angle-of-attack window** (the CM heat
+> shield within 45° of the relative wind), *not* the flight-path-angle entry
+> corridor. The gate is on attitude (`CALFA = cos α`), decided by the entry DAP —
+> independent of the trajectory corridor P61 checks.
 
 `WAKEP62` is a WAITLIST task scheduled by EXDAP (the extra-atmospheric DAP, ~0.1 s
-cadence) once (a) `|CALFA| < cos 45°` (CM within 45° of entry trim), (b) CALFA
-negative, and (c) `P63FLAG = +1` (P62.1 re-enables it; CM/DAPON had set it −1 to
-block early scheduling). This is the mechanism behind O'Brien's "automatically
-advances to P63 when within 45°." The **CMDAPMOD gate** at P62.1 then routes:
+cadence). **Validated against `CM_ENTRY_DIGITAL_AUTOPILOT.agc` EXDAP (lines
+602–624) by the analyst-reengineer and orbital-mechanics agents, 2026-07-02 — the
+earlier draft of this section had the sign inverted.** EXDAP arms it **exactly
+once**, when all three hold:
+
+- **(a) `|CALFA| ≥ cos 45°` (≈ 0.707)** — the CM is *within 45° of zero angle of
+  attack*. Mechanism: `CCS CALFA / AD C45LIM / TS A`, where `C45LIM = 1 − cos45° =
+  0.29289`; the add overflows (skipping `TCF EXDAP2`) exactly when `|CALFA| >
+  cos45°`. `|CALFA| < cos45°` instead falls to **EXDAP2** → `CMDAPMOD = +1`
+  (broadside / rate-damp).
+- **(b) `CALFA > 0` (positive)** — heat-shield-forward half. `CCS CALFA / TCF +1`
+  continues only for positive CALFA; **negative CALFA branches to `TC EXDAP4`** and
+  never schedules.
+- **(c) `P63FLAG = ±0`** — the `CCS P63FLAG` single-pass guard (`+1` or `−1` →
+  EXDAP4). CM/DAPON preloads `P63FLAG = −1` to block early scheduling; it must be
+  cleared to `±0` first. On arming, EXDAP sets `P63FLAG = −1` (`CS ONE / TS
+  P63FLAG`) so WAKEP62 fires only once.
+
+Delay `NSEC = 2100 cs = 21 s` ("65°/3°·s⁻¹ = transit time from AoA 45° to trim").
+This is the mechanism behind O'Brien's "automatically advances to P63 when within
+45°": at the entry trim AoA ≈ −20°, `CALFA = cos(−20°) ≈ +0.94` — positive and
+`> cos45°`, so all three conditions are met. **P63 is started only by the WAKEP62
+task (`NOVAC 2CADR P63`, `P61-P67.agc:275–277`) on this path** — there is no
+synchronous `TC P63` from EXDAP. The **CMDAPMOD gate** at P62.1 then routes:
 
 | CMDAPMOD | Meaning | Dispatch |
 |----------|---------|----------|
-| +1 / −0 | within 45° / rate-damp-only | `BZF P63.1` → ENDOFJOB (P63 already started by WAKEP62) |
-| −1 / +0 | ≥0.05g / outside 45° | `TC P63` (direct start) |
+| +1 | broadside, `\|CALFA\| < cos45°` | `BZF P63.1` → ENDOFJOB (defer to WAKEP62) |
+| −0 | `\|CALFA\| ≥ cos45°`, **CALFA < 0** (nose-into-wind) | `BZF P63.1` → ENDOFJOB (defer to WAKEP62) |
+| +0 | `\|CALFA\| ≥ cos45°`, **CALFA > 0** (heat-shield-forward) | `TC P63` (direct start) |
+| −1 | preload / ≥0.05g | `TC P63` (direct start) |
+
+> The `BZF P63.1` branch only *defers* to WAKEP62; WAKEP62 must actually have been
+> (or later be) scheduled by EXDAP for P63 to start. Under the `-0` stall (CALFA
+> negative) EXDAP never schedules it — the §6.6 deadlock. When the loop drives CALFA
+> positive, EXDAP schedules WAKEP62 and, once `|CALFA| ≥ cos45°` with CALFA > 0
+> persists, the direct `+0 → TC P63` path can also fire.
 
 > **Test note.** `entry_state.rs` preloads `CMDAPMOD = -1`, which forces the direct
 > `TC P63` branch (skipping WAKEP62). See `entry_state.rs:73–89`.
@@ -330,11 +363,15 @@ is too slow to reach the ~20–30 s GAMDIFSW delay in reasonable wall-clock.
      damp only"). Observed at the gate: `CMDAPMOD = 0o77777` (−0).
    - With `CMDAPMOD = -0`, the gate takes **`BZF P63.1`** — which just
      `PHASCHNG / ENDOFJOB`, expecting `WAKEP62` to have started P63.
-   - `WAKEP62` is scheduled by EXDAP only once the CM comes **within 45° of entry
-     trim** (CALFA in range, `P63FLAG = +1`). The open-loop harness drives PIPAs
-     (accelerometers) but **not the attitude/CDU loop**, so the CM never maneuvers
-     to the entry attitude, CALFA never enters the 45° window, `WAKEP62` never
-     fires, and P63 never starts.
+   - `WAKEP62` is scheduled by EXDAP only when **`CALFA > +cos45°`** (positive —
+     heat shield within 45° of the relative wind) with `P63FLAG = ±0` (see §3.3 for
+     the validated conditions; the observed `CMDAPMOD = -0` is precisely the
+     `CALFA < 0`, nose-into-wind case that branches to `TC EXDAP4` and never
+     schedules). The open-loop harness drives PIPAs (accelerometers) but **not the
+     attitude/CDU loop**, so the CM never maneuvers heat-shield-forward, `CALFA`
+     stays negative, `WAKEP62` is never scheduled, and P63 never starts. This is the
+     deadlock: the P62.1 gate routes `CMDAPMOD = -0 → BZF P63.1` (which waits for
+     WAKEP62), while EXDAP refuses to schedule WAKEP62 until `CALFA` goes positive.
 
 **`DSPLOCK = 0` throughout** — V33 is not blocked; the MS-E7h "V33 ignored at the
 P62.1 park" hypothesis is disproven. (The `CADRSTOR = 0o21523` seen at both parks is
@@ -357,3 +394,111 @@ attitude-control loop (or injecting CDU angles that walk CALFA into the 45° win
    before hard-coding any in tests.
 3. The test preloads `CMDAPMOD = -1`, forcing the direct `TC P63` branch; real
    flight starts at `+0`/`+1` and transitions as CALFA enters the 45° window.
+
+---
+
+## 8. Developer-ready spec: closing P62→P63 with a simulated attitude loop
+
+**Validated 2026-07-02** by three agents against Comanche055 + yaAGC:
+analyst-reengineer (EXDAP gate logic, §3.3), orbital-mechanics (physics / gimbal
+recipe / dynamics), virtualagc-debugger (CDU injection mechanism). This section is
+the implementation contract for the developer.
+
+### 8.1 Objective
+
+Drive the simulated CM attitude so that `CALFA` (cos of angle of attack, computed by
+CM/POSE from the CDU gimbal angles + the state-vector velocity triad) rises through
+`+cos45°` and settles toward the entry trim (AoA ≈ −20°, `CALFA ≈ +0.94`). This
+satisfies the §3.3 gate, EXDAP schedules `WAKEP62`, and P63 starts ~21 s later.
+The loop must supply **CDU gimbal angles**, not PIPA counts — PIPAs feed AVERAGE-G,
+not the attitude gate.
+
+### 8.2 Target body attitude → CDU gimbal-angle recipe (orbital-mechanics)
+
+Desired: heat-shield X-body axis into the relative wind, at the −20° trim. Given the
+desired body axes expressed in stable-member (SM) coordinates — where the entry
+REFSMMAT is `Y_SM = unit(V×R)`, `Z_SM = unit(−R)`, `X_SM = unit(Y_SM×Z_SM)`
+(matches `entry_state.rs::entry_refsmmat`, `P51-P53.agc:64-70`) — the AGC gimbal
+angles are the inverse of READGYMB (`X`=outer/OG, `Y`=inner/IG, `Z`=middle/MG):
+
+```
+CDUZ (middle, AMG) = arcsin( XB · Y_SM )              # = arcsin(XB_y)
+CDUY (inner, AIG)  = atan2( −(XB · Z_SM), XB · X_SM ) # = atan2(−XB_z, XB_x)
+CDUX (outer, AOG)  = atan2( −(ZB · Y_SM), YB · Y_SM ) # = atan2(−ZB_y, YB_y)
+```
+
+where `XB, YB, ZB` are the desired CM body axes in SM coords. Watch gimbal-lock near
+`CDUZ = ±90°` (middle-gimbal); the entry attitude is nowhere near it, but clamp.
+
+### 8.3 Attitude dynamics fidelity (orbital-mechanics)
+
+For the **P62→P63 window only** (pre-0.05g), model:
+
+- **Pure rigid-body RCS** — thruster torque → angular acceleration. **No
+  aerodynamics** (below 0.05 g there is no sensible aero moment); the DAP is the
+  extra-atmospheric mode.
+- Roll authority `A = 9.1°/s²` (`A1 = 4.55`, `CM_ENTRY_DIGITAL_AUTOPILOT.agc`
+  roll-DAP constants), `VM = 20`. Pitch/yaw comparable RCS authority.
+- **Rate-continuous CDU updates are mandatory.** The DAP derives body rates from
+  successive CDU *differences*. A static/step CDU write produces a one-cycle
+  spurious rate spike that the DAP fights. The loop must **ramp** CDU angles at a
+  physically plausible slew (≤ a few °/s), matching the ~65°-in-21 s nominal
+  maneuver (≈3°/s), so `PREL/QREL/RREL` stay bounded.
+
+### 8.4 CDU pulse-injection mechanism (virtualagc-debugger)
+
+The existing `YaAgcClient` (`agc-test/src/vagc_channel.rs`) needs **no changes**.
+Inject via the counter/unprogrammed-increment path — build a `CduInjector` in
+`vagc_driver.rs` mirroring `PipaInjector`:
+
+| Gimbal | Counter channel | Wire address (`0x80 \| addr`) |
+|--------|-----------------|-------------------------------|
+| CDUX (outer) | 0o32 | `0x9A` |
+| CDUY (inner) | 0o33 | `0x9B` |
+| CDUZ (middle) | 0o34 | `0x9C` |
+
+- Packet `value` = **IncType**, not a count: `1` = `+PCDU` (slow, +1 LSB),
+  `3` = `−MCDU` (slow, −1 LSB). **Avoid** the fast types `17`/`19` (they pulse at a
+  different rate and complicate calibration).
+- **LSB = 360° / 32768 ≈ 0.010986° ≈ 39.56 arcsec** → ~91 counts per degree. Emit
+  N=round(Δ°·91) increments per update tick, sign via PCDU/MCDU.
+- FIFO runs at **400 counts/s** and holds **128 sign-change entries**; keep each
+  tick's burst under that and pace ticks so the FIFO drains (see §8.6).
+- **Patches required in `patch_into` (`entry_state.rs`)** so CDU reads are
+  deterministic: write **`IMODES33 = 0`** (clear bit 6 so `READGYMB` reads the CDU
+  counters, not coarse-align) and **`IMODES30 = 0`** (channel-30 CDU-fail / mode
+  bits clear). Neither is currently patched.
+
+### 8.5 Control-loop structure
+
+Per tick (align to the DAP's ~0.1 s / the harness's PIPA cadence):
+
+1. Read current CDU angles (or track them internally from cumulative increments).
+2. Compute the target attitude for this tick along a ramp from the post-separation
+   attitude to the entry trim (§8.2 recipe, interpolated ≈3°/s).
+3. Emit PCDU/MCDU bursts (§8.4) to move each CDU toward its target-for-this-tick.
+4. Continue driving PIPAs as today (AVERAGE-G must keep cycling so GAMDIFSW sets and
+   CM/POSE runs).
+5. Let CM/POSE recompute `CALFA`; once `CALFA > +cos45°` positive, EXDAP arms
+   WAKEP62; P63 starts ~21 s later.
+
+### 8.6 Open items — require a live yaAGC run to pin down (virtualagc-debugger)
+
+These three could not be settled statically; verify empirically during bring-up:
+
+1. **`IMODES33` bit 6 initial state** in the template core-rope image — confirm the
+   `IMODES33 = 0` patch is actually needed (bit may already be clear at entry).
+2. **FIFO-drain timing vs the 0.1 s `READGYMB` cadence** — confirm a tick's PCDU
+   burst fully drains before the next `READGYMB`, else angles lag; tune burst size /
+   tick spacing.
+3. **AOG/AIG/AMG erasable bank switching** — confirm the `EBANK=` context when the
+   loop or `patch_into` touches `AOG/AIG/AMG`-adjacent erasable.
+
+### 8.7 Acceptance criteria (for the developer's implementation)
+
+- With the closed-loop `CduInjector` active, a system test drives P62 through both
+  PROCEEDs and observes **`P63FLAG` transition and `MMNUMBER`/`MODREG` = P63** with
+  **no program alarm**, matching yaAGC.
+- `CALFA` is observed to cross `+cos45°` positive before WAKEP62 fires (assert on the
+  captured erasable, as `tc_e7i_i` does today).
+- The existing open-loop fixtures and REFSMMAT tests remain green (no regression).
