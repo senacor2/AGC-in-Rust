@@ -94,9 +94,83 @@ pub struct EntryInitialState {
 
 impl EntryInitialState {
     /// Build a 3×3 identity matrix for REFSMMAT defaults.
+    ///
+    /// **Not valid for a live P62 run** — S61.1 rejects a REFSMMAT that
+    /// is not geometrically consistent with the state vector (see
+    /// [`Self::entry_refsmmat`]). Kept for encoder unit tests only.
     pub fn identity_refsmmat() -> [[f64; 3]; 3] {
         [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
     }
+
+    /// Build an **entry-aligned** REFSMMAT (REF→SM, row-major) from the
+    /// CSM state vector, so P62's S61.1 IMU-consistency check passes.
+    ///
+    /// ## Why this is required
+    ///
+    /// S61.1 (`P61-P67.agc:604-620`, the `S61.1A` block) computes
+    /// `UNIT(REFSMMAT · (VN × RN))` and tests the resulting stable-member
+    /// Y-component (`cos θ`) against `C(30)LIM = 1 − ½·cos 30°` — a ±30°
+    /// consistency check that the platform Y-axis lies along the orbit
+    /// normal. A mismatch raises `ALARM 0o01426` ("IMU UNSATISFACTORY")
+    /// or `0o01427` ("IMU REVERSED"), puts up V05N09, and **never falls
+    /// through to P62.2/GOPERF1R** — the P62→P63 wake gap (issue #49).
+    /// An identity REFSMMAT only passes if the orbit normal happens to
+    /// lie near ECI-Y, which the entry scenarios do not.
+    ///
+    /// ## Construction
+    ///
+    /// Rows are the stable-member basis vectors expressed in ECI, so
+    /// `REFSMMAT · v_eci = v_sm` (the AGC `MXV` convention). The axes
+    /// match the flight IMU-alignment definition in `P51-P53.agc:64-70`:
+    ///
+    /// - `Y_SM = unit(V × R)`        — negative orbit normal (platform Y)
+    /// - `Z_SM = unit(−R)`           — down-radial (platform Z)
+    /// - `X_SM = unit(Y_SM × Z_SM)`  — completes a right-handed set
+    ///
+    /// With `Y_SM = unit(V × R)`, `REFSMMAT · (VN × RN)` maps exactly onto
+    /// `+Y_SM`, so S61.1A's `cos θ` component is `+1` → the ±30° test
+    /// overflows in its favour and P62 proceeds. (An earlier attempt with
+    /// `Y_SM = unit(R × V)` / `Z_SM = unit(R)` had both signs flipped and
+    /// tripped `0o01427` "IMU REVERSED".)
+    ///
+    /// Falls back to [`Self::identity_refsmmat`] for a degenerate
+    /// (near-radial) state where `‖V × R‖` collapses.
+    pub fn entry_refsmmat(position_m: [f64; 3], velocity_mps: [f64; 3]) -> [[f64; 3]; 3] {
+        let uy = match unit(cross(velocity_mps, position_m)) {
+            Some(u) => u, // V × R  (negative orbit normal)
+            None => return Self::identity_refsmmat(),
+        };
+        let neg_r = [-position_m[0], -position_m[1], -position_m[2]];
+        let uz = match unit(neg_r) {
+            Some(u) => u, // −R  (down-radial)
+            None => return Self::identity_refsmmat(),
+        };
+        // uy ⊥ uz by construction (V × R ⟂ R), so uy × uz is already unit;
+        // normalise anyway to shed floating-point drift.
+        let ux = match unit(cross(uy, uz)) {
+            Some(u) => u,
+            None => return Self::identity_refsmmat(),
+        };
+        [ux, uy, uz]
+    }
+}
+
+/// 3-vector cross product `a × b`.
+fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+/// Normalise a 3-vector; `None` if its magnitude is negligible.
+fn unit(v: [f64; 3]) -> Option<[f64; 3]> {
+    let mag = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if mag < 1.0e-9 {
+        return None;
+    }
+    Some([v[0] / mag, v[1] / mag, v[2] / mag])
 }
 
 /// Errors patching an [`EntryInitialState`] into a [`CoreImage`].
@@ -825,6 +899,64 @@ Symbol Table\n\
             }
             other => panic!("expected MissingSymbol, got {other:?}"),
         }
+    }
+
+    /// TC-ES-REFSMMAT-ENTRY-1: `entry_refsmmat` returns an orthonormal,
+    /// right-handed (det +1) matrix matching the flight axes
+    /// (`P51-P53.agc:64-70`): `Y_SM = unit(V × R)`, `Z_SM = unit(−R)`.
+    /// Crucially `REFSMMAT · (VN × RN)` maps onto **+Y_SM** (cos θ = +1) —
+    /// the S61.1A pass condition (issue #49). Uses the direct-LEO geometry
+    /// (R along +X, V in the XY-plane), where an identity REFSMMAT fails
+    /// the ±30° test.
+    #[test]
+    fn tc_es_refsmmat_entry_alignment() {
+        let r = [6_493_000.0, 0.0, 0.0];
+        let v = [-825.0, 7860.0, 0.0];
+        let m = EntryInitialState::entry_refsmmat(r, v);
+
+        // Orthonormal rows.
+        for (i, row) in m.iter().enumerate() {
+            let n = (row[0] * row[0] + row[1] * row[1] + row[2] * row[2]).sqrt();
+            assert!((n - 1.0).abs() < 1e-12, "row {i} not unit: |{row:?}|={n}");
+        }
+        let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        assert!(dot(m[0], m[1]).abs() < 1e-12);
+        assert!(dot(m[0], m[2]).abs() < 1e-12);
+        assert!(dot(m[1], m[2]).abs() < 1e-12);
+
+        // Right-handed: row0 × row1 = row2.
+        let x_cross_y = cross(m[0], m[1]);
+        for k in 0..3 {
+            assert!((x_cross_y[k] - m[2][k]).abs() < 1e-12, "not right-handed");
+        }
+
+        // Y row = unit(V × R); Z row = unit(−R).
+        let y_expect = unit(cross(v, r)).unwrap();
+        let z_expect = unit([-r[0], -r[1], -r[2]]).unwrap();
+        for k in 0..3 {
+            assert!((m[1][k] - y_expect[k]).abs() < 1e-12, "Y row != unit(V×R)");
+            assert!((m[2][k] - z_expect[k]).abs() < 1e-12, "Z row != unit(−R)");
+        }
+
+        // REFSMMAT · (VN × RN) lands on **+Y_SM** (cos θ = +1): SM
+        // Y-component ≈ +1, the others vanish.
+        let vxr = cross(v, r);
+        let sm = [dot(m[0], vxr), dot(m[1], vxr), dot(m[2], vxr)];
+        let smag = (sm[0] * sm[0] + sm[1] * sm[1] + sm[2] * sm[2]).sqrt();
+        let sm_unit = [sm[0] / smag, sm[1] / smag, sm[2] / smag];
+        assert!(sm_unit[0].abs() < 1e-12 && sm_unit[2].abs() < 1e-12);
+        assert!((sm_unit[1] - 1.0).abs() < 1e-12, "not aligned to +Y_SM");
+    }
+
+    /// TC-ES-REFSMMAT-ENTRY-2: a degenerate (radial) state, where
+    /// `R × V ≈ 0`, falls back to the identity matrix rather than
+    /// producing NaNs.
+    #[test]
+    fn tc_es_refsmmat_entry_degenerate_fallback() {
+        let r = [7_000_000.0, 0.0, 0.0];
+        let v = [10.0, 0.0, 0.0]; // parallel to R ⇒ zero orbit normal
+        let m = EntryInitialState::entry_refsmmat(r, v);
+        assert_eq!(m, EntryInitialState::identity_refsmmat());
     }
 
     /// TC-ES-CMDAPMOD-1: CMDAPMOD lands at the right address with the

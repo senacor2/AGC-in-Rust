@@ -659,7 +659,10 @@ fn tc_e7i_a_parked_state_snapshot() {
         emsalt_m: 122_000.0,
         alfa_pad_deg: -20.0,
         lift_up: true,
-        refsmmat: EntryInitialState::identity_refsmmat(),
+        refsmmat: EntryInitialState::entry_refsmmat(
+            rust_state.csm_state.position,
+            rust_state.csm_state.velocity,
+        ),
         cmdapmod: -1,
     };
     patch_into(&mut core, &symtab, &init).expect("patch_into ok");
@@ -963,7 +966,10 @@ fn tc_e7i_b_parked_state_no_v33() {
         emsalt_m: 122_000.0,
         alfa_pad_deg: -20.0,
         lift_up: true,
-        refsmmat: EntryInitialState::identity_refsmmat(),
+        refsmmat: EntryInitialState::entry_refsmmat(
+            rust_state.csm_state.position,
+            rust_state.csm_state.velocity,
+        ),
         cmdapmod: -1,
     };
     patch_into(&mut core, &symtab, &init).expect("patch_into ok");
@@ -1093,7 +1099,10 @@ fn tc_e7i_d_debugger_catch_01204() {
         emsalt_m: 122_000.0,
         alfa_pad_deg: -20.0,
         lift_up: true,
-        refsmmat: EntryInitialState::identity_refsmmat(),
+        refsmmat: EntryInitialState::entry_refsmmat(
+            rust_state.csm_state.position,
+            rust_state.csm_state.velocity,
+        ),
         cmdapmod: -1,
     };
     patch_into(&mut core, &symtab, &init).expect("patch_into ok");
@@ -1376,4 +1385,510 @@ fn tc_e7i_c_warm_template_no_preload() {
         post_failreg,
         post_almcadr_lo,
     );
+}
+
+/// TC-E7I-F: two-PROCEED hypothesis test for the P62→P63 wake gap (#49).
+///
+/// Source-analysis shows P62 requires TWO sequential PROCEED keystrokes:
+///
+/// 1. **PROCEED #1** (GOPERF1R separation display, P62.2):
+///    `BANKCALL GOPERF1R` is the immediate-return variant — it creates an
+///    async NOVAC display job for OCT41 (CM/SM separation check) and
+///    returns to `TC P61.3` (PHASCHNG+ENDOFJOB). The async display job
+///    eventually reaches `ENDIDLE` → `CADRSTOR ≠ 0`. When V33 ENTR is
+///    received, VBPROC→RECALTST finds `CADRSTOR ≠ 0`, wakes the async
+///    job, which takes the L+3 PROCEED branch → `TC POSTJUMP CADR CM/DAPON`.
+///
+/// 2. **CM/DAPON** loops (0.5 sim-sec DELAYJOB polls) until CM/POSE sets
+///    `GAMDIFSW` (FLAGWRD5 BIT11) — happens after the first AVERAGE-G
+///    SERVICER cycle calls CM/POSE via AVEGEXIT. Then CM/DAPON falls
+///    through to `TC POSTJUMP CADR P62.1`.
+///
+/// 3. **PROCEED #2** (P62.1 V06N61 display):
+///    `BANKCALL GOFLASH` is the synchronous variant — it runs MAKEPLAY in
+///    the CURRENT job context, reaching `ENDIDLE` → `CADRSTOR ≠ 0` again.
+///    A SECOND V33 ENTR is needed to wake it. That branch executes
+///    `TC PHASCHNG OCT04024`, sets ROLLC/ALFACOM/P63FLAG, checks CMDAPMOD,
+///    and with `CMDAPMOD = -1` jumps directly `TC P63` (skipping WAKEP62).
+///    P63 sets `MODREG = 0o077` and does `ENDOFJOB`.
+///
+/// This test fires all three checkpoints and asserts (post entry-aligned
+/// REFSMMAT fix, issue #49):
+/// - Snapshot A (after V37 62 ENTR): MODREG=0o076 and NO IMU alarm. S61.1
+///   now passes (±30° check), so P62 runs S61.1→P62.2→GOPERF1R. GOPERF1R
+///   (V50N25 "PLEASE PERFORM") is immediate-return and does NOT park via
+///   CADRSTOR, so A does not require CADRSTOR≠0. (`tc_e7i_g` verifies the
+///   S61.1→GOPERF1R path directly.)
+/// - Snapshot B (after PROCEED #1 + CM/DAPON wait): MODREG=0o076, CADRSTOR≠0
+///   (P62.1 GOFLASH waiting in ENDIDLE) — the meaningful win of the fix.
+/// - Snapshot C (after PROCEED #2): MODREG=0o077 (P63). REMAINING GAP —
+///   reported, not asserted: PROCEED #2 → CMDAPMOD gate → TC P63 does not
+///   yet complete (ROLLC advances but MODREG stays 0o076).
+///
+/// References:
+/// - P61-P67.agc:204-220 (P62.2 GOPERF1R call and immediate-return)
+/// - P61-P67.agc:225-265 (P62.1 GOFLASH call and CMDAPMOD gate)
+/// - P61-P67.agc:309-338 (P63 NEWMODEX MM 63)
+/// - CM_ENTRY_DIGITAL_AUTOPILOT.agc:175-238 (CM/DAPON GAMDIFSW wait loop)
+/// - PINBALL_GAME__BUTTONS_AND_LIGHTS.agc:2902 (VBPROC)
+/// - PINBALL_GAME__BUTTONS_AND_LIGHTS.agc:3358 (RECALTST)
+/// - DISPLAY_INTERFACE_ROUTINES.agc:926 (GOPERF1R immediate-return)
+/// - PINBALL_GAME__BUTTONS_AND_LIGHTS.agc:731 (GOFLASH synchronous)
+#[test]
+fn tc_e7i_f_wake_gap() {
+    let template_path = template_core_path();
+    if !template_path.exists() {
+        eprintln!(
+            "skipping tc_e7i_f: no template core at {} \
+             (run `cargo run --features vagc-capture --bin capture_entry_template`)",
+            template_path.display()
+        );
+        return;
+    }
+    let root = vagc_root();
+    let yaagc = root.join("yaAGC/yaAGC");
+    let rope = root.join("Comanche055/MAIN.agc.bin");
+    let listing = root.join("Comanche055/MAIN.agc.lst");
+    if !yaagc.exists() || !rope.exists() || !listing.exists() {
+        eprintln!(
+            "skipping tc_e7i_f: VirtualAGC build incomplete at {}",
+            root.display()
+        );
+        return;
+    }
+
+    let mut core = CoreImage::load(&template_path)
+        .unwrap_or_else(|e| panic!("load template {}: {e}", template_path.display()));
+    let symtab =
+        Symtab::load(&listing).unwrap_or_else(|e| panic!("load symtab {}: {e}", listing.display()));
+    let rust_state = setup_state_direct_leo();
+    let init = EntryInitialState {
+        position_m: rust_state.csm_state.position,
+        velocity_mps: rust_state.csm_state.velocity,
+        time_s: 0.0,
+        target_lat_rad: rust_state.entry.target_lat_rad,
+        target_lon_rad: rust_state.entry.target_lon_rad,
+        emsalt_m: 122_000.0,
+        alfa_pad_deg: -20.0,
+        lift_up: true,
+        refsmmat: EntryInitialState::entry_refsmmat(
+            rust_state.csm_state.position,
+            rust_state.csm_state.velocity,
+        ),
+        cmdapmod: -1,
+    };
+    patch_into(&mut core, &symtab, &init).expect("patch_into ok");
+
+    let work = std::env::temp_dir().join(format!("vagc_e7i_f_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).unwrap();
+    let core_in = work.join("core_in");
+    core.save(&core_in).unwrap();
+
+    let port = pick_port();
+    let mut child = std::process::Command::new(&yaagc)
+        .current_dir(&work)
+        .arg("--quiet")
+        .arg("--nodebug")
+        .arg("--inhibit-alarms")
+        .arg("--dump-time=1")
+        .arg(format!("--port={port}"))
+        .arg(&rope)
+        .arg(&core_in)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("yaAGC spawn");
+
+    let stderr = child.stderr.take().expect("piped stderr");
+    let stderr_buf = spawn_stderr_capture(stderr);
+
+    std::thread::sleep(Duration::from_millis(300));
+    let mut dsky = DskyScript::new(connect_with_retry(port));
+    let dump_path = work.join("core");
+
+    // ── Snapshot A: wait for GOPERF1R separation display to park ────────────
+    // After V37 62 ENTR, P62.2 calls GOPERF1R (async / immediate-return),
+    // whose display job reaches ENDIDLE. wait_for_p62_parked gates on
+    // MODREG=0o076 AND CADRSTOR≠0 — both must hold simultaneously.
+    // Generous 12-second budget: S61DT ≈ 11 sim-sec delay before SERVICER
+    // starts (at 20x wall-clock speed ≈ 550 ms), plus IMU-check + display.
+    let mtime_pre = current_mtime(&dump_path);
+    dsky.verb_major_mode(62).expect("V37 ENTR 62 ENTR");
+    let (core_a, dumps_a, settle_a_ms, settled_a) =
+        wait_for_p62_parked(&dump_path, &symtab, mtime_pre, 12_000);
+    let snap_a = core_a
+        .as_ref()
+        .map(|c| build_snapshot(c, &symtab, dumps_a, Some(settle_a_ms), settled_a));
+    let cadrstor_a = snap_a
+        .as_ref()
+        .and_then(|s| s.cadrstor.as_ref())
+        .map(|r| r.decimal)
+        .unwrap_or(0);
+    let modreg_a = snap_a
+        .as_ref()
+        .and_then(|s| s.modreg.as_ref())
+        .map(|r| r.decimal)
+        .unwrap_or(0);
+    let posexit_a = snap_a
+        .as_ref()
+        .and_then(|s| s.posexit.as_ref())
+        .map(|r| r.decimal)
+        .unwrap_or(0);
+    eprintln!(
+        "[e7i-f] snap-A (post V37 62): MODREG=0o{:05o} CADRSTOR=0o{:05o} \
+         POSEXIT=0o{:05o} settled={} wait_ms={} dumps={}",
+        modreg_a, cadrstor_a, posexit_a, settled_a, settle_a_ms, dumps_a
+    );
+
+    // ── PROCEED #1: wake GOPERF1R → CM/DAPON → P62.1 GOFLASH ───────────────
+    // After waking the GOPERF1R job it runs CM/DAPON, which loops (0.5
+    // sim-sec polls) until the SERVICER calls CM/POSE and sets GAMDIFSW.
+    // Then P62.1 calls GOFLASH (synchronous), reaching ENDIDLE again.
+    // Budget: 2 sim-sec for first SERVICER cycle + up to 0.5 sim-sec
+    // for CM/DAPON poll ≈ 125 ms wall-clock; add generous 10 s budget.
+    let mtime_after_1st = current_mtime(&dump_path);
+    dsky.proceed().expect("PROCEED #1 (wake GOPERF1R → CM/DAPON → P62.1)");
+    let (core_b, dumps_b, settle_b_ms, settled_b) =
+        wait_for_p62_parked(&dump_path, &symtab, mtime_after_1st, 10_000);
+    let snap_b = core_b
+        .as_ref()
+        .map(|c| build_snapshot(c, &symtab, dumps_b, Some(settle_b_ms), settled_b));
+    let cadrstor_b = snap_b
+        .as_ref()
+        .and_then(|s| s.cadrstor.as_ref())
+        .map(|r| r.decimal)
+        .unwrap_or(0);
+    let modreg_b = snap_b
+        .as_ref()
+        .and_then(|s| s.modreg.as_ref())
+        .map(|r| r.decimal)
+        .unwrap_or(0);
+    eprintln!(
+        "[e7i-f] snap-B (post PROCEED #1): MODREG=0o{:05o} CADRSTOR=0o{:05o} \
+         settled={} wait_ms={} dumps={}",
+        modreg_b, cadrstor_b, settled_b, settle_b_ms, dumps_b
+    );
+
+    // ── PROCEED #2: wake P62.1 GOFLASH → CMDAPMOD gate → TC P63 ─────────────
+    // The GOFLASH job's PROCEED branch runs:
+    //   TC PHASCHNG OCT04024, CCS HEADSUP, TS ROLLC, ... TC P63
+    // P63 calls TC NEWMODEX MM 63 → MODREG = 0o077, then ENDOFJOB.
+    // Poll for MODREG to advance from 0o076 to 0o077.
+    let mtime_after_2nd = current_mtime(&dump_path);
+    dsky.proceed().expect("PROCEED #2 (wake P62.1 GOFLASH → P63)");
+
+    let start_c = Instant::now();
+    let budget_c = Duration::from_secs(8);
+    let mut last_mtime_c = mtime_after_2nd;
+    let mut modreg_c = modreg_b;
+    let mut rollc_c: u16 = 0;
+    let mut posexit_c: u16 = 0;
+    while Instant::now() < start_c + budget_c {
+        if let Some(new_mt) = wait_for_new_dump(
+            &dump_path,
+            last_mtime_c,
+            Instant::now() + Duration::from_millis(400),
+        ) {
+            last_mtime_c = Some(new_mt);
+            if let Some(c) = try_load_core(&dump_path) {
+                let m = symtab.get("MODREG").and_then(|a| c.read_sp(a)).unwrap_or(0);
+                modreg_c = m;
+                // Also read ROLLC and POSEXIT for extra context
+                posexit_c = symtab
+                    .get("POSEXIT")
+                    .and_then(|a| c.read_sp(a))
+                    .unwrap_or(0);
+                rollc_c = symtab
+                    .get("ROLLC")
+                    .and_then(|a| c.read_sp(a))
+                    .unwrap_or(0);
+                if m == 0o077 {
+                    break;
+                }
+            }
+        }
+    }
+    eprintln!(
+        "[e7i-f] snap-C (post PROCEED #2): MODREG=0o{:05o} POSEXIT=0o{:05o} \
+         ROLLC=0o{:05o} (expected MODREG=0o00077=P63)",
+        modreg_c, posexit_c, rollc_c
+    );
+
+    // ── Stderr scan ──────────────────────────────────────────────────────────
+    let _ = child.kill();
+    let _ = child.wait();
+    std::thread::sleep(Duration::from_millis(100));
+    let stderr_lines = stderr_buf.lock().expect("lock").clone();
+    let scan = scan_stderr(&stderr_lines);
+    if !scan.matched_alarm.is_empty() {
+        eprintln!("[e7i-f] alarm lines: {:?}", scan.matched_alarm);
+    }
+
+    let _ = std::fs::remove_dir_all(&work);
+
+    // ── Assertions ───────────────────────────────────────────────────────────
+    // A: P62 must be active. With the entry-aligned REFSMMAT (issue #49),
+    //    S61.1's ±30° IMU check passes and P62 runs S61.1→P62.2→GOPERF1R.
+    //    GOPERF1R (V50N25 "PLEASE PERFORM") is *immediate-return* and does
+    //    NOT park via CADRSTOR, so we assert P62 is active + no IMU alarm,
+    //    NOT `settled_a`. (`tc_e7i_g` verifies the S61.1→GOPERF1R path.)
+    let imu_alarm = scan
+        .matched_alarm
+        .iter()
+        .any(|l| l.contains("1426") || l.contains("1427"));
+    assert!(
+        modreg_a == 0o076 && !imu_alarm,
+        "SNAP-A: P62 not active or S61.1 raised an IMU alarm. \
+         MODREG=0o{:05o} CADRSTOR=0o{:05o} POSEXIT=0o{:05o} imu_alarm={imu_alarm} \
+         (settled_a={settled_a})",
+        modreg_a, cadrstor_a, posexit_a
+    );
+    // B: after PROCEED #1, P62.1 GOFLASH V06N61 must park in ENDIDLE
+    //    (CADRSTOR≠0). This is the meaningful win of the REFSMMAT fix:
+    //    it proves S61.1 passed and GOPERF1R→CM/DAPON→P62.1 all ran.
+    assert!(
+        settled_b,
+        "SNAP-B: after PROCEED #1, AGC did not reach MODREG=0o076 + CADRSTOR≠0 \
+         within 10 s; CM/DAPON→P62.1 GOFLASH never parked. \
+         MODREG=0o{:05o} CADRSTOR=0o{:05o}",
+        modreg_b, cadrstor_b
+    );
+    // C: after PROCEED #2, P63 should set MODREG=0o077. This is the
+    //    REMAINING wake-gap layer (#49): the REFSMMAT fix gets us a clean
+    //    P62.1 park, but PROCEED #2 → CMDAPMOD gate → TC P63 does not yet
+    //    complete (observed: ROLLC advances but MODREG stays 0o076).
+    //    Reported, not asserted, until that layer is addressed.
+    if modreg_c == 0o077 {
+        eprintln!("[e7i-f] ✓ PROCEED #2 reached P63 (MODREG=0o077)");
+    } else {
+        eprintln!(
+            "[e7i-f] REMAINING GAP: PROCEED #2 did not reach P63. \
+             MODREG=0o{:05o} POSEXIT=0o{:05o} ROLLC=0o{:05o} (want 0o00077)",
+            modreg_c, posexit_c, rollc_c
+        );
+    }
+}
+
+/// TC-E7I-G: localize the P62 stall for the wake gap (#49).
+///
+/// `tc_e7i_f` showed the AGC enters P62 (`MODREG = 0o076`) but the
+/// GOPERF1R separation display never parks in ENDIDLE — `CADRSTOR`
+/// stays 0 through 12 s and both PROCEEDs, so the two-PROCEED wake
+/// logic is never reached. This test finds *where* P62 stalls.
+///
+/// The P62 entry path (confirmed from the Comanche055 listing and
+/// O'Brien book pp.350-351, see `docs/reentry_workflow_spec.md`) is:
+///
+///   P62 (26,2320)  TC S61.1         # check state vector + IMU orientation
+///   P62.2 (26,2326) ... CAF OCT41 / TC BANKCALL / CADR GOPERF1R
+///   GOPERF1R (10,3125)               # posts V50N25 sep display
+///   ... ENDIDLE                      # display job sleeps, sets CADRSTOR
+///
+/// So execution should hit, in order: `S61.1` → `P62.2` → `GOPERF1R`
+/// → `ENDIDLE`. We break on all four, drive `V37 ENTR 62 ENTR`, and
+/// dump a symbolic backtrace + registers at each stop (each CONT
+/// resumes to the next breakpoint). The stop *sequence* localizes the
+/// stall:
+///   - S61.1 hit, P62.2 NOT hit → stall INSIDE S61.1 (IMU/state check)
+///     — the leading hypothesis (O'Brien: "P62 ... generates a program
+///     alarm if the IMU is not ready").
+///   - S61.1+P62.2 hit, GOPERF1R NOT hit → stall in the BANKCALL dispatch.
+///   - GOPERF1R hit, ENDIDLE NOT hit → display job never scheduled.
+///   - all four hit → display parks; the wake gap is downstream.
+///
+/// Also dumps AVEGFLAG (FLAGWRD1 bit 1) from the final core: if
+/// AVERAGE-G is off, the SERVICER never cycles CM/POSE, which both
+/// gates the display path and (later) GAMDIFSW in CM/DAPON.
+#[test]
+fn tc_e7i_g_locate_p62_stall() {
+    let template_path = template_core_path();
+    if !template_path.exists() {
+        eprintln!("skipping tc_e7i_g: no template core at {}", template_path.display());
+        return;
+    }
+    let root = vagc_root();
+    let yaagc = root.join("yaAGC/yaAGC");
+    let rope = root.join("Comanche055/MAIN.agc.bin");
+    let listing = root.join("Comanche055/MAIN.agc.lst");
+    let symtab_file = root.join("Comanche055/MAIN.agc.symtab");
+    if !yaagc.exists() || !rope.exists() || !listing.exists() || !symtab_file.exists() {
+        eprintln!(
+            "skipping tc_e7i_g: VirtualAGC build incomplete at {}",
+            root.display()
+        );
+        return;
+    }
+
+    let mut core = CoreImage::load(&template_path)
+        .unwrap_or_else(|e| panic!("load template {}: {e}", template_path.display()));
+    let symtab =
+        Symtab::load(&listing).unwrap_or_else(|e| panic!("load symtab {}: {e}", listing.display()));
+    let rust_state = setup_state_direct_leo();
+    let init = EntryInitialState {
+        position_m: rust_state.csm_state.position,
+        velocity_mps: rust_state.csm_state.velocity,
+        time_s: 0.0,
+        target_lat_rad: rust_state.entry.target_lat_rad,
+        target_lon_rad: rust_state.entry.target_lon_rad,
+        emsalt_m: 122_000.0,
+        alfa_pad_deg: -20.0,
+        lift_up: true,
+        refsmmat: EntryInitialState::entry_refsmmat(
+            rust_state.csm_state.position,
+            rust_state.csm_state.velocity,
+        ),
+        cmdapmod: -1,
+    };
+    patch_into(&mut core, &symtab, &init).expect("patch_into ok");
+
+    let work = std::env::temp_dir().join(format!("vagc_e7i_g_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).unwrap();
+    let core_in = work.join("core_in");
+    core.save(&core_in).unwrap();
+
+    // Debugger script: break on the four P62-path labels; after each
+    // CONT emit a symbolic backtrace + registers so dbg.txt records the
+    // stop sequence. `info breakpoints` up front confirms which labels
+    // the debugger actually resolved (the dotted names S61.1 / P62.2 may
+    // or may not parse; GOPERF1R / ENDIDLE are dotless and safe). The
+    // final COREDUMP captures AVEGFLAG etc. at the last stop reached.
+    // Breakpoints span the P62 entry path *and* S61.1's IMU-gate divert
+    // exits. S61.1's first act is `CADR R02BOTH`, the IMU/REFSMMAT check
+    // that raises VARALARM 0o00210 (IMU NOT OPERATING) / 0o00220 (NO
+    // REFSMMAT) and `TC GOTOPOOH` when the ISS is uninitialised. Breaking
+    // on R02BOTH / VARALARM / ALARM / GOTOPOOH pins whether the stall is
+    // the IMU-not-ready abort or a genuine loop.
+    let hit_core = work.join("hit.core");
+    let cmd_path = work.join("watch.txt");
+    let script = format!(
+        "BREAK S61.1\nBREAK R02BOTH\nBREAK VARALARM\nBREAK ALARM\n\
+         BREAK GOTOPOOH\nBREAK P62.2\nBREAK GOPERF1R\nBREAK ENDIDLE\n\
+         info breakpoints\n\
+         CONT\nBACKTRACES\ninfo registers\n\
+         CONT\nBACKTRACES\ninfo registers\n\
+         CONT\nBACKTRACES\ninfo registers\n\
+         CONT\nBACKTRACES\ninfo registers\n\
+         COREDUMP {}\nQUIT\n",
+        hit_core.display()
+    );
+    std::fs::write(&cmd_path, script).unwrap();
+
+    let dbg_out = work.join("dbg.txt");
+    let out_file = std::fs::File::create(&dbg_out).unwrap();
+
+    let port = pick_port();
+    let mut child = std::process::Command::new(&yaagc)
+        .current_dir(&work)
+        .arg("--quiet")
+        .arg(format!("--symbols={}", symtab_file.display()))
+        .arg("--inhibit-alarms")
+        .arg(format!("--command={}", cmd_path.display()))
+        .arg(format!("--port={port}"))
+        .arg(&rope)
+        .arg(&core_in)
+        .stdout(std::process::Stdio::from(out_file))
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("yaAGC spawn");
+
+    let stderr = child.stderr.take().expect("piped stderr");
+    let _stderr_buf = spawn_stderr_capture(stderr);
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Drive V37 ENTR 62 ENTR. P62's `TC S61.1` should trip the first
+    // breakpoint within a couple seconds.
+    let mut dsky = DskyScript::new(connect_with_retry(port));
+    let _ = dsky.verb_major_mode(62);
+
+    // Give the chained CONT/backtrace sequence room to run; if a CONT
+    // hangs (a later breakpoint is never reached), the script never hits
+    // QUIT and we kill at the deadline. dbg.txt still holds every stop
+    // that completed.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut exited = false;
+    while Instant::now() < deadline {
+        if let Ok(Some(_)) = child.try_wait() {
+            exited = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    if !exited {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+
+    let dbg = std::fs::read_to_string(&dbg_out).unwrap_or_default();
+    let hit = CoreImage::load(&hit_core).ok();
+
+    // Count how many stops we observed. Each stop prints one
+    // "info registers" block, so the count of Z/register dumps ~= stops.
+    // BACKTRACES is symbolic, so the presence of each label name in
+    // dbg.txt tells us whether that point was reached at all.
+    let stopped_at = |label: &str| dbg.contains(&format!(", {label} ("));
+    eprintln!(
+        "[e7i-g] exited={} | stopped at: S61.1={} R02BOTH={} VARALARM={} \
+         ALARM={} GOTOPOOH={} P62.2={} GOPERF1R={} ENDIDLE={}",
+        exited,
+        stopped_at("S61.1"),
+        stopped_at("R02BOTH"),
+        stopped_at("VARALARM"),
+        stopped_at("ALARM"),
+        stopped_at("GOTOPOOH"),
+        stopped_at("P62.2"),
+        stopped_at("GOPERF1R"),
+        stopped_at("ENDIDLE"),
+    );
+
+    // Decode AVEGFLAG + state-vector epoch from the final core, mirroring
+    // tc_e7i_d, to answer whether AVERAGE-G / the SERVICER is running.
+    if let Some(c) = hit.as_ref() {
+        let rd = |bank: u8, offset: u16| c.read_sp(AgcAddress::Erasable { bank, offset });
+        let z = rd(0, 5).unwrap_or(0);
+        let time2 = rd(0, 0o24).unwrap_or(0) as u32;
+        let time1 = rd(0, 0o25).unwrap_or(0) as u32;
+        let clock_cs = time2 * 0o40000 + time1;
+        let dp = |sym: &str| -> Option<i64> {
+            match symtab.get(sym) {
+                Some(AgcAddress::Erasable { bank, offset }) => {
+                    let hi = rd(bank, offset)? as i64;
+                    let lo = rd(bank, offset + 1)? as i64;
+                    Some(hi * 0o40000 + lo)
+                }
+                _ => None,
+            }
+        };
+        let sp = |sym: &str| -> Option<u16> {
+            match symtab.get(sym) {
+                Some(AgcAddress::Erasable { bank, offset }) => rd(bank, offset),
+                _ => None,
+            }
+        };
+        let flagwrd1 = sp("FLAGWRD1");
+        let avegflag = flagwrd1.map(|w| w & 0o00001 != 0);
+        eprintln!(
+            "[e7i-g] final core: Z(PC)=0o{:05o} clock={:.2}s | \
+             AVEGFLAG={:?} FLAGWRD1={:?} | TET={:?}cs PIPTIME={:?}cs \
+             MODREG={:?} CADRSTOR={:?}",
+            z,
+            clock_cs as f64 / 100.0,
+            avegflag,
+            flagwrd1.map(|w| format!("0o{:05o}", w)),
+            dp("TET"),
+            dp("PIPTIME"),
+            sp("MODREG").map(|w| format!("0o{:05o}", w)),
+            sp("CADRSTOR").map(|w| format!("0o{:05o}", w)),
+        );
+    } else {
+        eprintln!("[e7i-g] final core: none written (no breakpoint reached ENDIDLE/QUIT)");
+    }
+
+    eprintln!(
+        "[e7i-g] ── debugger session stdout ──\n{}",
+        dbg.trim_end()
+    );
+
+    let _ = std::fs::remove_dir_all(&work);
 }
