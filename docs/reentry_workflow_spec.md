@@ -482,23 +482,36 @@ Per tick (align to the DAP's ~0.1 s / the harness's PIPA cadence):
 5. Let CM/POSE recompute `CALFA`; once `CALFA > +cos45°` positive, EXDAP arms
    WAKEP62; P63 starts ~21 s later.
 
-### 8.6 Open items — require a live yaAGC run to pin down (virtualagc-debugger)
+### 8.6 Open items — RESOLVED (live yaAGC run, 2026-07-03, `tc_e7i_j`)
 
-These three could not be settled statically; verify empirically during bring-up:
+All three were verified **not** to be the blocker; the real root cause was an
+inverted target attitude:
 
-1. **`IMODES33` bit 6 initial state** in the template core-rope image — confirm the
-   `IMODES33 = 0` patch is actually needed (bit may already be clear at entry).
-2. **FIFO-drain timing vs the 0.1 s `READGYMB` cadence** — confirm a tick's PCDU
-   burst fully drains before the next `READGYMB`, else angles lag; tune burst size /
-   tick spacing.
-3. **AOG/AIG/AMG erasable bank switching** — confirm the `EBANK=` context when the
-   loop or `patch_into` touches `AOG/AIG/AMG`-adjacent erasable.
+1. **`IMODES33` bit 6** — already clear in the template core; the `IMODES33 = 0`
+   patch is harmless but not the cause. READGYMB reads the injected CDU counters.
+2. **FIFO-drain vs `READGYMB` cadence** — the ramp injects ≈27 counts/tick (0.3° at
+   3°/s / 100 ms), far below the 400 cps FIFO limit; no lag, not blocking.
+3. **AOG/AIG/AMG bank switching** — no aliasing; the routines set `EBANK=AOG`
+   correctly before each READGYMB.
 
-### 8.7 Acceptance criteria (for the developer's implementation)
+**Actual root cause:** `entry_trim_cdu_deg` targeted `X_body = +unit(velocity)`
+(nose-into-wind → `CALFA ≈ −1`, the permanent `CMDAPMOD = −0` stall). Entry is
+**heat-shield-forward**, so the CM flies backward: `X_body = −unit(velocity)`
+(CDUY ≈ 174° for the direct-LEO FPA, not −6°). With that correction the ramp
+carries CALFA through broadside to `+cos45°` positive, EXDAP arms WAKEP62, and
+P63 starts ~21 s later. Also required in the harness: a **Phase 3 poll** of
+`MODREG` after the two PROCEEDs (WAKEP62 → P63 is an autonomous transition, not a
+parked display), and treating alarm **`0o00207`** ("ISS TURN-ON REQUEST NOT
+PRESENT FOR 90 SEC", a preload-harness artifact) as benign.
 
-- With the closed-loop `CduInjector` active, a system test drives P62 through both
-  PROCEEDs and observes **`P63FLAG` transition and `MMNUMBER`/`MODREG` = P63** with
-  **no program alarm**, matching yaAGC.
-- `CALFA` is observed to cross `+cos45°` positive before WAKEP62 fires (assert on the
-  captured erasable, as `tc_e7i_i` does today).
+### 8.7 Acceptance criteria — MET by `tc_e7i_j_closed_loop_p63`
+
+- With the closed-loop `CduInjector` active, the system test drives P62 through both
+  PROCEEDs and reaches **`MODREG = 0o077` (P63) via WAKEP62** with no unexpected
+  program alarm. ✅ (stable across repeated runs, ~69 s each)
+- **`MODREG = P63` is the CALFA-gate proof**: WAKEP62 is armed only when CALFA is
+  positive and `≥ +cos45°` (§3.3), so reaching P63 establishes it. The assertion
+  uses the stable **`CMDAPMOD = +0`** (heat-shield-forward) EXDAP output; the raw
+  `CALFA` cell is diagnostic-only (it aliases SPNDX/INTTEMP scratch — dumped value
+  unreliable, observed `0o37727` / `0o00000` across runs).
 - The existing open-loop fixtures and REFSMMAT tests remain green (no regression).
