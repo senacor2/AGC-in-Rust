@@ -2397,10 +2397,10 @@ fn tc_e7i_j_closed_loop_p63() {
         eprintln!("[e7i-j] alarm lines: {:?}", scan.matched_alarm);
     }
 
-    // CALFA in SP ones-complement at B+0: cos(45°) = 0.7071… ≈ 11583 raw.
+    // CALFA in SP ones-complement at B+0: cos(45°) = 1/√2 ≈ 0.7071 → ≈ 11584 raw.
     // A positive word below 0x4000 (16384) is a positive fraction; above
     // that is the negative half of ones-complement representation.
-    let cos45_raw: u16 = (0.7071_f64 * 16383.0).round() as u16; // ≈ 11583
+    let cos45_raw: u16 = (std::f64::consts::FRAC_1_SQRT_2 * 16383.0).round() as u16; // ≈ 11584
 
     // ── §8.7 acceptance criteria ─────────────────────────────────────────────
     assert_eq!(
