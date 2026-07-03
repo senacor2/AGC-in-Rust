@@ -101,6 +101,30 @@ const INC_PINC: u16 = 0;
 /// yaAGC `IncType` for `CounterMINC` (negative unit increment).
 const INC_MINC: u16 = 2;
 
+/// CDU gimbal counter channel addresses (`EQUALS` values in
+/// `Comanche055/ERASABLE_ASSIGNMENTS.agc:145-147`).
+/// Wire format: `COUNTER_FLAG | CDU*_ADDR`.
+const CDUX_ADDR: u16 = 0o32; // outer  gimbal → wire 0x9A
+const CDUY_ADDR: u16 = 0o33; // inner  gimbal → wire 0x9B
+const CDUZ_ADDR: u16 = 0o34; // middle gimbal → wire 0x9C
+
+/// yaAGC `IncType` for `+PCDU` (positive CDU increment, slow-rate).
+const INC_PCDU: u16 = 1;
+/// yaAGC `IncType` for `−MCDU` (negative CDU increment, slow-rate).
+const INC_MCDU: u16 = 3;
+
+/// CDU angle resolution: 1 LSB = 360° / 32768 ≈ 0.010986°.
+/// Inverse: ≈ 91.02 counts per degree.
+///
+/// Source: Comanche055 CDU counter register is 15 bits, full-scale 360°,
+/// so 1 LSB = 360° / 2^15.
+pub const CDU_LSB_DEG: f64 = 360.0 / 32768.0;
+
+/// Maximum CDU injection rate (counts per second). The yaAGC FIFO for
+/// unprogrammed increments drains at 400 counts/s (per §8.4). Stay under
+/// this limit to prevent FIFO overflow and dropped pulses.
+pub const CDU_MAX_RATE_CPS: f64 = 400.0;
+
 // ── DSKY scripter ──────────────────────────────────────────────────────────
 
 /// One DSKY key, mapped to its 5-bit channel-015 code.
@@ -426,6 +450,223 @@ pub fn pipa_pulse_packet_count(counts: [i16; 3]) -> usize {
 /// sub-step. Same value as [`crate::entry_sim::SUB_STEP_S`].
 pub const PIPA_SUBSAMPLE_S: f64 = SUB_STEP_S;
 
+// ── CDU injector ───────────────────────────────────────────────────────────
+
+/// Stream CDU gimbal-angle pulses to a yaAGC instance to simulate the
+/// IMU's stable-platform attitude drive.
+///
+/// On each [`CduInjector::tick`], the injector advances each CDU axis
+/// by a rate-limited step toward the programmed target angle, emitting
+/// individual `+PCDU` (`IncType = 1`) or `−MCDU` (`IncType = 3`) packets.
+/// The step size is bounded by both the requested slew rate and the
+/// yaAGC FIFO drain limit ([`CDU_MAX_RATE_CPS`] = 400 counts/s).
+///
+/// ## Wire encoding (§8.4 of `docs/reentry_workflow_spec.md`)
+///
+/// | Axis          | Counter (octal) | Wire channel (`0x80 | addr`) |
+/// |---------------|-----------------|------------------------------|
+/// | CDUX (outer)  | `0o32`          | `0x9A`                       |
+/// | CDUY (inner)  | `0o33`          | `0x9B`                       |
+/// | CDUZ (middle) | `0o34`          | `0x9C`                       |
+///
+/// ## Rate-continuous requirement (§8.3)
+///
+/// The entry DAP (EXDAP) derives the body rate `PREL/QREL/RREL` from
+/// successive CDU counter differences. Injecting a large step in one
+/// tick causes a spurious one-cycle rate spike. Always ramp CDU angles
+/// at a physically plausible slew (≤ a few degrees/s) by calling `tick`
+/// with an appropriate `slew_rate_deg_per_s`.
+///
+/// AGC source: Comanche055/ERASABLE_ASSIGNMENTS.agc lines 145-147 (counter
+/// channel addresses); CM_ENTRY_DIGITAL_AUTOPILOT.agc (EXDAP loop that
+/// reads CDU via READGYMB and computes CALFA/CMDAPMOD).
+pub struct CduInjector {
+    client: YaAgcClient,
+    /// Cumulative injected CDU angle `[CDUX, CDUY, CDUZ]` in degrees.
+    /// Tracks the total increment we have sent, not the absolute hardware
+    /// CDU counter value.
+    current_deg: [f64; 3],
+    /// Target CDU angle `[CDUX, CDUY, CDUZ]` in degrees.
+    target_deg: [f64; 3],
+}
+
+impl CduInjector {
+    /// Build a CDU injector over an existing client.
+    ///
+    /// `initial_deg` is the presumed starting CDU angle `[CDUX, CDUY,
+    /// CDUZ]` in degrees. Pass `[0.0; 3]` when the core image was
+    /// pre-patched to clear the CDU counter registers, or the measured
+    /// attitude derived from a prior core dump.
+    pub fn new(client: YaAgcClient, initial_deg: [f64; 3]) -> Self {
+        Self {
+            client,
+            current_deg: initial_deg,
+            target_deg: initial_deg,
+        }
+    }
+
+    /// Set the target CDU angle `[CDUX, CDUY, CDUZ]` in degrees.
+    pub fn set_target(&mut self, target_deg: [f64; 3]) {
+        self.target_deg = target_deg;
+    }
+
+    /// Return the current cumulative injected CDU angle in degrees.
+    pub fn current_deg(&self) -> [f64; 3] {
+        self.current_deg
+    }
+
+    /// Advance each CDU axis toward its target by at most
+    /// `slew_rate_deg_per_s × tick_s` per axis, emitting PCDU/MCDU
+    /// packets. The per-tick burst is also capped at
+    /// `CDU_MAX_RATE_CPS × tick_s` counts to respect the FIFO limit.
+    ///
+    /// Returns the updated cumulative CDU angle after this tick.
+    ///
+    /// Axes already within one LSB of their target are left undisturbed.
+    pub fn tick(&mut self, tick_s: f64, slew_rate_deg_per_s: f64) -> io::Result<[f64; 3]> {
+        let max_step_deg = slew_rate_deg_per_s * tick_s;
+        let fifo_cap_deg = CDU_MAX_RATE_CPS * tick_s * CDU_LSB_DEG;
+        let limit_deg = max_step_deg.min(fifo_cap_deg);
+
+        for axis in 0..3usize {
+            let delta = self.target_deg[axis] - self.current_deg[axis];
+            // Skip if within half an LSB.
+            if delta.abs() < CDU_LSB_DEG * 0.5 {
+                continue;
+            }
+            let step = delta.clamp(-limit_deg, limit_deg);
+            let counts = (step / CDU_LSB_DEG).round() as i32;
+            if counts == 0 {
+                continue;
+            }
+            self.emit_cdu_axis(axis, counts)?;
+            self.current_deg[axis] += counts as f64 * CDU_LSB_DEG;
+        }
+        Ok(self.current_deg)
+    }
+
+    /// Borrow the underlying client for receive-side polling.
+    pub fn client_mut(&mut self) -> &mut YaAgcClient {
+        &mut self.client
+    }
+
+    /// Emit `|counts|` PCDU or MCDU pulses on the given axis index
+    /// (0 = CDUX outer, 1 = CDUY inner, 2 = CDUZ middle).
+    fn emit_cdu_axis(&mut self, axis: usize, counts: i32) -> io::Result<()> {
+        const ADDRS: [u16; 3] = [CDUX_ADDR, CDUY_ADDR, CDUZ_ADDR];
+        let (inc, n) = if counts > 0 {
+            (INC_PCDU, counts)
+        } else {
+            (INC_MCDU, -counts)
+        };
+        let pkt = ChannelPacket {
+            channel: COUNTER_FLAG | ADDRS[axis],
+            value: inc,
+            u_bit: false,
+        };
+        for _ in 0..n {
+            self.client.send(pkt)?;
+        }
+        Ok(())
+    }
+}
+
+/// Compute the target CDU gimbal angles (degrees) for the entry trim
+/// attitude — heat-shield X-body axis aligned to the velocity direction
+/// (AoA ≈ 0°, `CALFA = 1.0 > cos 45°`) — from the ECI state vector and
+/// the stable-member REFSMMAT.
+///
+/// ## Gimbal recipe (§8.2 of `docs/reentry_workflow_spec.md`)
+///
+/// Inverse of READGYMB (`Comanche055/CM_BODY_ATTITUDE.agc`):
+///
+/// ```text
+/// X_body_sm = REFSMMAT · unit(velocity)   # heat-shield forward
+/// Y_body_sm = Gram-Schmidt of Y_SM against X_body_sm
+/// Z_body_sm = X_body_sm × Y_body_sm
+///
+/// CDUZ (middle, AMG) = arcsin( X_body_sm[1] )
+/// CDUY (inner, AIG)  = atan2( −X_body_sm[2], X_body_sm[0] )
+/// CDUX (outer, AOG)  = atan2( −Z_body_sm[1], Y_body_sm[1] )
+/// ```
+///
+/// The returned target satisfies `CALFA = cos(0°) = 1.0 > cos(45°)`, so
+/// EXDAP will immediately set `CMDAPMOD = +0` and the P62.1 gate takes
+/// the direct `TC P63` branch (§3.3).
+///
+/// Returns `[0.0; 3]` for a degenerate (near-zero velocity) input.
+///
+/// AGC source: Comanche055/CM_BODY_ATTITUDE.agc, READGYMB routine.
+pub fn entry_trim_cdu_deg(
+    _position: [f64; 3],
+    velocity: [f64; 3],
+    refsmmat: [[f64; 3]; 3],
+) -> [f64; 3] {
+    let v_hat = match unit3(velocity) {
+        Some(u) => u,
+        None => return [0.0; 3],
+    };
+
+    // X_body in SM coordinates: REFSMMAT · v_hat.
+    let xb = matvec3(refsmmat, v_hat);
+
+    // Y_body: Gram-Schmidt of SM Y-axis ([0, 1, 0]) against X_body.
+    let dot_xy = xb[1]; // dot([0,1,0], xb) = xb[1]
+    let raw_yb = [
+        0.0 - dot_xy * xb[0],
+        1.0 - dot_xy * xb[1],
+        0.0 - dot_xy * xb[2],
+    ];
+    let yb = match unit3(raw_yb) {
+        Some(u) => u,
+        // X_body parallel to Y_SM: fall back to SM Z-axis ([0,0,1]).
+        None => {
+            let dot_xz = xb[2];
+            let raw_zb = [
+                0.0 - dot_xz * xb[0],
+                0.0 - dot_xz * xb[1],
+                1.0 - dot_xz * xb[2],
+            ];
+            unit3(raw_zb).unwrap_or([0.0, 1.0, 0.0])
+        }
+    };
+    let zb = cross3(xb, yb);
+
+    // Gimbal angles — clamp arcsin argument to guard floating-point drift.
+    let cduz_rad = xb[1].clamp(-1.0, 1.0).asin();
+    let cduy_rad = (-xb[2]).atan2(xb[0]);
+    let cdux_rad = (-zb[1]).atan2(yb[1]);
+
+    [cdux_rad.to_degrees(), cduy_rad.to_degrees(), cduz_rad.to_degrees()]
+}
+
+/// Normalise a 3-vector; returns `None` if the magnitude is negligible.
+fn unit3(v: [f64; 3]) -> Option<[f64; 3]> {
+    let mag = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if mag < 1.0e-9 {
+        return None;
+    }
+    Some([v[0] / mag, v[1] / mag, v[2] / mag])
+}
+
+/// 3-vector cross product `a × b`.
+fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+/// Matrix-vector product `M · v` (row-major 3×3 × column 3-vector).
+fn matvec3(m: [[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
+    [
+        m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+        m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+        m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
+    ]
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -520,5 +761,164 @@ mod tests {
             0,
             "PRO bit must be CLEAR in pressed packet"
         );
+    }
+
+    // ── CDU encoder tests ──────────────────────────────────────────────────
+
+    /// TC-CDU-LSB-1: `CDU_LSB_DEG` matches the 360°/32768 specification
+    /// from §8.4 of `docs/reentry_workflow_spec.md`.
+    #[test]
+    fn tc_cdu_lsb_1_scale() {
+        let expected = 360.0_f64 / 32768.0;
+        assert!(
+            (CDU_LSB_DEG - expected).abs() < 1e-12,
+            "CDU_LSB_DEG = {CDU_LSB_DEG}, expected {expected}"
+        );
+        // Implied counts-per-degree: ≈ 91.02.
+        let cpd = 1.0 / CDU_LSB_DEG;
+        assert!(
+            (cpd - 91.022).abs() < 0.001,
+            "counts/deg = {cpd}"
+        );
+    }
+
+    /// TC-CDU-ENC-1: CDU packet encoding uses the counter-flag bit and
+    /// the correct per-axis erasable address from ERASABLE_ASSIGNMENTS.
+    #[test]
+    fn tc_cdu_enc_1_packet_layout() {
+        // PCDU on CDUY (inner, 0o33 → wire 0x9B).
+        let pkt = ChannelPacket {
+            channel: COUNTER_FLAG | CDUY_ADDR,
+            value: INC_PCDU,
+            u_bit: false,
+        };
+        let bytes = pkt.pack();
+        let round = ChannelPacket::unpack(bytes).unwrap();
+        assert_eq!(round, pkt);
+        assert_eq!(round.channel & 0x80, 0x80, "counter-flag bit set");
+        assert_eq!(round.channel & 0x7F, 0o33, "CDUY address low 7 bits");
+        assert_eq!(round.value, INC_PCDU, "PCDU IncType");
+
+        // MCDU on CDUZ (middle, 0o34 → wire 0x9C).
+        let pkt2 = ChannelPacket {
+            channel: COUNTER_FLAG | CDUZ_ADDR,
+            value: INC_MCDU,
+            u_bit: false,
+        };
+        let round2 = ChannelPacket::unpack(pkt2.pack()).unwrap();
+        assert_eq!(round2.channel & 0x7F, 0o34, "CDUZ address low 7 bits");
+        assert_eq!(round2.value, INC_MCDU, "MCDU IncType");
+    }
+
+    /// TC-CDU-ENC-2: CDU IncType constants are distinct and different
+    /// from PIPA IncType constants (§8.4: PCDU=1, MCDU=3 vs PINC=0, MINC=2).
+    #[test]
+    fn tc_cdu_enc_2_inc_type_distinct() {
+        assert_eq!(INC_PCDU, 1, "PCDU = slow positive CDU increment");
+        assert_eq!(INC_MCDU, 3, "MCDU = slow negative CDU increment");
+        // Must not overlap with PIPA IncTypes (0 and 2).
+        assert_ne!(INC_PCDU, INC_PINC);
+        assert_ne!(INC_PCDU, INC_MINC);
+        assert_ne!(INC_MCDU, INC_PINC);
+        assert_ne!(INC_MCDU, INC_MINC);
+    }
+
+    /// TC-CDU-TRIM-1: `entry_trim_cdu_deg` for a purely circular orbit
+    /// (R along ECI-X, V along ECI-Y; FPA = 0°) and the matching entry-
+    /// aligned REFSMMAT returns all CDU angles ≈ 0°.
+    ///
+    /// At AoA = 0° with FPA = 0°, X_body = unit(V) = [0,1,0] in ECI.
+    /// REFSMMAT built from these vectors maps X_body to X_SM = [1,0,0]
+    /// in SM, so all gimbal angles are exactly zero.
+    ///
+    /// Note: the actual direct-LEO entry scenario uses FPA = −6°
+    /// (velocity has a small radial component), which gives CDUY ≈ −6°.
+    /// This test uses the simpler purely-circular geometry for a clean
+    /// analytic assertion; `tc_cdu_trim_3` covers the FPA ≠ 0 case.
+    #[test]
+    fn tc_cdu_trim_1_circular_orbit_zero_aoa() {
+        // Purely circular orbit: V perpendicular to R (FPA = 0°).
+        let r = [6_493_000.0_f64, 0.0, 0.0];
+        let v = [0.0_f64, 7860.0, 0.0];
+
+        // Build REFSMMAT: Y_SM = unit(V×R), Z_SM = unit(-R), X_SM = Y×Z.
+        let vxr = [
+            v[1] * r[2] - v[2] * r[1],
+            v[2] * r[0] - v[0] * r[2],
+            v[0] * r[1] - v[1] * r[0],
+        ];
+        let y_sm = unit3(vxr).unwrap();
+        let neg_r = [-r[0], -r[1], -r[2]];
+        let z_sm = unit3(neg_r).unwrap();
+        let x_sm = unit3(cross3(y_sm, z_sm)).unwrap();
+        let refsmmat = [x_sm, y_sm, z_sm];
+
+        let target = entry_trim_cdu_deg(r, v, refsmmat);
+
+        // V_hat = [0,1,0], X_SM = [0,1,0], so X_body_sm = [1,0,0]:
+        // CDUZ = arcsin(0) = 0°, CDUY = atan2(-0, 1) = 0°, CDUX = 0°.
+        for (axis, &angle) in target.iter().enumerate() {
+            assert!(
+                angle.abs() < 0.1,
+                "CDU[{axis}] = {angle:.4}°, expected 0° for FPA=0 circular orbit"
+            );
+        }
+    }
+
+    /// TC-CDU-TRIM-3: `entry_trim_cdu_deg` for the direct-LEO entry
+    /// geometry (FPA = −6°, V = [−825, 7860, 0] m/s) gives CDUY ≈ −6°
+    /// and CALFA = cos(CDUY) > cos(45°).
+    ///
+    /// CDUY encodes the angle between X_body (velocity direction) and the
+    /// SM X-axis. With FPA = −6°, X_body is tilted 6° below the local
+    /// horizontal, giving CDUY ≈ −6°. CALFA = cos(−6°) ≈ 0.994 >> cos(45°)
+    /// confirming the EXDAP gate is satisfied.
+    #[test]
+    fn tc_cdu_trim_3_direct_leo_fpa_minus6() {
+        let r = [6_493_000.0_f64, 0.0, 0.0];
+        // FPA = -6° → Vx = 7900 sin(-6°) ≈ -825, Vy = 7900 cos(-6°) ≈ 7856.
+        let v = [-825.0_f64, 7860.0, 0.0];
+
+        let vxr = [
+            v[1] * r[2] - v[2] * r[1],
+            v[2] * r[0] - v[0] * r[2],
+            v[0] * r[1] - v[1] * r[0],
+        ];
+        let y_sm = unit3(vxr).unwrap();
+        let neg_r = [-r[0], -r[1], -r[2]];
+        let z_sm = unit3(neg_r).unwrap();
+        let x_sm = unit3(cross3(y_sm, z_sm)).unwrap();
+        let refsmmat = [x_sm, y_sm, z_sm];
+
+        let [cdux, cduy, cduz] = entry_trim_cdu_deg(r, v, refsmmat);
+
+        // CDUX and CDUZ should be ≈ 0° (no roll or middle gimbal tilt).
+        assert!(cdux.abs() < 0.5, "CDUX = {cdux:.4}°, expected ≈ 0°");
+        assert!(cduz.abs() < 0.5, "CDUZ = {cduz:.4}°, expected ≈ 0°");
+
+        // CDUY ≈ -6° (FPA angle, negative = pitch-down into wind).
+        assert!(
+            (cduy - (-6.0)).abs() < 1.0,
+            "CDUY = {cduy:.4}°, expected ≈ -6° for FPA=-6°"
+        );
+
+        // CALFA = cos(CDUY) > cos(45°) — the EXDAP gate condition.
+        let calfa = cduy.to_radians().cos();
+        assert!(
+            calfa > (45.0_f64.to_radians().cos()),
+            "CALFA = {calfa:.4} must be > cos(45°) = {:.4}",
+            45.0_f64.to_radians().cos()
+        );
+    }
+
+    /// TC-CDU-TRIM-2: `entry_trim_cdu_deg` returns `[0; 3]` for a
+    /// degenerate (zero-velocity) input rather than NaN.
+    #[test]
+    fn tc_cdu_trim_2_zero_velocity_safe() {
+        let r = [6_493_000.0, 0.0, 0.0];
+        let v = [0.0_f64, 0.0, 0.0];
+        let refsmmat = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let target = entry_trim_cdu_deg(r, v, refsmmat);
+        assert_eq!(target, [0.0; 3], "zero velocity must return safe default");
     }
 }

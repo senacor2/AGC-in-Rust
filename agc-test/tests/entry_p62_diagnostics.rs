@@ -50,7 +50,7 @@ use std::time::{Duration, Instant};
 use agc_test::entry_scenario::setup_state_direct_leo;
 use agc_test::entry_state::{patch_into, EntryInitialState};
 use agc_test::vagc_channel::YaAgcClient;
-use agc_test::vagc_driver::DskyScript;
+use agc_test::vagc_driver::{entry_trim_cdu_deg, CduInjector, DskyScript};
 use agc_test::vagc_harness::{vagc_root, AgcAddress, CoreImage, Symtab};
 
 use serde::{Deserialize, Serialize};
@@ -2100,5 +2100,330 @@ fn tc_e7i_i_v33_dispatch() {
         } else {
             "✗ still no P63 — a genuine blocker remains beyond pacing"
         }
+    );
+}
+
+/// TC-E7I-J: closed-loop P62→P63 handover with CDU injection (#49).
+///
+/// Drives the CM attitude via unprogrammed-increment CDU pulses
+/// (PCDU/MCDU on counter channels 0o32/33/34 → wire 0x9A/9B/9C) so that
+/// `CALFA` (computed by CM/POSE from the CDU gimbal angles) rises above
+/// `+cos 45°` with a positive sign. This satisfies all three EXDAP gate
+/// conditions (§3.3 of `docs/reentry_workflow_spec.md`), causing EXDAP to
+/// write `CMDAPMOD = +0`. The P62.1 `CS CMDAPMOD / MASK ONE / BZF P63.1`
+/// gate then falls through to `TC P63` directly.
+///
+/// ## Mechanism
+///
+/// - CDU counter registers (erasable bank 0, offsets 0o32/33/34) are
+///   pre-zeroed in the patched core so the CM starts with an identity
+///   attitude (X_body = X_SM ≈ velocity direction → CALFA ≈ 1.0).
+/// - A [`CduInjector`] on a third TCP connection ramps the CDUs from
+///   their starting state toward the entry-trim target at 3°/s, emitting
+///   one burst of PCDU/MCDU packets every ~100 ms wall-clock.
+/// - PROCEEDs are paced on the actual parked display (CADRSTOR ≠ 0) as
+///   in `tc_e7i_i_v33_dispatch`.
+/// - The test asserts `MODREG = 0o077` (P63 active) with no program alarm
+///   and reads `CALFA` from the final core to verify it was above `+cos 45°`
+///   (≈ 0.707; stored in SP as ≈ 11584 = 0x2D40 at B+0 scale).
+///
+/// ## §8.6 open items — why this test is `#[ignore]`
+///
+/// Three items from §8.6 of `docs/reentry_workflow_spec.md` cannot be
+/// settled statically and may prevent the test from passing on first run:
+///
+/// 1. **`IMODES33` bit 6 initial state** in the template core — the patch
+///    `IMODES33 = 0` is applied but the bit might already be clear (or
+///    a READGYMB mode switch overrides it).
+/// 2. **FIFO-drain vs 0.1 s READGYMB cadence** — the 100 ms CDU tick rate
+///    may not drain the FIFO before the next READGYMB, causing angle lag.
+/// 3. **AOG/AIG/AMG bank-switching context** — `EBANK=` when the loop
+///    touches adjacent erasable might cause bank-switch aliasing.
+///
+/// If the test fails for one of these reasons, the observed erasable
+/// values (CALFA, CMDAPMOD, P63FLAG, MMNUMBER) are printed to stderr for
+/// diagnosis.
+///
+/// AGC source: Comanche055/CM_ENTRY_DIGITAL_AUTOPILOT.agc (EXDAP loop,
+/// READGYMB); Comanche055/P61-P67.agc P62.1 CMDAPMOD gate.
+#[test]
+#[ignore = "§8.6 open items: IMODES33 bit-6 state, FIFO-drain cadence, \
+            AOG/AIG/AMG bank — verify empirically in a live yaAGC run"]
+fn tc_e7i_j_closed_loop_p63() {
+    let template_path = template_core_path();
+    if !template_path.exists() {
+        eprintln!("skipping tc_e7i_j: no template core at {}", template_path.display());
+        return;
+    }
+    let root = vagc_root();
+    let yaagc = root.join("yaAGC/yaAGC");
+    let rope = root.join("Comanche055/MAIN.agc.bin");
+    let listing = root.join("Comanche055/MAIN.agc.lst");
+    if !yaagc.exists() || !rope.exists() || !listing.exists() {
+        eprintln!("skipping tc_e7i_j: VirtualAGC build incomplete at {}", root.display());
+        return;
+    }
+
+    let mut core = CoreImage::load(&template_path)
+        .unwrap_or_else(|e| panic!("load template {}: {e}", template_path.display()));
+    let symtab =
+        Symtab::load(&listing).unwrap_or_else(|e| panic!("load symtab {}: {e}", listing.display()));
+    let rust_state = setup_state_direct_leo();
+    let refsmmat = EntryInitialState::entry_refsmmat(
+        rust_state.csm_state.position,
+        rust_state.csm_state.velocity,
+    );
+
+    // Use cmdapmod = 0 (+0 ones-complement): let EXDAP set it naturally
+    // from CALFA rather than preloading -1 (which bypasses the gate).
+    let init = EntryInitialState {
+        position_m: rust_state.csm_state.position,
+        velocity_mps: rust_state.csm_state.velocity,
+        time_s: 0.0,
+        target_lat_rad: rust_state.entry.target_lat_rad,
+        target_lon_rad: rust_state.entry.target_lon_rad,
+        emsalt_m: 122_000.0,
+        alfa_pad_deg: -20.0,
+        lift_up: true,
+        refsmmat,
+        cmdapmod: 0,
+    };
+    patch_into(&mut core, &symtab, &init).expect("patch_into ok");
+
+    // Pre-zero the CDU counter registers (bank 0, offsets 0o32/33/34 =
+    // CDUX/CDUY/CDUZ per ERASABLE_ASSIGNMENTS.agc:145-147) so the CM
+    // starts with a known attitude: CDU = 0 → body frame = SM frame →
+    // X_body ≈ velocity direction → CALFA ≈ 1.0 > cos 45°.
+    //
+    // Without this patch the template CDU counters may hold arbitrary
+    // values that place the CM nose-into-wind (CALFA < 0), which is the
+    // root cause captured in tc_e7i_i_v33_dispatch (§6.6).
+    for offset in [0o32u16, 0o33, 0o34] {
+        core.write_sp(AgcAddress::Erasable { bank: 0, offset }, 0);
+    }
+
+    let work = std::env::temp_dir().join(format!("vagc_e7i_j_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).unwrap();
+    let core_in = work.join("core_in");
+    core.save(&core_in).unwrap();
+
+    let port = pick_port();
+    let mut child = std::process::Command::new(&yaagc)
+        .current_dir(&work)
+        .arg("--quiet")
+        .arg("--nodebug")
+        .arg("--inhibit-alarms")
+        .arg("--dump-time=1")
+        .arg(format!("--port={port}"))
+        .arg(&rope)
+        .arg(&core_in)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("yaAGC spawn");
+
+    let stderr = child.stderr.take().expect("piped stderr");
+    let stderr_buf = spawn_stderr_capture(stderr);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    // Three TCP connections: DSKY, channel listener, CDU injector.
+    // yaAGC listens on port, port+1, port+2, … (SocketAPI.c line 417:
+    // `EstablishSocket(Portnum + NumServers, 3)`).
+    let mut dsky = DskyScript::new(connect_with_retry(port));
+    let cdu_client = connect_with_retry(port + 2);
+
+    let dump_path = work.join("core");
+
+    // Compute the entry-trim CDU target: heat-shield into the relative
+    // wind at AoA ≈ 0° (CALFA = 1.0). All three CDU angles are ≈ 0° for
+    // the direct-LEO geometry (X_body = X_SM = velocity direction).
+    let cdu_target = entry_trim_cdu_deg(
+        rust_state.csm_state.position,
+        rust_state.csm_state.velocity,
+        refsmmat,
+    );
+
+    // CDU injection runs in a background thread so it is not blocked by
+    // the main thread's dump-polling sleeps. Ramping at 3°/s from the
+    // zero starting state toward the target (§8.3 rate-continuous rule).
+    // The initial state is already CALFA ≈ 1 (CDU = 0 pre-patch), so the
+    // ramp is a small refinement, not a large maneuver.
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let stop_clone = Arc::clone(&stop_flag);
+    let cdu_thread = {
+        let initial = [0.0_f64; 3];
+        let mut injector = CduInjector::new(cdu_client, initial);
+        injector.set_target(cdu_target);
+        std::thread::spawn(move || {
+            const SLEW_DEG_PER_S: f64 = 3.0;
+            const TICK_S: f64 = 0.1;
+            while !stop_clone.load(Ordering::Relaxed) {
+                let _ = injector.tick(TICK_S, SLEW_DEG_PER_S);
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        })
+    };
+
+    // Helper to read a named SP cell from a core dump.
+    let read_cell = |c: &CoreImage, name: &str| -> Option<u16> {
+        match symtab.get(name) {
+            Some(a @ AgcAddress::Erasable { .. }) => c.read_sp(a),
+            _ => None,
+        }
+    };
+
+    // ── Phase 1: V37 ENTR 62 ENTR → wait for P62 active ────────────────────
+    dsky.verb_major_mode(62).expect("V37 ENTR 62 ENTR");
+    let deadline_p62 = Instant::now() + Duration::from_secs(12);
+    let mut last_mt = current_mtime(&dump_path);
+    while Instant::now() < deadline_p62 {
+        if let Some(mt) = wait_for_new_dump(
+            &dump_path,
+            last_mt,
+            Instant::now() + Duration::from_millis(400),
+        ) {
+            last_mt = Some(mt);
+            if let Some(c) = try_load_core(&dump_path) {
+                if read_cell(&c, "MODREG").unwrap_or(0) == 0o076 {
+                    break;
+                }
+            }
+        }
+    }
+
+    // ── Phase 2: display-paced PROCEEDs until P63 ───────────────────────────
+    // Up to 6 iterations; each waits (35 s budget for GAMDIFSW) for a
+    // parked flashing display (CADRSTOR≠0) or MODREG=0o077 (P63 started),
+    // then sends one PROCEED.
+    let mut modreg_final = 0o076u16;
+    let mut proceeds = 0u32;
+    let mut display_trail: Vec<String> = Vec::new();
+
+    for iter in 0..6u32 {
+        let mut parked: Option<CoreImage> = None;
+        let dl = Instant::now() + Duration::from_secs(35);
+        let mut lm = current_mtime(&dump_path);
+        while Instant::now() < dl {
+            if let Some(mt) = wait_for_new_dump(
+                &dump_path,
+                lm,
+                Instant::now() + Duration::from_millis(400),
+            ) {
+                lm = Some(mt);
+                if let Some(c) = try_load_core(&dump_path) {
+                    let m = read_cell(&c, "MODREG").unwrap_or(0);
+                    let cadr = read_cell(&c, "CADRSTOR").unwrap_or(0);
+                    if m == 0o077 || cadr != 0 {
+                        parked = Some(c);
+                        break;
+                    }
+                }
+            }
+        }
+        let Some(ref c) = parked else {
+            eprintln!("[e7i-j] iter {iter}: no display parked within budget");
+            break;
+        };
+        let vb = read_cell(c, "VERBREG").unwrap_or(0);
+        let nn = read_cell(c, "NOUNREG").unwrap_or(0);
+        let m = read_cell(c, "MODREG").unwrap_or(0);
+        let cadr = read_cell(c, "CADRSTOR").unwrap_or(0);
+        let calfa_raw = read_cell(c, "CALFA").unwrap_or(0);
+        display_trail.push(format!("V{vb:02o}N{nn:02o}@MM0o{m:05o}"));
+        eprintln!(
+            "[e7i-j] iter {iter}: V{vb:02o}N{nn:02o} MODREG=0o{m:05o} \
+             CADRSTOR=0o{cadr:05o} CALFA=0o{calfa_raw:05o}"
+        );
+        modreg_final = m;
+        if m == 0o077 {
+            break;
+        }
+        dsky.proceed().expect("PROCEED");
+        proceeds += 1;
+        std::thread::sleep(Duration::from_millis(2_000));
+    }
+
+    // ── Final erasable snapshot ──────────────────────────────────────────────
+    std::thread::sleep(Duration::from_millis(1_500));
+    let final_core = try_load_core(&dump_path);
+    let (calfa_raw, p63flag, cmdapmod, mmnumber, failreg) = final_core
+        .as_ref()
+        .map(|c| {
+            // FAILREG is a 3-word block; read all three.
+            let fr0 = read_cell(c, "FAILREG").unwrap_or(0);
+            let fr1 = match symtab.get("FAILREG") {
+                Some(AgcAddress::Erasable { bank, offset }) => c
+                    .read_sp(AgcAddress::Erasable {
+                        bank,
+                        offset: offset + 1,
+                    })
+                    .unwrap_or(0),
+                _ => 0,
+            };
+            (
+                read_cell(c, "CALFA").unwrap_or(0),
+                read_cell(c, "P63FLAG").unwrap_or(0),
+                read_cell(c, "CMDAPMOD").unwrap_or(0),
+                read_cell(c, "MMNUMBER").unwrap_or(0),
+                [fr0, fr1],
+            )
+        })
+        .unwrap_or((0, 0, 0, 0, [0, 0]));
+
+    // Tear down CDU thread and yaAGC.
+    stop_flag.store(true, Ordering::Relaxed);
+    cdu_thread.join().ok();
+    let _ = child.kill();
+    let _ = child.wait();
+    std::thread::sleep(Duration::from_millis(150));
+
+    let stderr_lines = stderr_buf.lock().expect("lock").clone();
+    let scan = scan_stderr(&stderr_lines);
+    let _ = std::fs::remove_dir_all(&work);
+
+    // ── Reporting ────────────────────────────────────────────────────────────
+    eprintln!("[e7i-j] display trail: {}", display_trail.join(" → "));
+    eprintln!(
+        "[e7i-j] final: MODREG=0o{modreg_final:05o} CALFA=0o{calfa_raw:05o} \
+         P63FLAG=0o{p63flag:05o} CMDAPMOD=0o{cmdapmod:05o} \
+         MMNUMBER=0o{mmnumber:05o} FAILREG=[0o{:05o},0o{:05o}]",
+        failreg[0], failreg[1]
+    );
+    if !scan.matched_alarm.is_empty() {
+        eprintln!("[e7i-j] alarm lines: {:?}", scan.matched_alarm);
+    }
+
+    // CALFA in SP ones-complement at B+0: cos(45°) = 1/√2 ≈ 0.7071 → ≈ 11584 raw.
+    // A positive word below 0x4000 (16384) is a positive fraction; above
+    // that is the negative half of ones-complement representation.
+    let cos45_raw: u16 = (std::f64::consts::FRAC_1_SQRT_2 * 16383.0).round() as u16; // ≈ 11584
+
+    // ── §8.7 acceptance criteria ─────────────────────────────────────────────
+    assert_eq!(
+        modreg_final, 0o077,
+        "MODREG must reach P63 (0o077); got 0o{modreg_final:05o} after {proceeds} \
+         PROCEEDs. CALFA=0o{calfa_raw:05o} CMDAPMOD=0o{cmdapmod:05o} \
+         P63FLAG=0o{p63flag:05o} FAILREG=[0o{:05o},0o{:05o}]. \
+         Observed display trail: {}",
+        failreg[0], failreg[1],
+        display_trail.join(" → "),
+    );
+    // CALFA > +cos45° (positive SP word, not in the negative half).
+    assert!(
+        calfa_raw > cos45_raw && calfa_raw < 0x4000,
+        "CALFA must be > +cos45° (raw > 0x{cos45_raw:04X}); got 0o{calfa_raw:05o} \
+         (0x{calfa_raw:04X}). §8.6 open item: FIFO-drain vs READGYMB cadence."
+    );
+    // No new program alarm (FAILREG[0] and [1] must be 0 or only hold
+    // the pre-existing 01107 phase-table marker from the template).
+    let has_new_alarm = failreg.iter().any(|&fr| fr != 0 && fr != 0o01107);
+    assert!(
+        !has_new_alarm,
+        "unexpected program alarm in FAILREG: [0o{:05o}, 0o{:05o}]",
+        failreg[0], failreg[1]
     );
 }
