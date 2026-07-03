@@ -2108,47 +2108,52 @@ fn tc_e7i_i_v33_dispatch() {
 /// Drives the CM attitude via unprogrammed-increment CDU pulses
 /// (PCDU/MCDU on counter channels 0o32/33/34 → wire 0x9A/9B/9C) so that
 /// `CALFA` (computed by CM/POSE from the CDU gimbal angles) rises above
-/// `+cos 45°` with a positive sign. This satisfies all three EXDAP gate
-/// conditions (§3.3 of `docs/reentry_workflow_spec.md`), causing EXDAP to
-/// write `CMDAPMOD = +0`. The P62.1 `CS CMDAPMOD / MASK ONE / BZF P63.1`
-/// gate then falls through to `TC P63` directly.
+/// `+cos 45°` with a positive sign. The EXDAP gate logic then schedules
+/// WAKEP62 (§3.3 of `docs/reentry_workflow_spec.md`), which launches P63.
 ///
 /// ## Mechanism
 ///
-/// - CDU counter registers (erasable bank 0, offsets 0o32/33/34) are
-///   pre-zeroed in the patched core so the CM starts with an identity
-///   attitude (X_body = X_SM ≈ velocity direction → CALFA ≈ 1.0).
-/// - A [`CduInjector`] on a third TCP connection ramps the CDUs from
-///   their starting state toward the entry-trim target at 3°/s, emitting
-///   one burst of PCDU/MCDU packets every ~100 ms wall-clock.
-/// - PROCEEDs are paced on the actual parked display (CADRSTOR ≠ 0) as
-///   in `tc_e7i_i_v33_dispatch`.
-/// - The test asserts `MODREG = 0o077` (P63 active) with no program alarm
-///   and reads `CALFA` from the final core to verify it was above `+cos 45°`
-///   (≈ 0.707; stored in SP as ≈ 11584 = 0x2D40 at B+0 scale).
+/// - CDU counter registers (bank 0, offsets 0o32/33/34) and the READGYMB
+///   accumulators (AOG/AIG/AMG, erasable bank 6) are pre-zeroed so the
+///   first READGYMB cycle produces zero body-rate (no spurious ALFA spike).
+///   At CDU = 0 the CM is nose-forward → CALFA ≈ −1 (nosein phase).
+/// - A [`CduInjector`] ramps CDUY from 0° toward ≈174° at 3°/s:
+///     - t ≈ 0 – 13 s  (CDU 0°–39°):  nosein  (|CALFA| ≥ cos45°, CALFA < 0)
+///     - t ≈ 13 – 43 s (CDU 39°–129°): broadside (|CALFA| < cos45°) →
+///       EXDAP2 decrements P63FLAG from +1 → +0
+///     - t > 43 s      (CDU > 129°):  headsup (|CALFA| ≥ cos45°, CALFA > 0) →
+///       EXDAP schedules WAKEP62 (21 s delay, fires at ≈64 s)
+/// - P62.1 fires on PROCEED #2 (t ≈ 5–8 s, CALFA still < 0):
+///   CMDAPMOD = −0 (nosein) → BZF P63.1 → deferred to WAKEP62.
+/// - WAKEP62 launches P63 via NOVAC ~21 s after the gate trips. Because
+///   that is an autonomous mode transition (not a parked display), a
+///   dedicated Phase 3 loop polls `MODREG` for up to 45 s after the two
+///   display-paced PROCEEDs, keeping the CDU ramp running to hold CALFA
+///   positive until P63 starts.
 ///
-/// ## §8.6 open items — why this test is `#[ignore]`
+/// Acceptance (§8.7): `MODREG = 0o077` (P63, via WAKEP62) proves CALFA
+/// crossed +cos45° positive — the only path that arms WAKEP62 — and
+/// `CMDAPMOD = +0` confirms the heat-shield-forward EXDAP mode. The raw
+/// `CALFA` cell is diagnostic-only: it aliases SPNDX/INTTEMP scratch and
+/// its dumped value is unreliable (observed 0o37727 / 0o00000 across runs).
 ///
-/// Three items from §8.6 of `docs/reentry_workflow_spec.md` cannot be
-/// settled statically and may prevent the test from passing on first run:
+/// ## §8.6 items resolved (live run, 2026-07)
 ///
-/// 1. **`IMODES33` bit 6 initial state** in the template core — the patch
-///    `IMODES33 = 0` is applied but the bit might already be clear (or
-///    a READGYMB mode switch overrides it).
-/// 2. **FIFO-drain vs 0.1 s READGYMB cadence** — the 100 ms CDU tick rate
-///    may not drain the FIFO before the next READGYMB, causing angle lag.
-/// 3. **AOG/AIG/AMG bank-switching context** — `EBANK=` when the loop
-///    touches adjacent erasable might cause bank-switch aliasing.
+/// 1. **`IMODES33` bit 6** — already clear in the template; `patch_into`
+///    also writes 0 to `IMODES33`. Not the root cause.
+/// 2. **FIFO-drain vs 100 ms cadence** — CDU injection rate (≈27 counts/tick
+///    = 0.3°) is far below the CDU_MAX_RATE_CPS = 400 limit.  Not blocking.
+/// 3. **AOG/AIG/AMG bank context** — no aliasing; routines set EBANK=AOG
+///    correctly before every READGYMB. Not blocking.
 ///
-/// If the test fails for one of these reasons, the observed erasable
-/// values (CALFA, CMDAPMOD, P63FLAG, MMNUMBER) are printed to stderr for
-/// diagnosis.
+/// **Root cause**: `entry_trim_cdu_deg` used `+unit(velocity)` as X_body,
+/// giving CDUY ≈ −6° → CALFA ≈ −1 (nose-into-wind forever). Fixed by
+/// negating the velocity to get X_body = −unit(velocity) (heat-shield
+/// forward), yielding CDUY ≈ 174° and CALFA ≈ +1 after ramp.
 ///
 /// AGC source: Comanche055/CM_ENTRY_DIGITAL_AUTOPILOT.agc (EXDAP loop,
 /// READGYMB); Comanche055/P61-P67.agc P62.1 CMDAPMOD gate.
 #[test]
-#[ignore = "§8.6 open items: IMODES33 bit-6 state, FIFO-drain cadence, \
-            AOG/AIG/AMG bank — verify empirically in a live yaAGC run"]
 fn tc_e7i_j_closed_loop_p63() {
     let template_path = template_core_path();
     if !template_path.exists() {
@@ -2191,15 +2196,25 @@ fn tc_e7i_j_closed_loop_p63() {
     patch_into(&mut core, &symtab, &init).expect("patch_into ok");
 
     // Pre-zero the CDU counter registers (bank 0, offsets 0o32/33/34 =
-    // CDUX/CDUY/CDUZ per ERASABLE_ASSIGNMENTS.agc:145-147) so the CM
-    // starts with a known attitude: CDU = 0 → body frame = SM frame →
-    // X_body ≈ velocity direction → CALFA ≈ 1.0 > cos 45°.
+    // CDUX/CDUY/CDUZ per ERASABLE_ASSIGNMENTS.agc:145-147).
     //
-    // Without this patch the template CDU counters may hold arbitrary
-    // values that place the CM nose-into-wind (CALFA < 0), which is the
-    // root cause captured in tc_e7i_i_v33_dispatch (§6.6).
+    // CDU = 0 places the CM nose-forward (X_body ≈ +velocity direction →
+    // CALFA ≈ −1, nosein).  The CDU injector ramps CDUY toward ≈174°,
+    // driving CALFA through broadside to headsup to trigger WAKEP62.
     for offset in [0o32u16, 0o33, 0o34] {
         core.write_sp(AgcAddress::Erasable { bank: 0, offset }, 0);
+    }
+
+    // Zero AOG/AIG/AMG (READGYMB "previous CDU reading" accumulators,
+    // erasable bank 6, switched at 0o1661–0o1663).  These hold the CDU
+    // value from the last READGYMB call; the first −DELA* computation is
+    // (CDU − AOG/AIG/AMG).  Template values may be non-zero, producing a
+    // large spurious body-rate spike on the very first READGYMB cycle that
+    // would corrupt ALFA/180 before CM/ATUP can correct it.
+    for name in ["AOG", "AIG", "AMG"] {
+        if let Some(addr) = symtab.get(name) {
+            core.write_sp(addr, 0);
+        }
     }
 
     let work = std::env::temp_dir().join(format!("vagc_e7i_j_{}", std::process::id()));
@@ -2236,8 +2251,11 @@ fn tc_e7i_j_closed_loop_p63() {
     let dump_path = work.join("core");
 
     // Compute the entry-trim CDU target: heat-shield into the relative
-    // wind at AoA ≈ 0° (CALFA = 1.0). All three CDU angles are ≈ 0° for
-    // the direct-LEO geometry (X_body = X_SM = velocity direction).
+    // wind at AoA ≈ 0° (CALFA ≈ 1.0).  For the direct-LEO equatorial
+    // geometry (FPA ≈ −6°), X_body = −unit(V) gives CDUY ≈ 174° (= 180° −
+    // 6°), CDUX ≈ 0°, CDUZ ≈ 0°.  The injector ramps from CDU = 0 toward
+    // this target at 3°/s; WAKEP62 is scheduled when CALFA first exceeds
+    // cos(45°) ≈ 0.707 with a positive sign (CDUY ≈ 129°, t ≈ 43 s).
     let cdu_target = entry_trim_cdu_deg(
         rust_state.csm_state.position,
         rust_state.csm_state.velocity,
@@ -2245,10 +2263,10 @@ fn tc_e7i_j_closed_loop_p63() {
     );
 
     // CDU injection runs in a background thread so it is not blocked by
-    // the main thread's dump-polling sleeps. Ramping at 3°/s from the
-    // zero starting state toward the target (§8.3 rate-continuous rule).
-    // The initial state is already CALFA ≈ 1 (CDU = 0 pre-patch), so the
-    // ramp is a small refinement, not a large maneuver.
+    // the main thread's dump-polling sleeps.  Ramps at 3°/s from CDU = 0
+    // (CALFA ≈ −1, nosein) toward CDUY ≈ 174° (CALFA ≈ +1, headsup).
+    // The full 174° sweep takes ≈58 s; the WAKEP62 gate trips at ≈43 s
+    // (CDUY ≈ 129°) and P63 starts at ≈64 s (§8.3 timing budget).
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
@@ -2347,6 +2365,37 @@ fn tc_e7i_j_closed_loop_p63() {
         std::thread::sleep(Duration::from_millis(2_000));
     }
 
+    // ── Phase 3: wait for the WAKEP62 WAITLIST task to start P63 ─────────────
+    // At PROCEED #2 the P62.1 CMDAPMOD gate may still see CALFA < 0 (CMDAPMOD
+    // = -0) and take `BZF P63.1`, which just ENDOFJOBs and defers to WAKEP62.
+    // WAKEP62 is armed by EXDAP once the ramping CDU carries CALFA above
+    // +cos45° positive, and starts P63 ~21 s later (NSEC = 2100 cs). That is
+    // an autonomous mode transition, not a parked display, so poll MODREG
+    // directly. The CDU thread keeps holding CALFA positive meanwhile.
+    if modreg_final != 0o077 {
+        let dl = Instant::now() + Duration::from_secs(45);
+        let mut lm = current_mtime(&dump_path);
+        while Instant::now() < dl {
+            if let Some(mt) = wait_for_new_dump(
+                &dump_path,
+                lm,
+                Instant::now() + Duration::from_millis(400),
+            ) {
+                lm = Some(mt);
+                if let Some(c) = try_load_core(&dump_path) {
+                    if read_cell(&c, "MODREG").unwrap_or(0) == 0o077 {
+                        modreg_final = 0o077;
+                        eprintln!("[e7i-j] phase 3: P63 started (MODREG=0o077) via WAKEP62");
+                        break;
+                    }
+                }
+            }
+        }
+        if modreg_final != 0o077 {
+            eprintln!("[e7i-j] phase 3: WAKEP62 did not start P63 within 45 s");
+        }
+    }
+
     // ── Final erasable snapshot ──────────────────────────────────────────────
     std::thread::sleep(Duration::from_millis(1_500));
     let final_core = try_load_core(&dump_path);
@@ -2412,15 +2461,40 @@ fn tc_e7i_j_closed_loop_p63() {
         failreg[0], failreg[1],
         display_trail.join(" → "),
     );
-    // CALFA > +cos45° (positive SP word, not in the negative half).
-    assert!(
-        calfa_raw > cos45_raw && calfa_raw < 0x4000,
-        "CALFA must be > +cos45° (raw > 0x{cos45_raw:04X}); got 0o{calfa_raw:05o} \
-         (0x{calfa_raw:04X}). §8.6 open item: FIFO-drain vs READGYMB cadence."
+    // Attitude-gate proof. Reaching P63 via WAKEP62 (asserted above) is
+    // itself sufficient evidence that CALFA crossed +cos45° positive — per
+    // the validated §3.3 gate that is the *only* path by which EXDAP arms
+    // WAKEP62. We therefore assert on CMDAPMOD, the stable EXDAP output:
+    // CMDAPMOD = +0 (0o00000) means EXDAP's last pass saw |CALFA| ≥ cos45°
+    // with CALFA > 0 (heat-shield-forward) — not the -0 (0o77777) stall.
+    //
+    // The raw CALFA cell is NOT asserted: it aliases the SPNDX/INTTEMP
+    // scratch area and its dumped value is overwritten unpredictably by
+    // other routines (observed 0o37727 / 0o37247 / 0o00000 across runs).
+    // `cos45_raw` is retained only for the diagnostic print below.
+    let _ = cos45_raw;
+    eprintln!(
+        "[e7i-j] attitude gate: CMDAPMOD=0o{cmdapmod:05o} (+0 = heat-shield-forward) \
+         CALFA(scratch, unreliable)=0o{calfa_raw:05o}"
     );
-    // No new program alarm (FAILREG[0] and [1] must be 0 or only hold
-    // the pre-existing 01107 phase-table marker from the template).
-    let has_new_alarm = failreg.iter().any(|&fr| fr != 0 && fr != 0o01107);
+    assert_eq!(
+        cmdapmod, 0o00000,
+        "EXDAP must settle CMDAPMOD to +0 (heat-shield-forward); got 0o{cmdapmod:05o} \
+         (0o77777 = -0 nose-into-wind stall)"
+    );
+    // No new entry-guidance program alarm. Two codes are expected harness
+    // artifacts, not entry faults, and are allowlisted:
+    //   - 0o01107: pre-existing phase-table marker in the template core.
+    //   - 0o00207: "ISS TURN-ON REQUEST NOT PRESENT FOR 90 SEC" (T4RUPT
+    //     ITURNON, ASSEMBLY_AND_OPERATION_INFORMATION.agc:925). The entry
+    //     fixtures preload an already-aligned IMU and never drive the
+    //     physical ISS turn-on discrete, so T4RUPT's turn-on monitor raises
+    //     it once sim time passes 90 s. It is non-aborting (no POODOO in
+    //     yaAGC stderr) and unrelated to the P62→P63 handover under test.
+    const ALLOWED_ALARMS: [u16; 2] = [0o01107, 0o00207];
+    let has_new_alarm = failreg
+        .iter()
+        .any(|&fr| fr != 0 && !ALLOWED_ALARMS.contains(&fr));
     assert!(
         !has_new_alarm,
         "unexpected program alarm in FAILREG: [0o{:05o}, 0o{:05o}]",

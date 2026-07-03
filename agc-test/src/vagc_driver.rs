@@ -581,7 +581,7 @@ impl CduInjector {
 /// Inverse of READGYMB (`Comanche055/CM_BODY_ATTITUDE.agc`):
 ///
 /// ```text
-/// X_body_sm = REFSMMAT · unit(velocity)   # heat-shield forward
+/// X_body_sm = REFSMMAT · (−unit(velocity))   # nose = −velocity (heat-shield into wind)
 /// Y_body_sm = Gram-Schmidt of Y_SM against X_body_sm
 /// Z_body_sm = X_body_sm × Y_body_sm
 ///
@@ -590,9 +590,14 @@ impl CduInjector {
 /// CDUX (outer, AOG)  = atan2( −Z_body_sm[1], Y_body_sm[1] )
 /// ```
 ///
-/// The returned target satisfies `CALFA = cos(0°) = 1.0 > cos(45°)`, so
-/// EXDAP will immediately set `CMDAPMOD = +0` and the P62.1 gate takes
-/// the direct `TC P63` branch (§3.3).
+/// The AGC XB axis is the CM **nose** direction, not the heat-shield.
+/// For entry (heat-shield forward into the re-entry plasma), the CM flies
+/// backward: nose points **away** from the velocity vector, so
+/// `X_body = −unit(velocity)` in ECI, mapped through REFSMMAT into SM.
+///
+/// With this convention the returned CDU angles satisfy CALFA ≈ +1.0
+/// once the EXDAP has integrated them, satisfying the WAKEP62 gate
+/// condition |CALFA| ≥ cos(45°) AND CALFA > 0 (§3.3).
 ///
 /// Returns `[0.0; 3]` for a degenerate (near-zero velocity) input.
 ///
@@ -607,8 +612,16 @@ pub fn entry_trim_cdu_deg(
         None => return [0.0; 3],
     };
 
-    // X_body in SM coordinates: REFSMMAT · v_hat.
-    let xb = matvec3(refsmmat, v_hat);
+    // X_body in SM coordinates: REFSMMAT · (−v_hat).
+    //
+    // The AGC XB axis is the CM nose direction.  For heat-shield-forward
+    // entry the CM is flying backward (nose away from the velocity vector),
+    // so the SM representation of the nose is REFSMMAT · (−unit(velocity)).
+    // Using +unit(velocity) gives nose-into-wind → CALFA ≈ −1, which keeps
+    // EXDAP in the nose-in branch (CMDAPMOD = −0) and WAKEP62 is never
+    // scheduled (issue root-caused in tc_e7i_j live run, 2026-07).
+    let neg_v_hat = [-v_hat[0], -v_hat[1], -v_hat[2]];
+    let xb = matvec3(refsmmat, neg_v_hat);
 
     // Y_body: Gram-Schmidt of SM Y-axis ([0, 1, 0]) against X_body.
     let dot_xy = xb[1]; // dot([0,1,0], xb) = xb[1]
@@ -825,14 +838,17 @@ mod tests {
 
     /// TC-CDU-TRIM-1: `entry_trim_cdu_deg` for a purely circular orbit
     /// (R along ECI-X, V along ECI-Y; FPA = 0°) and the matching entry-
-    /// aligned REFSMMAT returns all CDU angles ≈ 0°.
+    /// aligned REFSMMAT returns the heat-shield-forward CDU angles.
     ///
-    /// At AoA = 0° with FPA = 0°, X_body = unit(V) = [0,1,0] in ECI.
-    /// REFSMMAT built from these vectors maps X_body to X_SM = [1,0,0]
-    /// in SM, so all gimbal angles are exactly zero.
+    /// At AoA = 0° (heat-shield exactly into wind) with FPA = 0°,
+    /// X_body = −unit(V) = [0,−1,0] in ECI. REFSMMAT maps that to
+    /// X_body_SM = [−1,0,0] in SM:
+    ///   CDUZ = arcsin(0) = 0°
+    ///   CDUY = atan2(0, −1) = 180°
+    ///   CDUX = 0°
     ///
     /// Note: the actual direct-LEO entry scenario uses FPA = −6°
-    /// (velocity has a small radial component), which gives CDUY ≈ −6°.
+    /// (velocity has a small radial component), which gives CDUY ≈ 174°.
     /// This test uses the simpler purely-circular geometry for a clean
     /// analytic assertion; `tc_cdu_trim_3` covers the FPA ≠ 0 case.
     #[test]
@@ -853,26 +869,39 @@ mod tests {
         let x_sm = unit3(cross3(y_sm, z_sm)).unwrap();
         let refsmmat = [x_sm, y_sm, z_sm];
 
-        let target = entry_trim_cdu_deg(r, v, refsmmat);
+        let [cdux, cduy, cduz] = entry_trim_cdu_deg(r, v, refsmmat);
 
-        // V_hat = [0,1,0], X_SM = [0,1,0], so X_body_sm = [1,0,0]:
-        // CDUZ = arcsin(0) = 0°, CDUY = atan2(-0, 1) = 0°, CDUX = 0°.
-        for (axis, &angle) in target.iter().enumerate() {
-            assert!(
-                angle.abs() < 0.1,
-                "CDU[{axis}] = {angle:.4}°, expected 0° for FPA=0 circular orbit"
-            );
-        }
+        // REFSMMAT rows: X_SM=[0,1,0], Y_SM=[0,0,−1], Z_SM=[−1,0,0].
+        // X_body_SM = REFSMMAT·(−V_hat) = −[1,0,0] = [−1,0,0]:
+        //   CDUZ = arcsin(0) = 0°, CDUY = atan2(0, −1) = 180°, CDUX = 0°.
+        assert!(
+            cdux.abs() < 0.1,
+            "CDUX = {cdux:.4}°, expected ≈ 0° for FPA=0 circular orbit"
+        );
+        assert!(
+            cduz.abs() < 0.1,
+            "CDUZ = {cduz:.4}°, expected ≈ 0° for FPA=0 circular orbit"
+        );
+        // CDUY = 180° (heat-shield exactly into wind; ±180° are equivalent
+        // for a CDU counter so accept both signs).
+        assert!(
+            cduy.abs() > 179.9,
+            "CDUY = {cduy:.4}°, expected ≈ ±180° for FPA=0 heat-shield-forward"
+        );
     }
 
     /// TC-CDU-TRIM-3: `entry_trim_cdu_deg` for the direct-LEO entry
-    /// geometry (FPA = −6°, V = [−825, 7860, 0] m/s) gives CDUY ≈ −6°
-    /// and CALFA = cos(CDUY) > cos(45°).
+    /// geometry (FPA = −6°, V = [−825, 7860, 0] m/s) gives CDUY ≈ 174°
+    /// and AGC CALFA ≈ +1.0 > cos(45°).
     ///
-    /// CDUY encodes the angle between X_body (velocity direction) and the
-    /// SM X-axis. With FPA = −6°, X_body is tilted 6° below the local
-    /// horizontal, giving CDUY ≈ −6°. CALFA = cos(−6°) ≈ 0.994 >> cos(45°)
-    /// confirming the EXDAP gate is satisfied.
+    /// With X_body = −unit(V) (heat-shield-forward) and FPA = −6°:
+    ///   X_body_SM ≈ [−0.995, 0, −0.104]
+    ///   CDUZ = arcsin(0) ≈ 0°
+    ///   CDUY = atan2(0.104, −0.995) ≈ 174° (= 180° − 6°)
+    ///
+    /// The AGC CALFA = dot(UL, ZB) ≈ +1.0 from the full CM/POSE gimbal
+    /// computation (§CM_BODY_ATTITUDE.agc), which satisfies the EXDAP gate
+    /// condition |CALFA| ≥ cos(45°) AND CALFA > 0.
     #[test]
     fn tc_cdu_trim_3_direct_leo_fpa_minus6() {
         let r = [6_493_000.0_f64, 0.0, 0.0];
@@ -896,18 +925,28 @@ mod tests {
         assert!(cdux.abs() < 0.5, "CDUX = {cdux:.4}°, expected ≈ 0°");
         assert!(cduz.abs() < 0.5, "CDUZ = {cduz:.4}°, expected ≈ 0°");
 
-        // CDUY ≈ -6° (FPA angle, negative = pitch-down into wind).
+        // CDUY ≈ 174° = 180° − 6° (heat-shield-forward, pitched 6° down from
+        // anti-velocity = the entry flight-path angle).
         assert!(
-            (cduy - (-6.0)).abs() < 1.0,
-            "CDUY = {cduy:.4}°, expected ≈ -6° for FPA=-6°"
+            (cduy - 174.0).abs() < 1.0,
+            "CDUY = {cduy:.4}°, expected ≈ 174° for FPA=−6° heat-shield-forward"
         );
 
-        // CALFA = cos(CDUY) > cos(45°) — the EXDAP gate condition.
-        let calfa = cduy.to_radians().cos();
+        // Sanity check: X_body_SM ≈ −unit(V_SM) → dot with V_SM ≈ −1.
+        // This confirms heat-shield is into the wind (CALFA ≈ +1 in AGC).
+        // Note: AGC CALFA = dot(UL, ZB) from the full CM/POSE computation,
+        // not simply cos(CDUY).  The full computation gives CALFA ≈ +1.0
+        // (verified analytically in the tc_e7i_j live run, 2026-07).
+        let xb_sm = [cduy.to_radians().cos(), 0.0, -cduy.to_radians().sin()];
+        // V_hat in SM: REFSMMAT · unit(v) = [0.995, 0, 0.104] for this geometry.
+        let v_hat_sm = {
+            let v_hat = unit3(v).unwrap();
+            matvec3(refsmmat, v_hat)
+        };
+        let dot_xb_v = xb_sm[0] * v_hat_sm[0] + xb_sm[1] * v_hat_sm[1] + xb_sm[2] * v_hat_sm[2];
         assert!(
-            calfa > (45.0_f64.to_radians().cos()),
-            "CALFA = {calfa:.4} must be > cos(45°) = {:.4}",
-            45.0_f64.to_radians().cos()
+            dot_xb_v < -0.9,
+            "dot(X_body_SM, V_SM) = {dot_xb_v:.4}, expected ≈ −1 (heat-shield forward)"
         );
     }
 
