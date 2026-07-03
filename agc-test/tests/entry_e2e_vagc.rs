@@ -55,8 +55,8 @@ use agc_test::entry_scenario::{
 use agc_test::entry_sim::{haversine_km, pipa_pulses_for_dv, EntryIntegrator};
 use agc_test::entry_state::{patch_into, read_rollc_rad, EntryInitialState};
 use agc_test::vagc_channel::YaAgcClient;
-use agc_test::vagc_driver::{DskyScript, PipaInjector};
-use agc_test::vagc_harness::{vagc_root, CoreImage, Symtab};
+use agc_test::vagc_driver::{entry_trim_cdu_deg, CduInjector, DskyScript, PipaInjector};
+use agc_test::vagc_harness::{vagc_root, AgcAddress, CoreImage, Symtab};
 use agc_test::vagc_trace::{ChannelTrace, ChannelTraceRecorder};
 
 use serde::{Deserialize, Serialize};
@@ -611,14 +611,18 @@ fn default_closed_loop_tolerance() -> SummaryTolerance {
 }
 
 /// TC-E7E-VAGC-1: closed-loop direct-LEO entry — yaAGC steers, Rust
-/// integrates. Reads yaAGC's `ROLLC` each cycle and feeds it back
-/// into `EntryIntegrator`.
+/// integrates. Injects CDU gimbal angles to drive the entry-attitude
+/// maneuver (§8 of `docs/reentry_workflow_spec.md`), reads yaAGC's `ROLLC`
+/// each cycle and feeds it back into `EntryIntegrator`. Asserts the AGC
+/// advances the full program chain to at least P64 (see
+/// `run_live_scenario_closed_loop`).
 #[test]
 fn tc_e7e_vagc_entry_direct_leo_closed_loop() {
     run_live_scenario_closed_loop("direct_leo");
 }
 
-/// TC-E7E-VAGC-2: closed-loop super-circular entry.
+/// TC-E7E-VAGC-2: closed-loop super-circular entry (same CDU-injection
+/// P62→P63→P64 progression assertion as TC-E7E-VAGC-1).
 #[test]
 fn tc_e7e_vagc_entry_lunar_return_closed_loop() {
     run_live_scenario_closed_loop("lunar_return");
@@ -655,6 +659,26 @@ fn run_live_scenario_closed_loop(scenario: &str) {
     let init = entry_initial_state_for(&initial);
     patch_into(&mut core, &symtab, &init)
         .unwrap_or_else(|e| panic!("patch failed for {scenario}: {e}"));
+
+    // Closed-loop attitude injection (see `tc_e7i_j_closed_loop_p63` and
+    // `docs/reentry_workflow_spec.md` §8): pre-zero the CDU counter
+    // registers (bank 0, 0o32/33/34) and the READGYMB accumulators
+    // (AOG/AIG/AMG) so the first READGYMB produces zero body-rate, then
+    // ramp the CDUs to the heat-shield-forward entry attitude so CALFA
+    // crosses +cos45° positive and EXDAP schedules WAKEP62 → P63.
+    for offset in [0o32u16, 0o33, 0o34] {
+        core.write_sp(AgcAddress::Erasable { bank: 0, offset }, 0);
+    }
+    for name in ["AOG", "AIG", "AMG"] {
+        if let Some(addr) = symtab.get(name) {
+            core.write_sp(addr, 0);
+        }
+    }
+    let cdu_target = entry_trim_cdu_deg(
+        initial.csm_state.position,
+        initial.csm_state.velocity,
+        init.refsmmat,
+    );
 
     let work = std::env::temp_dir().join(format!("vagc_e7e_{scenario}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&work);
@@ -693,23 +717,80 @@ fn run_live_scenario_closed_loop(scenario: &str) {
         initial.pipa_cal,
     );
     let mut recorder = ChannelTraceRecorder::new(connect_with_retry(port + 2));
+    let cdu_client = connect_with_retry(port + 3);
 
-    // Warm up, V37 62 ENTR (P63 isn't selectable via V37 — only
-    // P61/P62 are; P62 dispatches to P63 after PROCEED), then
-    // PROCEED past N61 to advance to ROLLC init / P63.
+    let dump_path = work.join("core");
+    let read_cell = |c: &CoreImage, name: &str| -> Option<u16> {
+        match symtab.get(name) {
+            Some(a @ AgcAddress::Erasable { .. }) => c.read_sp(a),
+            _ => None,
+        }
+    };
+
+    // Background CDU ramp toward the heat-shield-forward entry attitude at
+    // 3°/s (§8.3). Keeps running through the whole scenario so CALFA stays
+    // positive and the entry DAP holds attitude while guidance steers ROLLC.
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let stop_clone = Arc::clone(&stop_flag);
+    let cdu_thread = {
+        let mut injector = CduInjector::new(cdu_client, [0.0_f64; 3]);
+        injector.set_target(cdu_target);
+        std::thread::spawn(move || {
+            while !stop_clone.load(Ordering::Relaxed) {
+                let _ = injector.tick(0.1, 3.0);
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        })
+    };
+
+    // Warm up, V37 62 ENTR (P63 isn't selectable via V37 — only P61/P62
+    // are), then pace two PROCEEDs on the parked flashing display
+    // (CADRSTOR ≠ 0): PROCEED #1 at V50N25 (CM/SM separation) and #2 at
+    // V06N61 (P62.1, gated on GAMDIFSW ~20–30 s in). The CDU ramp carries
+    // CALFA above +cos45° positive; EXDAP then schedules WAKEP62 → P63.
     let warmup_end = Instant::now() + Duration::from_millis(500);
     while Instant::now() < warmup_end {
         recorder.drain(Duration::from_millis(50));
     }
     dsky.verb_major_mode(62).expect("V37 ENTR 62 ENTR");
-    let p62_end = Instant::now() + Duration::from_millis(600);
-    while Instant::now() < p62_end {
-        recorder.drain(Duration::from_millis(50));
-    }
-    dsky.proceed().expect("PROCEED out of P62 N61");
 
-    let dump_path = work.join("core");
-    let mut last_dump_mtime = current_mtime(&dump_path);
+    let mut proceed_dump_mtime = current_mtime(&dump_path);
+    for _ in 0..2u32 {
+        let dl = Instant::now() + Duration::from_secs(45);
+        let mut parked = false;
+        while Instant::now() < dl {
+            recorder.drain(Duration::from_millis(50));
+            if let Some(mt) =
+                wait_for_new_dump(&dump_path, proceed_dump_mtime, Instant::now() + Duration::from_millis(400))
+            {
+                proceed_dump_mtime = Some(mt);
+                if let Some(c) = try_load_core(&dump_path) {
+                    let modreg = read_cell(&c, "MODREG").unwrap_or(0);
+                    let cadr = read_cell(&c, "CADRSTOR").unwrap_or(0);
+                    if modreg == 0o077 || cadr != 0 {
+                        parked = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if !parked {
+            eprintln!("[{scenario}] closed-loop: no parked display before PROCEED (continuing)");
+        }
+        dsky.proceed().expect("PROCEED");
+        std::thread::sleep(Duration::from_millis(300));
+    }
+
+    let mut last_dump_mtime = proceed_dump_mtime;
+    let mut last_modreg = 0u16;
+    // Furthest entry program the AGC reached (MODREG: P62=0o076, P63=0o077,
+    // P64=0o100 … P67=0o103). This is the real closed-loop progression
+    // signal the CDU-injection P62→P63 fix unlocked (see §8 of the spec and
+    // `tc_e7i_j`); ROLLC/bank stays ≈0 for these lift-up scenarios so it is
+    // logged only as a diagnostic.
+    let mut max_program = 0u16;
     let mut current_bank_rad = 0.0_f64;
     let mut bank_history: Vec<f64> = Vec::new();
     let wall_deadline = Instant::now() + Duration::from_secs(240);
@@ -807,6 +888,18 @@ fn run_live_scenario_closed_loop(scenario: &str) {
                     if let Some(bank) = read_rollc_rad(&loaded, &symtab) {
                         current_bank_rad = bank;
                     }
+                    let modreg = read_cell(&loaded, "MODREG").unwrap_or(0);
+                    if modreg != last_modreg {
+                        eprintln!(
+                            "[{scenario}] cycle {total_cycles}: MODREG 0o{last_modreg:04o} → \
+                             0o{modreg:04o} (bank {current_bank_rad:+.4} rad)"
+                        );
+                        last_modreg = modreg;
+                    }
+                    // Track the furthest entry program (0o076..=0o103).
+                    if (0o076..=0o103).contains(&modreg) && modreg > max_program {
+                        max_program = modreg;
+                    }
                 }
                 None => {
                     // Parse failure on a partial dump; keep the
@@ -836,7 +929,9 @@ fn run_live_scenario_closed_loop(scenario: &str) {
         recorder.drain(Duration::from_millis(100));
     }
 
-    // Tear down yaAGC.
+    // Tear down the CDU ramp thread and yaAGC.
+    stop_flag.store(true, Ordering::Relaxed);
+    cdu_thread.join().ok();
     let _ = child.kill();
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&work);
@@ -874,24 +969,28 @@ fn run_live_scenario_closed_loop(scenario: &str) {
         max_sensed_g = result.max_sensed_g,
     );
 
-    // Goal: with `V37 ENTR 62 ENTR + V33 ENTR PROCEED + --inhibit-
-    // alarms`, the AGC's entry guidance should run — once sensed-g
-    // trips the 0.05g threshold, P64's HUNTEST and P65's UPCONTRL
-    // should write non-zero ROLLC values.
+    // Hard regression assertion (tightened 2026-07-03, #49). With the
+    // closed-loop CDU-injection attitude loop the AGC now advances the full
+    // entry program sequence: P62 (0o076) → P63 (0o077, WAKEP62 wake gap
+    // closed) → P64 (0o100, past the 0.05 g threshold into HUNTEST closed-
+    // loop guidance) → P67 (0o103, final phase). We assert it reaches at
+    // least **P64**, which proves both the P62→P63 handover and the
+    // P63→P64 (0.05 g) transition ran end-to-end against yaAGC.
     //
-    // Current state (MS-E7f): the AGC reaches P62 (`MODREG = 0o076`)
-    // cleanly, but P62 doesn't advance to P63 because its WAKEP62
-    // task waits for a CM body-attitude maneuver that our integrator
-    // doesn't simulate. We print the bank-history extremes here as
-    // a diagnostic; the hard assertion is deferred to MS-E7g
-    // (#40) which will close this last gap.
-    if bank_range <= 0.05 {
-        eprintln!(
-            "[{scenario}] WARNING: closed-loop bank stayed flat \
-             (range {bank_range:.4} rad). AGC didn't advance from P62 \
-             to P63 (see #40 / MS-E7g for the remaining gap)."
-        );
-    }
+    // Note: ROLLC/bank stays ≈0 (`bank_range ≈ {bank_range:.4} rad`) for
+    // these lift-up scenarios — the guidance commands near-full lift-up, so
+    // bank is a weak signal and is retained for diagnostics only. The
+    // MODREG progression is the meaningful cross-validation signal.
+    assert!(
+        max_program >= 0o100,
+        "[{scenario}] closed-loop AGC did not reach P64: furthest program \
+         MODREG = 0o{max_program:04o} (expected ≥ 0o100). \
+         P62=0o076 P63=0o077 P64=0o100. bank_range={bank_range:.4} rad."
+    );
+    eprintln!(
+        "[{scenario}] closed-loop program progression OK: reached MODREG \
+         0o{max_program:04o} (≥ P64)."
+    );
 
     let trace = recorder.into_trace(
         scenario,
