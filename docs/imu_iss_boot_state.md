@@ -141,3 +141,52 @@ Suggested home: a `patch_imu_operating(core, symtab)` erasable helper in
 - Core dumps show `IMODES30` bit 9 = 0 (operating) throughout.
 - `tc_e7i_j` and the `tc_e7e` closed-loop tests still reach P63 / P64 (no
   regression), now on a coherent — rather than alarm-suppressed — inertial state.
+
+## 8. Implementation attempt — finding (2026-07-03)
+
+The §4/§5 recipe was implemented and run against live yaAGC. **It does not work as
+drafted — the naive channel-30 write is counterproductive** — and was reverted. The
+failure is instructive and de-risks the next attempt.
+
+**What was tried:** `set_imu_operating` writing `ch30 = 0o37377` right after connect,
+plus `IMODES30 = 0o37011` in `patch_into`.
+
+**Result:** a *new* alarm `0o00220` "IMU NOT ALIGNED — NO REFSMMAT" (R02BOTH,
+`IMU_MODE_SWITCHING_ROUTINES.agc:914`), and `tc_e7i_j` never reached P63 (stuck at
+P62, `FAILREG = [0o01107, 0o00220]`). Strictly **worse** than the original state.
+
+**Root cause — the missing interaction with `REFSMFLG`:**
+`patch_into` already preloads `REFSMFLG = 1` (FLAGWRD3 bit 13). In the *original*
+harness the IMU reads "off" at the hardware (`ch30` default bit 9 = 1) but
+`REFSMFLG` is never disturbed, so R02BOTH (`MASK STATE+3` = REFSMFLG → set →
+`R02ZERO`, no alarm) is happy; the only residual is the benign `0o00207`.
+
+The post-boot `ch30` write flips IMU OPERATE (bit 9: 1→0) — an **edge**. The AGC's
+IMU-monitor logic processes that edge as "the IMU just came on," which disturbs the
+preloaded alignment: by the time R02BOTH runs, `REFSMFLG` reads **clear**, so
+R02BOTH takes the `REFSMFLG clear + operating` branch → `0o00220`.
+
+**Key insight (reframes the goal):** the original accommodation — IMU nominally off
+at the hardware, `REFSMFLG` preloaded and untouched, `0o00207` allowlisted — is
+actually **more coherent for R02BOTH** than driving `ch30`. `0o00207` is a benign,
+non-aborting turn-on-monitor artifact; trading it for `0o00220` (which blocks P63)
+is a regression.
+
+**What a real fix requires (larger than a single write):** an *edge-free* operating
+state, so no IMU-turn-on transition is ever detected:
+1. **`ch30` must read "operating" from yaAGC's very first cycle** — before any
+   `IMUMON` sample — so there is no 1→0 edge. yaAGC hard-codes
+   `InputChannel[030] = 037777` in `agc_engine_init.c:255`; getting `0o37377` in
+   from t=0 means either a yaAGC-side change (reference source — out of scope) or a
+   write that provably lands before the first T4RUPT (a tight, racy ~480 ms window —
+   unverified it's achievable over the socket). **or**
+2. **Re-assert `REFSMFLG = 1` after the turn-on sequence settles** — but the harness
+   only patches erasable at boot; mid-run erasable writes need a mechanism that does
+   not exist yet.
+
+**Recommendation:** treat the `0o00207` allowlist as the pragmatic "coherent-enough"
+accommodation for now (it keeps `REFSMFLG` valid, which is what R02BOTH and the
+guidance actually depend on). Pursue the edge-free operating state only as a
+separately scoped task with live-debugger iteration — and note it may be blocked by
+yaAGC's fixed channel-30 initialisation, i.e. it could require a yaAGC-side change
+rather than a harness-side one.
