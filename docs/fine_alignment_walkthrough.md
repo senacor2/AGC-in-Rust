@@ -99,6 +99,32 @@ Run it: `cargo run -p agc-sim --bin dsky_sim`. At start `NO ATT` is lit.
 - **In a test:** assert `state.imu_alignment_state == FineAligned` (that is exactly
   what `lamps.rs` maps to `no_att = false`).
 
+## Modelling limitations
+
+This demo covers the **optics → MARK → REFSMMAT** alignment math and the crew
+keystroke loop, but simplifies the optics/attitude hardware. Notably, it does
+**not** require (or model) the RCS attitude maneuvering that real alignment
+sometimes needs:
+
+- **No sextant trunnion limit.** `SimOptics.shaft`/`trunnion` are unclamped and
+  slewing wraps, so the optics can point anywhere on the sphere — every catalogue
+  star is directly reachable. On the real CM the star-line trunnion travel is
+  mechanically limited (a few tens of degrees), so a star outside that reach must
+  be brought into the field by **maneuvering the vehicle** (P52 computes the
+  maneuver and can auto-fly it via R60/R61 and the RCS DAP). E.g. Alpheratz here
+  sits ~61° in trunnion — likely outside a real SXT envelope from this attitude,
+  yet the sim lets you slew straight to it.
+- **Fixed, decoupled attitude.** The optics pipeline uses the identity-attitude
+  assumption (`body ≡ inertial`) with a fixed identity truth REFSMMAT, and
+  `SimHardware::drive()` is a no-op — there is no CSM attitude in play to maneuver,
+  and nothing in the mark/alignment path fires the RCS.
+- **The edge arrow is a display viewport,** not a hardware limit. `▶◀▲▼` means the
+  star is outside the rendered reticle window (`FOV_HALF_DEG`), not out of the
+  sextant's mechanical reach — just slew to it.
+
+Higher-fidelity modelling (trunnion limit + a P52 star-acquisition RCS maneuver)
+is tracked in **#201**.
+
 ## Paths for tests / automation
 
 The interactive slew + `M` are terminal key events and are *not* expressible in
