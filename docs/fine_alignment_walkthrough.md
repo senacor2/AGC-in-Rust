@@ -62,6 +62,12 @@ Rough pointing is enough to *complete* the alignment (the state transition only
 needs two non-collinear marks); centring precisely (offset → 0, `★` turns green)
 just makes the recovered REFSMMAT more accurate.
 
+**Star entry — `V21 N70`.** Enter the star code with **V21** (load R1): after the
+final `E` the code commits to `vn.crew_star_code` and the sextant panel picks up
+the target immediately. (`V25 N70` also works but loads three registers, so it
+does **not** commit — and the panel keeps showing "no star" — until you `E`
+through R2 and R3 as well; the scenario-runner helper `v25_load_three` does that.)
+
 ## Walkthrough
 
 Run it: `cargo run -p agc-sim --bin dsky_sim`. At start `NO ATT` is lit.
@@ -69,11 +75,11 @@ Run it: `cargo run -p agc-sim --bin dsky_sim`. At start `NO ATT` is lit.
 ### P51 — coarse alignment (`Caged → CoarseAligned`)
 
 1. **Select P51:** `V 3 7 E 5 1 E`  → PROG shows `51`, VERB/NOUN flash `06 70`.
-2. **First star (Polaris):** `V 2 5 N 7 0 E 0 5 E`  → the panel targets Polaris.
+2. **First star (Polaris):** `V 2 1 N 7 0 E 0 5 E`  → the panel targets Polaris.
 3. **Slew onto it:** press `→` until `SHAFT ≈ 31°`; trunnion is already ≈0–1°.
    Watch `★` slide toward `┼` and `off` shrink.
 4. **Mark:** `M`  → status: `MARK 1 of 2 — Polaris (#5) buffered`.
-5. **Second star (Alpheratz):** `V 2 5 N 7 0 E 0 1 E`.
+5. **Second star (Alpheratz):** `V 2 1 N 7 0 E 0 1 E`.
 6. **Slew onto it:** `↑` until `TRUN ≈ 61°`, `←` until `SHAFT ≈ 2°`.
 7. **Mark:** `M`  → status: `MARK 2 of 2 — Alpheratz (#1): Caged → CoarseAligned`.
 
@@ -82,8 +88,8 @@ Run it: `cargo run -p agc-sim --bin dsky_sim`. At start `NO ATT` is lit.
 ### P52 — fine alignment (`CoarseAligned → FineAligned`)
 
 8. **Select P52:** `V 3 7 E 5 2 E`.
-9. Repeat the two-star mark: `V 2 5 N 7 0 E 0 5 E`, slew to Polaris, `M`; then
-   `V 2 5 N 7 0 E 0 1 E`, slew to Alpheratz, `M`.
+9. Repeat the two-star mark: `V 2 1 N 7 0 E 0 5 E`, slew to Polaris, `M`; then
+   `V 2 1 N 7 0 E 0 1 E`, slew to Alpheratz, `M`.
 10. On the second mark the status shows `… CoarseAligned → FineAligned` and
     **NO ATT goes out.**
 

@@ -3782,6 +3782,23 @@ mod tests {
         assert_eq!(state.vn.crew_star_code, Some(14));
     }
 
+    /// TC-VND-11b: the single-register `V21 N70 E 05 E` also sets
+    /// `crew_star_code` (one ENTR, no sign) — the sequence the fine-alignment
+    /// walkthrough uses so the sextant panel picks the star up immediately.
+    #[test]
+    fn tc_vnd_11b_v21_n70_single_register_star_code() {
+        let mut state = AgcState::new();
+        feed(
+            &mut state,
+            &[Key::Verb, d(2), d(1), Key::Noun, d(7), d(0), Key::Entr],
+        );
+        feed_number(&mut state, 5);
+        feed_key(&mut state, Key::Entr);
+
+        assert_eq!(state.vn.phase, VnPhase::Idle);
+        assert_eq!(state.vn.crew_star_code, Some(5));
+    }
+
     // ── N72 commit: landmark lat/lon/alt ─────────────────────────────────────
 
     /// TC-VND-12: V25 N72 E +00285 E -07742 E +00100 E sets crew_landmark
