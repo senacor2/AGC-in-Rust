@@ -60,7 +60,7 @@ use agc_core::programs::p23::{
     p23_incorporate_star_horizon_mark, p23_incorporate_star_landmark_mark, StarHorizonMark,
     StarLandmarkMark,
 };
-use agc_core::programs::p51_p52::p52_mark_align;
+use agc_core::programs::p51_p52::pxx_mark_align;
 use agc_core::services::average_g::start_servicer;
 use agc_core::services::v_n::{feed_key, Key};
 use agc_core::types::{Mat3x3, Met, Vec3};
@@ -232,6 +232,17 @@ pub enum Event {
     /// dispatch to P51/P52 just like `OpticsSighting` does — only via the
     /// hardware-driven path instead of the direct AGC entry point.
     OpticsCduMark { star_id: u8 },
+
+    /// Consume a crew-selected star and perform an optics mark (#175).
+    ///
+    /// Reads `state.vn.crew_star_code` (set through the real keyboard path by a
+    /// prior `V25 N70 E <code> E` sequence — see [`ScenarioBuilder::v25_load_three`]),
+    /// synthesises the sighting for that star from the seeded truth attitude +
+    /// REFSMMAT, buffers it as the first of a pair, and on the second mark
+    /// dispatches to P51/P52 via `pxx_mark_align` (#177). The star code is
+    /// cleared once consumed. This is the interactive keystroke MARK path that
+    /// the `dsky_sim` TUI affordance (#176) will drive.
+    CrewStarMark,
 
     /// Log a stub "not-yet-implemented" landmark sighting and continue.
     LandmarkSighting { table: LandmarkTable, index: u8 },
@@ -556,6 +567,20 @@ impl ScenarioBuilder {
             .key(Key::Digit(v % 10))
     }
 
+    /// Emit the V37 major-mode select sequence: `V 3 7 ENTR d(mm/10) d(mm%10) ENTR`.
+    ///
+    /// Drives the real `feed_key` V37 program-request path (dispatched via
+    /// `PROGRAM_TABLE`), e.g. `v37_select(51)` starts P51.
+    pub fn v37_select(self, mm: u8) -> Self {
+        self.key(Key::Verb)
+            .key(Key::Digit(3))
+            .key(Key::Digit(7))
+            .key(Key::Entr)
+            .key(Key::Digit(mm / 10))
+            .key(Key::Digit(mm % 10))
+            .key(Key::Entr)
+    }
+
     /// Emit the complete V25 Nxx ENTR +v0 ENTR +v1 ENTR +v2 ENTR sequence.
     ///
     /// Negative values emit `Key::Minus` followed by the absolute magnitude;
@@ -648,6 +673,13 @@ impl ScenarioBuilder {
     /// [`Event::OpticsCduMark`] for the closed-loop hardware path.
     pub fn optics_cdu_mark(mut self, star_id: u8) -> Self {
         self.events.push(Event::OpticsCduMark { star_id });
+        self
+    }
+
+    /// Push a crew keystroke-MARK event (#175). Consumes the star code most
+    /// recently entered via `V25 N70` (see [`Self::v25_load_three`]).
+    pub fn crew_star_mark(mut self) -> Self {
+        self.events.push(Event::CrewStarMark);
         self
     }
 
@@ -1206,14 +1238,13 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
                         log_event(
                             name,
                             &format!(
-                                "OpticsSighting: pairing star {} with star {} → p52_mark_align",
-                                first.star_id, star_id
+                                "OpticsSighting: pairing star {} with star {} → pxx_mark_align (P{})",
+                                first.star_id, star_id, state.major_mode
                             ),
                         );
-                        // Use p52_mark_align (the realignment path).  P51 vs
-                        // P52 selection based on major_mode can be added when
-                        // the interactive flow is wired in a later milestone.
-                        p52_mark_align(
+                        // Dispatch to P51 (coarse) or P52 (fine) by major_mode
+                        // (#177).
+                        pxx_mark_align(
                             state,
                             first.inertial,
                             star_inertial,
@@ -1282,16 +1313,73 @@ pub fn run_scenario(scenario: &Scenario, state: &mut AgcState, hw: &mut SimHardw
                         log_event(
                             name,
                             &format!(
-                                "OpticsCduMark: pairing star {} with star {} → p52_mark_align",
-                                first.star_id, star_id
+                                "OpticsCduMark: pairing star {} with star {} → pxx_mark_align (P{})",
+                                first.star_id, star_id, state.major_mode
                             ),
                         );
-                        p52_mark_align(
+                        pxx_mark_align(
                             state,
                             first.inertial,
                             star_inertial,
                             first.platform,
                             mark.los_platform,
+                        );
+                    }
+                }
+            }
+
+            // ── CrewStarMark (#175) ───────────────────────────────────────────
+            //
+            // The interactive keystroke MARK path: the crew has already keyed
+            // `V25 N70 E <code> E`, which set `state.vn.crew_star_code` through
+            // the real keyboard pipeline. This event consumes that code and
+            // performs the sighting for it, buffering/pairing exactly like
+            // `OpticsSighting` and dispatching P51/P52 via `pxx_mark_align`.
+            Event::CrewStarMark => {
+                let refsmmat = ctx
+                    .truth_refsmmat
+                    .expect("CrewStarMark requires SeedTruthRefsmmat earlier in the scenario");
+                let star_id = state
+                    .vn
+                    .crew_star_code
+                    .expect("CrewStarMark requires a star code entered via V25 N70 first");
+                assert!(
+                    (1..=agc_core::navigation::star_catalog::CATALOG_SIZE).contains(&star_id),
+                    "CrewStarMark: star_id {star_id} out of range 1..=37"
+                );
+                // Consume the crew's selection.
+                state.vn.crew_star_code = None;
+
+                let star_inertial = STAR_CATALOG[(star_id - 1) as usize].direction;
+                let star_platform =
+                    star_los_in_platform(star_id, &ctx.spacecraft.attitude, &refsmmat);
+
+                match ctx.first_sighting.take() {
+                    None => {
+                        log_event(
+                            name,
+                            &format!("CrewStarMark: star {star_id} buffered (first of pair)"),
+                        );
+                        ctx.first_sighting = Some(FirstSighting {
+                            star_id,
+                            inertial: star_inertial,
+                            platform: star_platform,
+                        });
+                    }
+                    Some(first) => {
+                        log_event(
+                            name,
+                            &format!(
+                                "CrewStarMark: pairing star {} with star {} → pxx_mark_align (P{})",
+                                first.star_id, star_id, state.major_mode
+                            ),
+                        );
+                        pxx_mark_align(
+                            state,
+                            first.inertial,
+                            star_inertial,
+                            first.platform,
+                            star_platform,
                         );
                     }
                 }
@@ -2363,6 +2451,60 @@ mod tests {
         let mut state = AgcState::new();
         let mut hw = SimHardware::new();
         run_scenario(&scenario, &mut state, &mut hw);
+    }
+
+    /// tc_scn_keystroke_mark_p51_then_p52 (#174 / #175 / #177)
+    ///
+    /// Exit-criterion test: from a FRESH START (`Caged`), a crew drives a full
+    /// two-star P51 then two-star P52 alignment **entirely through the keyboard**
+    /// — `V37` to select the program and `V25 N70` to enter each star code — and
+    /// the platform reaches `FineAligned`, which is what extinguishes `NO ATT`.
+    ///
+    /// This exercises the keystroke MARK path end to end: `V25 N70` sets
+    /// `vn.crew_star_code` via the real `feed_key` pipeline, `CrewStarMark`
+    /// consumes it, and `pxx_mark_align` dispatches P51 (coarse) vs P52 (fine)
+    /// by `major_mode`.
+    #[test]
+    fn tc_scn_keystroke_mark_p51_then_p52() {
+        let identity: Mat3x3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        // Stars 1 (Alpheratz) and 16 (Pollux) — non-collinear, valid TRIAD pair.
+        let scenario = ScenarioBuilder::new("keystroke-align")
+            .seed_truth_refsmmat(identity)
+            // ── P51: initial orientation determination (Caged → CoarseAligned).
+            .v37_select(51)
+            .v25_load_three(70, [1, 0, 0])
+            .crew_star_mark()
+            .v25_load_three(70, [16, 0, 0])
+            .crew_star_mark()
+            .expect_major_mode(51)
+            // ── P52: realignment (CoarseAligned → FineAligned).
+            .v37_select(52)
+            .v25_load_three(70, [1, 0, 0])
+            .crew_star_mark()
+            .v25_load_three(70, [16, 0, 0])
+            .crew_star_mark()
+            .build();
+
+        let mut state = AgcState::new();
+        let mut hw = SimHardware::new();
+        assert_eq!(
+            state.imu_alignment_state,
+            agc_core::control::imu_control::ImuAlignmentState::Caged,
+            "fresh start must be Caged (NO ATT lit)"
+        );
+
+        run_scenario(&scenario, &mut state, &mut hw);
+
+        assert_eq!(
+            state.imu_alignment_state,
+            agc_core::control::imu_control::ImuAlignmentState::FineAligned,
+            "two-star P51 then P52 via the keyboard must reach FineAligned (NO ATT clears)"
+        );
+        assert_eq!(
+            state.vn.crew_star_code, None,
+            "each CrewStarMark must consume the crew's star selection"
+        );
+        assert_eq!(state.alarm.code(), 0, "no alarm on a clean alignment");
     }
 
     /// tc_scn_run_landmark_sighting_does_not_panic

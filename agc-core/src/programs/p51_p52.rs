@@ -5,9 +5,13 @@
 //! These two programs sequence the TRIAD REFSMMAT construction from
 //! `control::imu_control` and transition the platform alignment state.
 //!
-//! They are thin layers over `refsmmat_from_star_sightings`; the interactive
-//! optics MARK loop and the automatic CDU coarse-align drive are Milestone 5
-//! items. Test harnesses call `pXX_mark_align` directly with pre-computed
+//! They are thin layers over `refsmmat_from_star_sightings`. [`pxx_mark_align`]
+//! dispatches a completed star pair to P51 (coarse) or P52 (fine) by the active
+//! `major_mode` (#177). The interactive keystroke MARK path — which consumes the
+//! crew's `vn.crew_star_code` and fires the mark — is wired in `agc-sim`
+//! (scenario `CrewStarMark`, #175). Still open: the `dsky_sim` TUI MARK
+//! affordance (#176) and the automatic CDU coarse-align drive. Test harnesses
+//! may also call `p51_mark_align` / `p52_mark_align` directly with pre-computed
 //! inertial-frame and platform-frame star vectors.
 //!
 //! AGC source: Comanche055/IMU_CALIBRATION_AND_ALIGNMENT.agc (P51, P52 entry),
@@ -145,6 +149,33 @@ pub fn p52_mark_align(
         None => {
             state.alarm.raise(ALARM_COLLINEAR_STARS, crate::tables::alarm_codes::SITE_P51_P52);
         }
+    }
+}
+
+// ── Dispatch by major mode (#177) ─────────────────────────────────────────────
+
+/// Complete a star-pair alignment, dispatching to [`p51_mark_align`] (coarse,
+/// `Caged → CoarseAligned`) or [`p52_mark_align`] (fine, `CoarseAligned →
+/// FineAligned`) according to the active `major_mode`.
+///
+/// P51 (initial orientation determination) is selected when `major_mode` is
+/// [`P51_MAJOR_MODE`]; every other mode uses the P52 realignment path, which is
+/// the historical default for the scenario-runner optics path.
+///
+/// This is the single entry point the interactive keystroke MARK flow (#175)
+/// and the scenario optics events call, so the P51/P52 distinction is honoured
+/// uniformly rather than hard-coding P52.
+pub fn pxx_mark_align(
+    state: &mut crate::AgcState,
+    s1_inertial: Vec3,
+    s2_inertial: Vec3,
+    s1_platform: Vec3,
+    s2_platform: Vec3,
+) {
+    if state.major_mode == P51_MAJOR_MODE {
+        p51_mark_align(state, s1_inertial, s2_inertial, s1_platform, s2_platform);
+    } else {
+        p52_mark_align(state, s1_inertial, s2_inertial, s1_platform, s2_platform);
     }
 }
 
@@ -319,5 +350,33 @@ mod tests {
             ImuAlignmentState::FineAligned,
             "alignment state must survive collinear error"
         );
+    }
+
+    /// TC-PXX-1: `pxx_mark_align` in P51 major mode takes the coarse path
+    /// (Caged → CoarseAligned).
+    #[test]
+    fn tc_pxx_1_dispatches_p51_when_major_mode_51() {
+        let mut state = AgcState::new();
+        state.major_mode = P51_MAJOR_MODE;
+        state.imu_alignment_state = ImuAlignmentState::Caged;
+
+        pxx_mark_align(&mut state, E1, E2, E1, E2);
+
+        assert_eq!(state.imu_alignment_state, ImuAlignmentState::CoarseAligned);
+        assert_eq!(state.alarm.code(), 0);
+    }
+
+    /// TC-PXX-2: `pxx_mark_align` in P52 major mode takes the fine path
+    /// (CoarseAligned → FineAligned).
+    #[test]
+    fn tc_pxx_2_dispatches_p52_when_major_mode_52() {
+        let mut state = AgcState::new();
+        state.major_mode = P52_MAJOR_MODE;
+        state.imu_alignment_state = ImuAlignmentState::CoarseAligned;
+
+        pxx_mark_align(&mut state, E1, E2, E1, E2);
+
+        assert_eq!(state.imu_alignment_state, ImuAlignmentState::FineAligned);
+        assert_eq!(state.alarm.code(), 0);
     }
 }
