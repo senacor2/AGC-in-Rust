@@ -30,10 +30,10 @@ pub const FOV_HALF_DEG: f64 = 15.0;
 /// the alignment; see concept §4).
 pub const MARK_TOL_DEG: f64 = 0.5;
 
-/// Coarse slew step (~2°) and fine slew step (~0.2°) in CDU counts
-/// (16384 counts = 90°, i.e. ≈182 counts/°).
-const COARSE_COUNTS: i16 = 364;
-const FINE_COUNTS: i16 = 36;
+/// Coarse slew step (~5°, for hunting a star across the field) and fine slew
+/// step (~0.5°, for centring) in CDU counts (16384 counts = 90°, ≈182 counts/°).
+const COARSE_COUNTS: i16 = 910;
+const FINE_COUNTS: i16 = 91;
 
 /// Slew axis for [`MarkSession::slew`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
