@@ -10,6 +10,7 @@ pub mod hardware;
 pub mod physics;
 pub mod runtime;
 pub mod scenario;
+pub mod sextant;
 pub mod sensors;
 pub mod uplink;
 
