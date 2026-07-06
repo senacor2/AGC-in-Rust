@@ -20,8 +20,9 @@ use agc_core::services::pinball::decode_dsky;
 use agc_core::services::v_n::feed_key;
 use agc_core::types::Met;
 use agc_core::AgcState;
-use agc_sim::dsky_ui::{key_from_code, render, PropulsionFrame};
+use agc_sim::dsky_ui::{draw_sextant_panel, key_from_code, render, PropulsionFrame};
 use agc_sim::hardware::SimHardware;
+use agc_sim::sextant::{MarkSession, SlewAxis};
 use agc_sim::runtime::{
     pump_engine_to_hw, pump_pipa_into_state, pump_rcs_to_hw, DapPump, T4Pump, WaitlistPump,
 };
@@ -55,6 +56,11 @@ fn main() -> io::Result<()> {
 fn run<W: Write>(out: &mut W) -> io::Result<()> {
     let mut state = AgcState::new();
     let mut hw = SimHardware::new();
+
+    // Interactive sextant (#176). Fixed identity truth REFSMMAT (concept §7.4):
+    // platform ≡ inertial, so a well-centred two-star P51/P52 recovers identity
+    // and extinguishes NO ATT.
+    let mut sextant = MarkSession::new([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
 
     // Open a timestamped MSFN downlink log in the current directory.
     // Failures are soft — the sim continues without file logging.
@@ -142,6 +148,27 @@ fn run<W: Write>(out: &mut W) -> io::Result<()> {
                 if matches!(code, KeyCode::Char('q') | KeyCode::Char('Q')) {
                     return Ok(());
                 }
+
+                // ── Sextant (#176): arrows slew, Shift = fine, M = MARK ─────
+                let fine = modifiers.contains(KeyModifiers::SHIFT);
+                let slew = match code {
+                    KeyCode::Up => Some(SlewAxis::TrunnionPlus),
+                    KeyCode::Down => Some(SlewAxis::TrunnionMinus),
+                    KeyCode::Left => Some(SlewAxis::ShaftMinus),
+                    KeyCode::Right => Some(SlewAxis::ShaftPlus),
+                    _ => None,
+                };
+                if let Some(axis) = slew {
+                    sextant.slew(&mut hw, axis, fine);
+                    status = String::from("Sextant slew");
+                    continue;
+                }
+                if matches!(code, KeyCode::Char('m') | KeyCode::Char('M')) {
+                    sextant.mark(&mut state, &mut hw);
+                    status = sextant.status().to_string();
+                    continue;
+                }
+
                 if let Some(key) = key_from_code(code) {
                     feed_key(&mut state, key);
                     status = format!("Key: {:?}", key);
@@ -210,6 +237,12 @@ fn run<W: Write>(out: &mut W) -> io::Result<()> {
                 flash_on,
                 state.alarm.code(),
             )?;
+
+            // Sextant panel to the right of the DSKY (#176).
+            let sframe = sextant.frame(&state, &hw);
+            draw_sextant_panel(out, (69, 1), &sframe)?;
+            out.flush()?;
+
             last_frame = Instant::now();
         }
 

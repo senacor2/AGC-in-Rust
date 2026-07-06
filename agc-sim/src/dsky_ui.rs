@@ -21,6 +21,8 @@ use std::io::{self, Write};
 
 use agc_core::services::pinball::{DskyFrame, Lamps, Register, TwoDigit};
 use agc_core::services::v_n::Key;
+
+use crate::sextant::SextantFrame;
 use crossterm::{
     cursor::MoveTo,
     event::KeyCode,
@@ -634,6 +636,152 @@ fn split_prompt_buffer(buf: &str) -> (String, String) {
     (a.to_string(), b.to_string())
 }
 
+/// Interior width and grid height of the sextant reticle panel.
+const SXT_IW: usize = 42;
+const SXT_GH: usize = 11;
+
+/// Draw the interactive sextant panel (#176): a reticle field with the target
+/// star, live shaft/trunnion, and a mark/hint footer. Rendered as a standalone
+/// panel (the binary places it to the right of the DSKY).
+pub fn draw_sextant_panel<W: Write>(
+    out: &mut W,
+    origin: (u16, u16),
+    sxt: &SextantFrame,
+) -> io::Result<()> {
+    let (ox, oy) = origin;
+    let cc = SXT_IW / 2; // reticle centre column (interior-relative)
+    let cr = SXT_GH / 2; // reticle centre row
+
+    // ── Top border with title + live angles ───────────────────────────────────
+    let title = format!(
+        " SEXTANT  SHAFT {:>6.1}°  TRUN {:>5.1}° ",
+        sxt.shaft_deg, sxt.trunnion_deg
+    );
+    let mut top = String::from("┌");
+    let tchars: Vec<char> = title.chars().take(SXT_IW).collect();
+    top.extend(&tchars);
+    for _ in tchars.len()..SXT_IW {
+        top.push('─');
+    }
+    top.push('┐');
+    queue!(out, SetForegroundColor(DIM), MoveTo(ox, oy), Print(top))?;
+
+    // ── Reticle grid (dim axes + crosshair) ───────────────────────────────────
+    for r in 0..SXT_GH {
+        let mut row = vec![' '; SXT_IW];
+        row[cc] = '·'; // vertical axis
+        if r == cr {
+            for c in row.iter_mut() {
+                *c = '·'; // horizontal axis
+            }
+            row[cc] = '┼'; // centre
+        }
+        let s: String = row.into_iter().collect();
+        queue!(
+            out,
+            SetForegroundColor(DIM),
+            MoveTo(ox, oy + 1 + r as u16),
+            Print("│"),
+            Print(s),
+            Print("│")
+        )?;
+    }
+
+    // ── Overprint the target star (or an edge arrow) ──────────────────────────
+    if let Some(t) = &sxt.target {
+        let (col, row, glyph) = star_cell(t.screen, t.in_fov, cc, cr);
+        let colour = if t.on_mark {
+            JET_FIRE
+        } else if t.in_fov {
+            ACTIVE
+        } else {
+            CAUTION
+        };
+        queue!(
+            out,
+            SetForegroundColor(colour),
+            MoveTo(ox + 1 + col as u16, oy + 1 + row as u16),
+            Print(glyph)
+        )?;
+    }
+
+    // ── Footer: star / offset / mark count, then the key hint ─────────────────
+    let footer1 = match &sxt.target {
+        Some(t) => {
+            let name: String = t.name.chars().take(10).collect();
+            format!(
+                " STAR {:>2} {:<10}  off {:>4.1}°   MARK {}/2",
+                t.id, name, t.offset_deg, sxt.pair_marks
+            )
+        }
+        None => format!(
+            " (no star — V25 N70 to select)          MARK {}/2",
+            sxt.pair_marks
+        ),
+    };
+    let footer2 = String::from(" slew ↑↓←→  Shift=fine   [M]ARK   [Q]uit ");
+    for (i, line) in [footer1, footer2].into_iter().enumerate() {
+        let mut chars: Vec<char> = line.chars().take(SXT_IW).collect();
+        while chars.len() < SXT_IW {
+            chars.push(' ');
+        }
+        let s: String = chars.into_iter().collect();
+        queue!(
+            out,
+            SetForegroundColor(DIM),
+            MoveTo(ox, oy + 1 + SXT_GH as u16 + i as u16),
+            Print("│"),
+            SetForegroundColor(ACTIVE),
+            Print(s),
+            SetForegroundColor(DIM),
+            Print("│")
+        )?;
+    }
+
+    // ── Bottom border ─────────────────────────────────────────────────────────
+    let mut bottom = String::from("└");
+    for _ in 0..SXT_IW {
+        bottom.push('─');
+    }
+    bottom.push('┘');
+    queue!(
+        out,
+        SetForegroundColor(DIM),
+        MoveTo(ox, oy + 1 + SXT_GH as u16 + 2),
+        Print(bottom),
+        ResetColor
+    )?;
+    Ok(())
+}
+
+/// Map a target's normalised FOV offset to a reticle grid cell. In-field stars
+/// render as `★`; out-of-field stars clamp to the boundary with an edge arrow.
+fn star_cell(screen: (f64, f64), in_fov: bool, cc: usize, cr: usize) -> (usize, usize, char) {
+    let (nx, ny) = screen;
+    let col = (cc as f64 + nx.clamp(-1.0, 1.0) * (cc as f64 - 1.0))
+        .round()
+        .clamp(0.0, (SXT_IW - 1) as f64) as usize;
+    let row = (cr as f64 - ny.clamp(-1.0, 1.0) * (cr as f64))
+        .round()
+        .clamp(0.0, (SXT_GH - 1) as f64) as usize;
+    if in_fov {
+        (col, row, '★')
+    } else {
+        let arrow = if nx.abs() >= ny.abs() {
+            if nx >= 0.0 {
+                '▶'
+            } else {
+                '◀'
+            }
+        } else if ny >= 0.0 {
+            '▲'
+        } else {
+            '▼'
+        };
+        (col, row, arrow)
+    }
+}
+
 fn draw_status<W: Write>(
     out: &mut W,
     ox: u16,
@@ -946,5 +1094,59 @@ mod tests {
             "user's example must fit on line 1; len={}, cap={PROMPT_LINE_1_CONTENT}",
             l1.len()
         );
+    }
+
+    /// TC-SXT-UI-1: the sextant panel renders its title, reticle crosshair, an
+    /// in-field target star, name, and the mark counter (#176).
+    #[test]
+    fn tc_sxt_ui_renders_star_and_marks() {
+        use crate::sextant::TargetStar;
+        let frame = SextantFrame {
+            shaft_deg: 214.7,
+            trunnion_deg: 31.2,
+            target: Some(TargetStar {
+                id: 16,
+                name: "Pollux",
+                screen: (0.3, -0.2),
+                in_fov: true,
+                on_mark: false,
+                offset_deg: 4.1,
+            }),
+            pair_marks: 1,
+            status: String::new(),
+        };
+        let mut buf = Vec::new();
+        draw_sextant_panel(&mut buf, (1, 1), &frame).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.contains("SEXTANT"), "title present");
+        assert!(s.contains('┼'), "reticle crosshair present");
+        assert!(s.contains('★'), "in-field star drawn as ★");
+        assert!(s.contains("Pollux"), "star name in footer");
+        assert!(s.contains("MARK 1/2"), "mark counter in footer");
+    }
+
+    /// TC-SXT-UI-2: an out-of-field target renders an edge arrow, not `★`.
+    #[test]
+    fn tc_sxt_ui_out_of_field_edge_arrow() {
+        use crate::sextant::TargetStar;
+        let frame = SextantFrame {
+            shaft_deg: 0.0,
+            trunnion_deg: 0.0,
+            target: Some(TargetStar {
+                id: 1,
+                name: "Alpheratz",
+                screen: (2.5, 0.0), // far to the right, outside FOV
+                in_fov: false,
+                on_mark: false,
+                offset_deg: 40.0,
+            }),
+            pair_marks: 0,
+            status: String::new(),
+        };
+        let mut buf = Vec::new();
+        draw_sextant_panel(&mut buf, (1, 1), &frame).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.contains('▶'), "out-of-field star shows a right edge arrow");
+        assert!(!s.contains('★'), "no in-field star glyph when out of field");
     }
 }
