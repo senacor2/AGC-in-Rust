@@ -1,6 +1,11 @@
 # Transformation Progress
 
-**Last Updated**: 2026-04-09
+**Last Updated**: 2026-07-08
+
+This file tracks the coarse milestone status of the port. For the detailed
+feature-by-feature inventory against the Comanche055 rope, see the latest
+status report (`transformation/status-report-2026-07-08.md`). Task-level
+tracking lives in GitHub issues per `CLAUDE.md`.
 
 ## Foundation (Complete)
 
@@ -9,88 +14,64 @@
 - [x] Rust Embedded Book compliance analysis — `docs/optimization.md`
 - [x] All ADRs documented — `transformation/decisions.md`
 - [x] Agent workflow defined — `CLAUDE.md`, `.claude/agents/`
+- [x] Project licensed GPL-3.0-or-later (#183)
 
-## Milestone 1: Core Infrastructure
+## Build phase (Milestones 1–5) — Complete
 
-| Task | Status |
-|---|---|
-| Cargo workspace scaffold (`agc-core`, `agc-sim`, `agc-test`) | **Done** |
-| Spec — `types/` module | **Done** → `specs/types-module-spec.md` |
-| Impl — `types/` (`CduAngle`, `Vec3`, `Mat3x3`, `Met`, `DeltaV`) | **Done** — 16 tests passing |
-| Spec — `AgcHardware` + all sub-traits | **Done** → `specs/hal-spec.md` |
-| Impl — HAL traits in `agc-core/src/hal/` | **Done** — aligned with spec |
-| Impl — Simulated HAL in `agc-sim` | **Done** — 26 tests passing |
-| Spec — Executive, Waitlist, Restart protection | **Done** → `specs/executive-spec.md` |
-| Impl — `executive/scheduler.rs`, `executive/job.rs` | Skeleton — needs full impl per spec |
-| Impl — `executive/waitlist.rs` | Skeleton — `todo!()` stubs |
-| Impl — `executive/restart.rs` | Basic structs done — needs restart sequence |
-| Impl — `services/alarm.rs` (alarm codes, DSKY alarm display) | **Done** |
-| Impl — `services/fresh_start.rs` (FRESH START / RESTART) | Stub only |
-| All Executive + Waitlist unit tests passing | Not Started |
-| Bare-metal build clean | Not Tested |
+The original build-out milestones are all done. The host workspace builds
+clean, `cargo clippy` is warning-free, and the full pure-Rust test suite
+passes.
 
-**Status**: In Progress — specs complete, 6 of 14 items implemented and tested
+| Milestone | Theme | Status |
+|---|---|---|
+| M1 | Core infrastructure (types, HAL, Executive, Waitlist, Restart, alarm, fresh-start) | **Complete** |
+| M2 | Navigation foundation (linalg, trig, state vector, gravity, integration, SERVICER) | **Complete** |
+| M3 | Guidance & DAP (kepler, lambert, conics, DAP, attitude, TVC, RCS, targeting) | **Complete** |
+| M4 | Programs (P00–P67 on the Apollo-8 path) | **Complete** |
+| M5 | DSKY & crew interface (PINBALL verb/noun, display, agc-sim DSKY) | **Complete** |
 
-## Milestone 2: Navigation Foundation
+Notable items that were "Not Started" in the 2026-04-09 snapshot and are now
+done: full Executive/Waitlist implementation, `navigation/{gravity,integration}`,
+`services/average_g` (SERVICER), the entire guidance/DAP stack, all Apollo-8-path
+P-codes, and the PINBALL verb/noun processor with an interactive agc-sim DSKY.
 
-| Task | Status |
-|---|---|
-| `math/linalg.rs` — dot, cross, norm, mxv, vxm, transpose, mxm | **Done** — 5 tests passing |
-| `math/trig.rs` — sin, cos, asin, acos, atan2 via libm | **Done** |
-| `navigation/state_vector.rs` — StateVector, coordinate frames | **Done** — struct defined |
-| `navigation/gravity.rs` — Earth/Moon gravity models | Stub — `todo!()` |
-| `navigation/integration.rs` — Cowell / Encke propagation | Stub — `todo!()` |
-| `services/average_g.rs` — SERVICER 2-second nav cycle | Stub |
-| Math fixtures captured from VirtualAGC | Not Started |
-| Navigation accuracy tests passing against fixtures | Not Started |
+## Apollo-8 mission milestones (`milestone-plan-2026-06-07.md`) — Complete
 
-**Status**: Partially started — linalg and trig done, remaining items depend on M1 completion
+All four milestones of the Apollo-8 plan closed between 2026-06-07 and 2026-07-06.
 
-## Milestone 3: Guidance and DAP
+| Milestone | Theme | Status | Issues |
+|---|---|---|---|
+| **M-A** | Finish partial (🟡) items on the Apollo-8 critical path | **Complete** | #120 → #124–#128, #146 |
+| **M-B** | Plug remaining ❌ Apollo-8 narrative gaps | **Complete** | #121 → #130–#133, #141 (#129 closed *not applicable*) |
+| **M-C** | Fidelity, hardening, validation | **Complete** | #122 → #134–#136 |
+| **M-D** | agc-sim status & warning lights wiring | **Complete** | #123 → #137–#140 |
 
-| Task | Status |
-|---|---|
-| `math/kepler.rs` — Kepler equation solver | Stub — `todo!()` |
-| `math/lambert.rs` — Lambert's problem | Stub — `todo!()` |
-| `navigation/conics.rs` — Conic trajectory routines | Stub |
-| `control/dap.rs` — Digital Autopilot supervisor | Stub — `DapState` defined |
-| `control/attitude.rs` — Rate damping, attitude hold, maneuver | Stub |
-| `control/tvc.rs` — Thrust Vector Control | Stub — `TvcState` defined |
-| `control/rcs_logic.rs` — Jet select logic | Stub |
-| `guidance/targeting.rs` — TIG computation | Stub — `Maneuver` struct defined |
-| `guidance/maneuver.rs` — Delta-V, cross-product steering | Stub |
+Cross-cutting since 2026-06-05: alarm-code centralization + reconcile (#115, #182),
+spec writing/audit (#153, #158–#162), glossary + agc-sim README (#74, #60),
+REFSMMAT half-scale encoding (#185), and the interactive sextant/optics-alignment
+thread (#109, #176, #174, #175, #177, #178).
 
-**Status**: Not Started — depends on Milestone 2
+**Result:** the port is feature-complete for the Apollo-8 mission narrative
+(Earth orbit → TLI → cislunar → LOI → lunar orbit → TEI → entry → splash).
 
-## Milestone 4: Programs (P-codes)
+## Open work
 
-| Task | Status |
-|---|---|
-| P00 — CMC Idling | Stub — `todo!()` |
-| P11 — Earth orbit insertion monitor | Stub — `todo!()` |
-| P40/P41 — SPS/RCS thrusting | Stub — `todo!()` |
-| P51/P52 — IMU alignment | Stub — `todo!()` |
-| P61–P67 — Entry programs | Stub — `todo!()` |
-| Remaining P-codes (P01, P06, P15, P20–P23, P30–P37, P47) | Stub — `todo!()` |
-
-**Status**: Not Started — depends on Milestone 3
-
-## Milestone 5: DSKY and Crew Interface
-
-| Task | Status |
-|---|---|
-| `services/v_n.rs` — Verb/Noun processor (PINBALL) | Stub |
-| `services/display.rs` — Display formatting, flashing | Stub — `DskyState` defined |
-| DSKY simulator in `agc-sim` | Stub |
-
-**Status**: Not Started
+| Item | Issue | Status |
+|---|---|---|
+| VirtualAGC entry co-simulation validation | #49 | **Open (deferred)** — pure-Rust entry chain green; two yaAGC closed-loop entry co-sim tests still fail on clock-decoupling / boot-state fidelity |
+| Bare-metal board port (Nucleo-F767 / Pico bridge) | #99, #95 | Deferred |
+| Higher-fidelity sextant (trunnion limit + P52 acquisition maneuver) | #201 | Open |
+| Simulator handbook | #155 | Open |
+| TEMP lamp wiring | #180 | Open (needs temperature HAL) |
+| LM rendezvous, P12/P53/P76, hardware/self-test DSKY surface | — | Out of Apollo-8 scope (long-term backlog) |
 
 ## Metrics
 
 | | Count |
 |---|---|
-| Rust source files | 64 |
-| Unit tests passing | 42 (16 types + 5 linalg + 26 HAL sim - 5 overlap) |
-| Spec documents | 3 (types, hal, executive) |
-| Clippy warnings | Not checked |
-| VirtualAGC fixture cases | 0 |
+| Rust source files (excl. target) | 178 (89 in `agc-core/src`) |
+| Tests passing | 976 |
+| Tests failing | 2 (`entry_e2e_vagc` closed-loop co-sim — tracked under #49) |
+| Spec documents (`specs/`) | 64 |
+| Clippy warnings | 0 |
+| VirtualAGC fixture files | 28 (`agc-test/fixtures`) |
